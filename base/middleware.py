@@ -73,7 +73,7 @@ class CompanyMiddleware:
         )
         if company_id and request.session.get("selected_company") != "all":
             if company_id == "all":
-                text = "All companies"
+                text = "Tervigon Collective Private Limited"
             elif company_id == user_company_id:
                 text = "My Company"
             else:

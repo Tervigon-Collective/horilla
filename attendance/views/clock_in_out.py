@@ -42,6 +42,11 @@ from base.context_processors import (
 )
 from base.models import AttendanceAllowedIP, Company, EmployeeShiftDay
 from horilla.decorators import hx_request_required, login_required
+
+try:
+    from geofencing.utils import validate_request_location
+except ImportError:
+    validate_request_location = None
 from horilla.horilla_middlewares import _thread_locals
 
 
@@ -253,6 +258,14 @@ def clock_in(request):
         if request.__dict__.get("datetime"):
             datetime_now = request.datetime
         if employee and work_info is not None:
+            if validate_request_location:
+                ok, geofence_error = validate_request_location(request)
+                if not ok:
+                    return render(
+                        request,
+                        "attendance/components/in_out_component.html",
+                        {"run": 0, "geofencing_error": geofence_error},
+                    )
             shift = work_info.shift_id
             date_today = date.today()
             if request.__dict__.get("date"):
@@ -462,6 +475,14 @@ def clock_out(request):
         if request.__dict__.get("datetime"):
             datetime_now = request.datetime
         employee, work_info = employee_exists(request)
+        if validate_request_location:
+            ok, geofence_error = validate_request_location(request)
+            if not ok:
+                return render(
+                    request,
+                    "attendance/components/in_out_component.html",
+                    {"run": 0, "geofencing_error": geofence_error},
+                )
         shift = work_info.shift_id
         date_today = date.today()
         if request.__dict__.get("date"):

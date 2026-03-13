@@ -1880,7 +1880,7 @@ def create_or_update_auto_payslip(request, auto_id=None):
         if form.is_valid():
             auto_payslip = form.save()
             company = (
-                auto_payslip.company_id if auto_payslip.company_id else "All company"
+                auto_payslip.company_id if auto_payslip.company_id else "Tervigon Collective Private Limited"
             )
             messages.success(
                 request, _(f"Payslip Auto generate for {company} created successfully ")
@@ -1939,7 +1939,7 @@ def delete_auto_payslip(request, auto_id):
         if not auto_payslip.auto_generate:
             delete_error = False
             company = (
-                auto_payslip.company_id if auto_payslip.company_id else "All company"
+                auto_payslip.company_id if auto_payslip.company_id else "Tervigon Collective Private Limited"
             )
             auto_payslip.delete()
             messages.success(

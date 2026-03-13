@@ -28,15 +28,15 @@ from horilla.methods import get_horilla_model_class
 
 class AllCompany:
     """
-    Dummy class
+    Dummy class for the single-company / all view (Tervigon Collective Private Limited).
     """
 
     class Urls:
-        url = "https://ui-avatars.com/api/?name=All+Company&background=random"
+        url = "https://ui-avatars.com/api/?name=Tervigon+Collective&background=random"
 
-    company = "All Company"
+    company = "Tervigon Collective Private Limited"
     icon = Urls()
-    text = "All companies"
+    text = "Tervigon Collective Private Limited"
     id = None
 
 
@@ -53,21 +53,37 @@ def get_companies(request):
     """
     This method will return the history additional field form
     """
-    companies = list(
-        [company.id, company.company, company.icon.url, False]
-        for company in Company.objects.all()
-    )
+    all_db_companies = list(Company.objects.all())
     companies = [
-        [
-            "all",
-            "All Company",
-            "https://ui-avatars.com/api/?name=All+Company&background=random",
-            False,
-        ],
-    ] + companies
+        [company.id, company.company, company.icon.url, False]
+        for company in all_db_companies
+    ]
+    # When there is only one company and it's Tervigon, show a single option to avoid duplicate label.
+    if len(all_db_companies) == 1 and all_db_companies[0].company == "Tervigon Collective Private Limited":
+        companies = [
+            [
+                "all",
+                "Tervigon Collective Private Limited",
+                "https://ui-avatars.com/api/?name=Tervigon+Collective&background=random",
+                False,
+            ],
+        ]
+    else:
+        companies = [
+            [
+                "all",
+                "Tervigon Collective Private Limited",
+                "https://ui-avatars.com/api/?name=Tervigon+Collective&background=random",
+                False,
+            ],
+        ] + companies
     selected_company = request.session.get("selected_company")
     company_selected = False
     if selected_company and selected_company == "all":
+        companies[0][3] = True
+        company_selected = True
+    elif len(all_db_companies) == 1 and all_db_companies[0].company == "Tervigon Collective Private Limited" and str(all_db_companies[0].id) == str(selected_company):
+        # Single-company mode: session pointing to the only company counts as selected
         companies[0][3] = True
         company_selected = True
     else:
@@ -112,19 +128,18 @@ def update_selected_company(request):
                 getattr(employee, "employee_work_info", None), "company_id", None
             )
             if emp_company != company:
-                text = "Other Company"
-                if company_id == user_company:
-                    text = "My Company"
-                company = {
-                    "company": company.company,
-                    "icon": company.icon.url,
-                    "text": text,
-                    "id": company.id,
-                }
                 messages.error(
                     request, _("Employee is not working in the selected company.")
                 )
-                request.session["selected_company_instance"] = company
+                # Reset to "all" so user lands on employee-view with a usable list
+                request.session["selected_company"] = "all"
+                all_company = AllCompany()
+                request.session["selected_company_instance"] = {
+                    "company": all_company.company,
+                    "icon": all_company.icon.url,
+                    "text": all_company.text,
+                    "id": all_company.id,
+                }
                 return HttpResponse(
                     f"""
                     <script>window.location.href = `{reverse("employee-view")}`</script>
@@ -132,7 +147,7 @@ def update_selected_company(request):
                 )
 
     if company_id == "all":
-        text = "All companies"
+        text = "Tervigon Collective Private Limited"
     elif company_id == user_company:
         text = "My Company"
     else:
@@ -300,3 +315,20 @@ def enable_profile_edit(request):
             ACCESSBILITY_FEATURE.append(("profile_edit", _("Profile Edit Access")))
 
     return {"profile_edit_enabled": enable}
+
+
+def geofencing_required(request):
+    """True when the current user's company has geofencing enabled for clock in/out."""
+    if not getattr(request, "user", None) or request.user.is_anonymous:
+        return {"geofencing_required": False}
+    try:
+        from django.apps import apps
+
+        if not apps.is_installed("geofencing"):
+            return {"geofencing_required": False}
+        from geofencing.utils import get_company_geofencing
+
+        geo = get_company_geofencing(request)
+        return {"geofencing_required": geo is not None}
+    except Exception:
+        return {"geofencing_required": False}

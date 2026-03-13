@@ -220,6 +220,15 @@ def employee_profile(request):
 
         if str(company_id) != str(selected_company):
             messages.error(request, "Employee is not working in the selected company.")
+            request.session["selected_company"] = "all"
+            from base.context_processors import AllCompany
+            all_company = AllCompany()
+            request.session["selected_company_instance"] = {
+                "company": all_company.company,
+                "icon": all_company.icon.url,
+                "text": all_company.text,
+                "id": all_company.id,
+            }
             return redirect("employee-view")
 
     today = datetime.today()
@@ -321,10 +330,19 @@ def employee_view_individual(request, obj_id, **kwargs):
                 getattr(employee, "employee_work_info", None), "company_id", None
             )
             company_id = getattr(company, "pk", None)
-            if company_id != request.session["selected_company"]:
+            if str(company_id) != str(request.session.get("selected_company")):
                 messages.error(
                     request, "Employee is not working in the selected company."
                 )
+                request.session["selected_company"] = "all"
+                from base.context_processors import AllCompany
+                all_company = AllCompany()
+                request.session["selected_company_instance"] = {
+                    "company": all_company.company,
+                    "icon": all_company.icon.url,
+                    "text": all_company.text,
+                    "id": all_company.id,
+                }
                 return redirect("employee-view")
         except Exception as e:
             return render(request, "404.html", status=404)
@@ -1557,12 +1575,20 @@ def employee_view_update(request, obj_id, **kwargs):
         if (
             emp.employee_work_info
             and emp.employee_work_info.company_id
-            and emp.employee_work_info.company_id_id != selected_company_id
+            and str(emp.employee_work_info.company_id_id) != str(selected_company_id)
         ):
-
             messages.error(
                 request, _("Employee is not working in the selected company.")
             )
+            request.session["selected_company"] = "all"
+            from base.context_processors import AllCompany
+            all_company = AllCompany()
+            request.session["selected_company_instance"] = {
+                "company": all_company.company,
+                "icon": all_company.icon.url,
+                "text": all_company.text,
+                "id": all_company.id,
+            }
             return redirect(employee_view)
 
     if employee is None:

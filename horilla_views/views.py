@@ -914,7 +914,7 @@ def export_data(request, *args, **kwargs):
     # =====================================================
     # COMPANY
     # =====================================================
-    company_name = "All Company"
+    company_name = "Tervigon Collective Private Limited"
     logo_path = None
 
     company = getattr(request, "selected_company_instance", None)

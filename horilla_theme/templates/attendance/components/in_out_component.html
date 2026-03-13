@@ -2,17 +2,26 @@
 
 {% if request.user.employee_get %}
     {% with get_forecasted_at_work=request.user.employee_get.get_forecasted_at_work %}
-        {% if request.session.selected_company == "all" or request.user.employee_get.employee_work_info.company_id.id == request.session.selected_company|default:"-1"|add:"0" %}
             <!-- "CHEKING WETHER Check in/check out enabled" -->
             {% if request|is_check_in_enabled %}
+                {% if geofencing_error %}
+                    <div class="oh-alert oh-alert--danger mb-2" role="alert">{{ geofencing_error }}</div>
+                {% endif %}
                 {% if request.user|is_clocked_in and get_forecasted_at_work.has_attendance %}
-                    {% comment %} <button class="check checkout" hx-get="{% url 'clock-out' %}"  hx-target='#attendance-activity-container' hx-swap='innerHTML'>
+                    {% if geofencing_required|default:False %}
+                    <button type="button" class="check checkout clock-btn-geo" data-url="{% url 'clock-out' %}" data-target="#attendance-activity-container" data-swap="innerHTML"
+                        {% if enabled_timerunner and get_forecasted_at_work.has_attendance %}
+                            onmouseenter="$(this).find('span.hr-Check-In-out-text').show();$(this).find('.time-runner').hide();"
+                            onmouseleave="$(this).find('span.hr-Check-In-out-text').hide();$(this).find('.time-runner').show();"
+                        {% endif %}
+                    >
                         <span class="date">
-                            <i class="fa-solid fa-right-from-bracket pe-2"></i><div class="time-runner"></div>
+                            <i class="fa-solid fa-right-from-bracket pe-2"></i>
+                            <div class="time-runner">{% trans "Check Out" %}</div>
                         </span>
-                        <span class="con hr-Check-In-out-text">{% trans "Check Out" %}</span>
+                        <span class="con hr-Check-In-out-text" {% if enabled_timerunner and get_forecasted_at_work.has_attendance %} style="display:none;" {% endif %}>{% trans "Check Out" %}</span>
                     </button>
-                    <span class="at_work_seconds" data-at-work-seconds = "{{ get_forecasted_at_work.forecasted_at_work_seconds|default:0 }}" data-run= "{{run|default:1}}" ></span> {% endcomment %}
+                    {% else %}
                     <button
                         class="check checkout"
                         hx-get="{% url 'clock-out' %}"
@@ -27,23 +36,29 @@
                             <i class="fa-solid fa-right-from-bracket pe-2"></i>
                             <div class="time-runner">{% trans "Check Out" %}</div>
                         </span>
-                        <span class="con hr-Check-In-out-text" {% if enabled_timerunner and get_forecasted_at_work.has_attendance %} style="display:none;" {% endif %}>
-                            {% trans "Check Out" %}
-                        </span>
+                        <span class="con hr-Check-In-out-text" {% if enabled_timerunner and get_forecasted_at_work.has_attendance %} style="display:none;" {% endif %}>{% trans "Check Out" %}</span>
                     </button>
+                    {% endif %}
                     <span class="at_work_seconds"
                         data-at-work-seconds="{{ get_forecasted_at_work.forecasted_at_work_seconds|default:0 }}"
                         data-run="{{ run|default:1 }}">
                     </span>
 
                 {% else %}
-                    {% comment %} <button class="check checkin" hx-get="{% url 'clock-in' %}"  hx-target='#attendance-activity-container' hx-swap='innerHTML'>
+                    {% if geofencing_required|default:False %}
+                    <button type="button" class="check checkin clock-btn-geo" data-url="{% url 'clock-in' %}" data-target="#attendance-activity-container" data-swap="innerHTML"
+                        {% if enabled_timerunner %}
+                            onmouseenter="$(this).find('span.hr-Check-In-out-text').show();$(this).find('.at-work-seconds').hide();"
+                            onmouseleave="$(this).find('span.hr-Check-In-out-text').hide();$(this).find('.at-work-seconds').show();"
+                        {% endif %}
+                    >
                         <span class="date">
-                            <i class="fa-solid fa-right-to-bracket pe-2"></i> <div class="at-work-seconds"></div>
+                            <i class="fa-solid fa-right-to-bracket pe-2"></i>
+                            <div class="at-work-seconds">{% trans "Check In" %}</div>
                         </span>
-                        <span class="con hr-Check-In-out-text">{% trans "Check In" %}</span>
+                        <span class="con hr-Check-In-out-text" {% if enabled_timerunner %} style="display:none;" {% endif %}>{% trans "Check In" %}</span>
                     </button>
-                    <span class="at_work_seconds" data-at-work-seconds = "{{ get_forecasted_at_work.forecasted_at_work_seconds|default:0 }}" data-run= "{{run|default:0}}" ></span> {% endcomment %}
+                    {% else %}
                     <button
                         class="check checkin"
                         hx-get="{% url 'clock-in' %}"
@@ -58,10 +73,9 @@
                             <i class="fa-solid fa-right-to-bracket pe-2"></i>
                             <div class="at-work-seconds">{% trans "Check In" %}</div>
                         </span>
-                        <span class="con hr-Check-In-out-text" {% if enabled_timerunner %} style="display:none;" {% endif %}>
-                            {% trans "Check In" %}
-                        </span>
+                        <span class="con hr-Check-In-out-text" {% if enabled_timerunner %} style="display:none;" {% endif %}>{% trans "Check In" %}</span>
                     </button>
+                    {% endif %}
                     <span class="at_work_seconds"
                         data-at-work-seconds="{{ get_forecasted_at_work.forecasted_at_work_seconds|default:0 }}"
                         data-run="{{ run|default:0 }}">
@@ -77,9 +91,39 @@
                     {% endif %}
                 {% endif %}
             {% endif %}
-        {% endif %}
 
     {% endwith %}
+{% endif %}
+
+{% if geofencing_required|default:False %}
+<script>
+(function() {
+    document.addEventListener('click', function(ev) {
+        var btn = ev.target.closest('.clock-btn-geo');
+        if (!btn) return;
+        ev.preventDefault();
+        var url = btn.getAttribute('data-url');
+        var target = btn.getAttribute('data-target');
+        var swap = btn.getAttribute('data-swap') || 'innerHTML';
+        if (!url || !navigator.geolocation) {
+            if (!navigator.geolocation) alert('{% trans "Location access is required for clock in/out." %}');
+            return;
+        }
+        navigator.geolocation.getCurrentPosition(
+            function(pos) {
+                var sep = url.indexOf('?') >= 0 ? '&' : '?';
+                var fullUrl = url + sep + 'latitude=' + encodeURIComponent(pos.coords.latitude) + '&longitude=' + encodeURIComponent(pos.coords.longitude);
+                if (typeof htmx !== 'undefined') {
+                    htmx.ajax('get', fullUrl, {target: target, swap: swap});
+                } else {
+                    window.location.href = fullUrl;
+                }
+            },
+            function() { alert('{% trans "Could not get your location. Please enable location access." %}'); }
+        );
+    });
+})();
+</script>
 {% endif %}
 
 {% if enabled_timerunner %}

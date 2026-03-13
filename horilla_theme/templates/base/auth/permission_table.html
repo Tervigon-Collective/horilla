@@ -64,7 +64,9 @@
                                                 type="checkbox"
                                                 id="id_{{perm.app}}{{model.model_name}}"
                                                 class="custom-checkbox w-4 h-4 bg-[#E9EDF7] rounded-sm text-primary-600 cursor-pointer row-permission"
+                                                {% if forloop.first %}data-row-select-all="true"{% endif %}
                                                 onchange="
+                                                    if (typeof handleRowPermissionSelectAll === 'function' && $(this).attr('data-row-select-all')) { handleRowPermissionSelectAll(this); }
                                                     $(this).closest('tr').find('[type=checkbox][name=permissions]').prop('checked', $(this).is(':checked')).change();
                                                 ">
                                         </td>

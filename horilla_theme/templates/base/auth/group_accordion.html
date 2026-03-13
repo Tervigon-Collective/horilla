@@ -131,12 +131,29 @@
 <script>
     function selectAllPermissions(source) {
         const isChecked = $(source).is(":checked");
-        const table = $(source).closest("table"); // or your specific container
-        table
-            .find("tbody input.row-permission")
-            .prop("checked", isChecked)
-            .trigger("change");
+        const table = $(source).closest("table");
+        const rowCheckboxes = table.find("tbody input.row-permission");
+        rowCheckboxes.prop("checked", isChecked);
+        table.find("tbody tr").each(function () {
+            var $row = $(this);
+            $row.find("[name=permissions]").prop("checked", isChecked).trigger("change");
+        });
     }
+
+    // When the "Actions" (first) row checkbox is clicked, select/deselect all rows in that app. Called from template + delegated handler.
+    function handleRowPermissionSelectAll(checkboxEl) {
+        var $input = $(checkboxEl);
+        var isChecked = $input.is(":checked");
+        var $table = $input.closest("table");
+        $table.find("tbody tr").each(function () {
+            $(this).find("input.row-permission").prop("checked", isChecked);
+            $(this).find("[name=permissions]").prop("checked", isChecked).trigger("change");
+        });
+    }
+
+    $(document).on("change", "tbody input.row-permission[data-row-select-all]", function () {
+        handleRowPermissionSelectAll(this);
+    });
 
     function updateGroupPermissions(elem) {
         var groupId = elem.attr("data-group-id");

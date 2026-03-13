@@ -2678,7 +2678,7 @@ class PayslipAutoGenerate(models.Model):
     def get_company(self):
         if self.company_id:
             return self.company_id
-        return "All company"
+        return "Tervigon Collective Private Limited"
 
     def is_active_col(self):
         """

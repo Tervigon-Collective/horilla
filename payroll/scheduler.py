@@ -122,7 +122,7 @@ def auto_payslip_generate():
                     companies.append(auto.company_id)
 
         companies = list(set(companies))  # Remove duplicates
-        # Check if 'All company' case exists, i.e., None is in companies
+        # Check if company_all case exists, i.e., None is in companies
         if companies:
             if None in companies:
                 company_all = Company.objects.all()

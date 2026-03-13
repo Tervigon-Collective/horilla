@@ -1550,7 +1550,7 @@ class AttendanceGeneralSetting(HorillaModel):
         if self.company_id:
             return self.company_id.company
         else:
-            return "All Company"
+            return "Tervigon Collective Private Limited"
 
     def check_in_check_out_col(self):
         """

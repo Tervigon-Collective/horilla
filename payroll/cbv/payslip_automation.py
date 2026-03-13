@@ -146,7 +146,7 @@ class PaySlipAutomationFormView(HorillaFormView):
         company = (
             self.form.instance.company_id
             if self.form.instance.company_id
-            else "All company"
+            else "Tervigon Collective Private Limited"
         )
         if form.is_valid():
             if form.instance.pk:
@@ -184,7 +184,7 @@ class DeleteAutoPayslipView(View):
             company = (
                 auto_payslip.company_id
                 if auto_payslip.company_id
-                else _("All companies")
+                else _("Tervigon Collective Private Limited")
             )
             auto_payslip.delete()
             messages.success(
