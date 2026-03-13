@@ -95,6 +95,9 @@ class Company(HorillaModel):
     """
 
     company = models.CharField(max_length=50, verbose_name=_("Name"))
+    registration_number = models.CharField(
+        max_length=50, blank=True, null=True, verbose_name=_("Registration Number")
+    )
     hq = models.BooleanField(default=False)
     address = models.TextField(max_length=255)
     country = models.CharField(max_length=50)

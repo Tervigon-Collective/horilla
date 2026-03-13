@@ -561,6 +561,7 @@ class CompanyForm(ModelForm):
 
     cols = {
         "company": 12,
+        "registration_number": 12,
         "address": 12,
         "country": 12,
         "state": 12,

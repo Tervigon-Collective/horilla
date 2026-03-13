@@ -1,6 +1,6 @@
 {% load i18n %}
 <div class="oh-onboarding-card__header">
-    <span class="oh-onboarding-card__company-name">Horilla HRMS</span>
+    <span class="oh-onboarding-card__company-name">Tervigon Collective HRMS</span>
     <ul class="oh-onboarding-card__steps">
         <li class="oh-onboarding-card__step">
             <div class="oh-onboarding-card__count">1</div>
@@ -31,6 +31,12 @@
             <label for="id_{{form.company.name}}" class="mb-1">{% trans "Company" %}</label>
             {{form.company}} {{form.company.errors}}
         </div>
+        {% if form.registration_number %}
+        <div class="oh-input-group mb-2">
+            <label for="id_{{form.registration_number.name}}" class="mb-1">{% trans "Registration Number" %}</label>
+            {{form.registration_number}} {{form.registration_number.errors}}
+        </div>
+        {% endif %}
         <div class="oh-input-group mb-2">
             <label for="id_{{form.address.name}}" class="mb-1">{% trans "Address" %}</label>
             {{form.address}} {{form.address.errors}}

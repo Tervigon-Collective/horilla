@@ -24,6 +24,14 @@
                 {{ form.company }} {{ form.company.errors }}
             </div>
 
+            <!-- Registration Number -->
+            {% if form.registration_number %}
+            <div class="oh-input-group mb-2">
+                <label for="{{ form.registration_number.id_for_label }}" class="mb-1">{{ form.registration_number.label }}</label>
+                {{ form.registration_number }} {{ form.registration_number.errors }}
+            </div>
+            {% endif %}
+
             <!-- Head Quaters -->
             <div class="oh-input-group mb-2">
                 <div class="oh-switch">

@@ -7,12 +7,24 @@ from horilla.signals import post_scheduler, pre_scheduler
 
 
 def leave_reset():
+    from django.db import connection
+    from django.db.utils import (
+        InterfaceError,
+        OperationalError,
+        ProgrammingError,
+    )
+
+    # Use a fresh DB connection (avoids "connection already closed" in background thread)
+    connection.close()
     pre_scheduler.send(sender=leave_reset)
     from leave.models import LeaveType
 
     today = datetime.now()
     today_date = today.date()
-    leave_types = LeaveType.objects.filter(reset=True)
+    try:
+        leave_types = LeaveType.objects.filter(reset=True)
+    except (OperationalError, ProgrammingError, InterfaceError):
+        return  # Migrations not applied or connection closed
     # Looping through filtered leave types with reset is true
     for leave_type in leave_types:
         # Looping through all available leaves

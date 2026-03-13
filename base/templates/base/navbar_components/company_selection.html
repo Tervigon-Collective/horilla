@@ -6,13 +6,13 @@
             <ion-icon name="business"></ion-icon>
         </a>
         <div class="oh-dropdown__menu oh-dropdown__menu--right" x-show="open"
-            @click.outside="open = false" style="display:none; margin-top:115%;">
+            @click.outside="open = false" style="display:none; margin-top:115%; min-width: 280px;">
             <ul class="oh-dropdown__items">
                 {% for company in all_companies %}
                     <li class="oh-dropdown__item">
-                        <a hx-get="{% url 'update-selected-company' %}?company_id={{company.0}}&next={{ request.path }}"class="oh-dropdown__link">
-                            <img src="{{company.2}}" class="oh-dropdown__lang-icon" style="border-radius: 50%;" />
-                            {{company.1}}
+                        <a hx-get="{% url 'update-selected-company' %}?company_id={{company.0}}&next={{ request.path }}" class="oh-dropdown__link" style="display: flex; align-items: center; gap: 8px;">
+                            <img src="{{company.2}}" class="oh-dropdown__lang-icon" style="border-radius: 50%; flex-shrink: 0;" />
+                            <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;" title="{{ company.1 }}">{{ company.1 }}</span>
                             {% if company.3 %}
                                 <ion-icon name="checkmark-circle-outline" style="position: relative; top: 3.3px; color: green; font-size: 1.2em;"></ion-icon>
                             {% endif %}
