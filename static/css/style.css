@@ -402,13 +402,37 @@ form label {
     overflow-y: scroll;
 }
 
+/* Clock in/out visible on tablet */
+@media screen and (max-width: 767.98px) {
+    #attendance-activity-container {
+        display: flex !important;
+        flex-shrink: 0;
+    }
+}
+
 @media screen and (max-width: 575.98px) {
     .at-work-seconds {
         font-size: 10px;
     }
 
-    #attendance-activity-container .oh-btn {
-        padding: 0.5rem 0.2rem;
+    #attendance-activity-container {
+        display: flex !important;
+        align-items: center;
+    }
+
+    #attendance-activity-container .oh-btn,
+    #attendance-activity-container .check {
+        min-width: 44px;
+        min-height: 44px;
+        padding: 0.5rem !important;
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+    }
+
+    #attendance-activity-container .hr-check-in-out-text,
+    #attendance-activity-container .hr-Check-In-out-text {
+        display: inline !important;
     }
 
     .oh-pagination {

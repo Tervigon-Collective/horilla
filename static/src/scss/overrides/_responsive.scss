@@ -1,3 +1,11 @@
+/* Clock in/out visible on tablet */
+@media (max-width: 767.98px) {
+  #attendance-activity-container {
+    display: flex !important;
+    flex-shrink: 0;
+  }
+}
+
 @media (max-width: 767.98px) {
   .oh-main__titlebar-button-container .oh-btn-group.ml-2 {
     margin-left: 0 !important;
@@ -32,13 +40,21 @@
     width: 95%;
   }
 
-  // Check in, Check out button
+  // Check in, Check out button - keep visible on phone
+  #attendance-activity-container,
   .attendance-activity-container {
+    display: flex !important;
+    align-items: center;
     button {
-      padding: 0 !important;
-      border: none !important;
-      .hr-check-in-out-text {
-        display: none;
+      min-width: 44px;
+      min-height: 44px;
+      padding: 0.5rem !important;
+      display: flex !important;
+      align-items: center;
+      justify-content: center;
+      .hr-check-in-out-text,
+      .hr-Check-In-out-text {
+        display: inline !important;
       }
     }
   }

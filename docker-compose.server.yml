@@ -1,0 +1,19 @@
+# Server-only deploy - uses external PostgreSQL from .env
+# Run: docker compose -f docker-compose.server.yml up -d --build
+# Port 8000 is used (verify it's free on your server)
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - staticfiles:/app/staticfiles
+      - media:/app/media
+    env_file: .env
+    restart: unless-stopped
+    # No depends_on - using external postgres
+
+volumes:
+  staticfiles:
+  media:

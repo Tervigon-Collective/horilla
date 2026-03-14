@@ -1,14 +1,18 @@
 # leave/signals.py
 
+import logging
 import threading
 
 from django.apps import apps
+from django.db.models import Q
 from django.db.models.signals import post_migrate, post_save, pre_delete, pre_save
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
 
 from horilla.methods import get_horilla_model_class
-from leave.models import LeaveRequest
+from leave.models import AvailableLeave, LeaveRequest, LeaveType
+
+logger = logging.getLogger(__name__)
 
 if apps.is_installed("attendance"):
 
@@ -132,3 +136,203 @@ def add_missing_leave_to_workrecords(sender, **kwargs):
 
     except Exception as e:
         print(f"Error in leave/work records sync: {e}")
+
+
+def _is_new_employee_type(employee_type):
+    """Check if employee type is Full time or Intern (1 leave/month for first 6 months)."""
+    if not employee_type:
+        return False
+    et_name = (getattr(employee_type, "employee_type", None) or "").strip().lower()
+    return et_name in ("full time", "fulltime", "intern")
+
+
+def _get_tenure_months(date_joining, today):
+    """Return tenure in months; 0 if no joining date."""
+    if not date_joining:
+        return 0
+    delta = today - date_joining
+    return max(0, delta.days / 30.0)
+
+
+def _get_leave_type_by_name(name, company):
+    """Get leave type by name (case-insensitive) for the company or global."""
+    return (
+        LeaveType._default_manager.filter(name__iexact=name.strip())
+        .filter(Q(company_id=company) | Q(company_id__isnull=True))
+        .first()
+    )
+
+
+def _assign_leave_to_employee(employee, leave_type):
+    """Create AvailableLeave for employee if not already assigned."""
+    if not leave_type:
+        return False
+    if AvailableLeave._default_manager.filter(
+        employee_id=employee, leave_type_id=leave_type
+    ).exists():
+        return False
+    avail = AvailableLeave(
+        leave_type_id=leave_type,
+        employee_id=employee,
+        available_days=leave_type.total_days or 1,
+    )
+    avail.pre_save_processing()
+    avail.save()
+    return True
+
+
+def transition_employees_at_six_months():
+    """
+    - Employees < 6 months (Full time/Intern): only PL, remove SL and CL if present.
+    - Employees >= 6 months (Full time/Intern): only SL+CL, remove PL if present.
+    """
+    from datetime import date
+
+    from django.db.utils import InterfaceError, OperationalError, ProgrammingError
+
+    from leave.models import AvailableLeave, LeaveType
+
+    try:
+        Employee = apps.get_model("employee", "Employee")
+    except LookupError:
+        return
+    try:
+        today = date.today()
+        provisional_qs = LeaveType._default_manager.filter(
+            Q(name__iexact="Provisional Leave") | Q(name__iexact="New Employee Leave")
+        )
+
+        for provisional_lt in provisional_qs:
+            availables = list(
+                AvailableLeave._default_manager.filter(
+                    leave_type_id=provisional_lt
+                ).select_related("employee_id__employee_work_info__employee_type_id")
+            )
+            for av in availables:
+                emp = av.employee_id
+                work_info = getattr(emp, "employee_work_info", None)
+                if not work_info:
+                    continue
+                date_joining = getattr(work_info, "date_joining", None)
+                if not date_joining:
+                    continue
+                tenure_months = _get_tenure_months(date_joining, today)
+                if tenure_months < 6:
+                    continue
+                employee_type = getattr(work_info, "employee_type_id", None)
+                if not _is_new_employee_type(employee_type):
+                    continue
+                company = getattr(work_info, "company_id", None)
+                av.delete()
+                added = []
+                for name in ("Sick Leave", "Casual Leave"):
+                    lt = _get_leave_type_by_name(name, company)
+                    if lt and _assign_leave_to_employee(emp, lt):
+                        added.append(name)
+                if added:
+                    logger.info(
+                        "Transitioned %s (>=6 months): removed PL, added %s",
+                        emp,
+                        ", ".join(added),
+                    )
+
+        for emp in Employee.objects.all().select_related(
+            "employee_work_info__employee_type_id", "employee_work_info__company_id"
+        ):
+            work_info = getattr(emp, "employee_work_info", None)
+            if not work_info:
+                continue
+            date_joining = getattr(work_info, "date_joining", None)
+            if not date_joining:
+                continue
+            tenure_months = _get_tenure_months(date_joining, today)
+            employee_type = getattr(work_info, "employee_type_id", None)
+            if not _is_new_employee_type(employee_type):
+                continue
+
+            if tenure_months < 6:
+                to_remove = AvailableLeave._default_manager.filter(
+                    employee_id=emp,
+                    leave_type_id__name__in=["Sick Leave", "Casual Leave"],
+                )
+                removed_names = list(to_remove.values_list("leave_type_id__name", flat=True))
+                to_remove.delete()
+                if removed_names:
+                    provisional = _get_leave_type_by_name(
+                        "Provisional Leave",
+                        getattr(work_info, "company_id", None),
+                    )
+                    if provisional:
+                        _assign_leave_to_employee(emp, provisional)
+                    logger.info(
+                        "Corrected %s (<6 months): removed %s, kept only PL",
+                        emp,
+                        ", ".join(str(n) for n in removed_names if n),
+                    )
+    except (OperationalError, ProgrammingError, InterfaceError) as e:
+        logger.warning("leave_six_month_transition failed: %s", e)
+
+
+@receiver(post_save)
+def auto_assign_leaves_to_new_employee(sender, instance, created, **kwargs):
+    """
+    Assign leaves based on tenure and employee type:
+    - Full time/Intern, < 6 months: 1 Provisional Leave per month (carry forward)
+    - Others or >= 6 months: 1 Sick + 1 Casual per month (carry forward)
+    """
+    if not created:
+        return
+    try:
+        Employee = apps.get_model("employee", "Employee")
+    except LookupError:
+        return
+    if sender is not Employee:
+        return
+    try:
+        from datetime import date
+
+        employee_work_info = getattr(instance, "employee_work_info", None)
+        if not employee_work_info:
+            return
+        employee_company = getattr(employee_work_info, "company_id", None)
+        date_joining = getattr(employee_work_info, "date_joining", None) or date.today()
+        employee_type = getattr(employee_work_info, "employee_type_id", None)
+        today = date.today()
+        tenure_months = _get_tenure_months(date_joining, today)
+        is_new_type = _is_new_employee_type(employee_type)
+
+        assigned = []
+
+        if is_new_type and tenure_months < 6:
+            provisional = _get_leave_type_by_name("Provisional Leave", employee_company)
+            if not provisional:
+                provisional = _get_leave_type_by_name(
+                    "New Employee Leave", employee_company
+                )
+            if provisional and _assign_leave_to_employee(instance, provisional):
+                assigned.append(str(provisional))
+            elif not provisional:
+                sick = _get_leave_type_by_name("Sick Leave", employee_company)
+                if sick and _assign_leave_to_employee(instance, sick):
+                    assigned.append(str(sick))
+                    logger.warning(
+                        "Provisional Leave not found; assigned Sick Leave to %s. "
+                        "Create 'Provisional Leave' (1/month, carry forward) for new employees.",
+                        instance,
+                    )
+        else:
+            for name in ("Sick Leave", "Casual Leave"):
+                lt = _get_leave_type_by_name(name, employee_company)
+                if lt and _assign_leave_to_employee(instance, lt):
+                    assigned.append(str(lt))
+
+        if assigned:
+            logger.info(
+                "Auto-assigned leave(s) to new employee %s: %s",
+                instance,
+                ", ".join(assigned),
+            )
+    except Exception as e:
+        logger.warning(
+            "Could not auto-assign leaves to new employee %s: %s", instance, e
+        )

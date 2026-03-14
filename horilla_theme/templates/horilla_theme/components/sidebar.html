@@ -2,14 +2,16 @@
 <div class="fixed inset-y-0 left-0 w-auto bg-white border-r border-r-dark-50 z-50">
   <div class="p-4">
     <div class="flex items-center justify-center gap-2 mb-6">
-      {% if request.session.selected_company_instance %}
+      {% if request.session.selected_company_instance and request.session.selected_company_instance.icon %}
         <img
-          src="{{request.session.selected_company_instance.icon}}"
-          class="w-10 h-10 rounded-full"
-          title="{{request.session.selected_company_instance.company}}"
+          src="{{ request.session.selected_company_instance.icon }}"
+          class="w-10 h-10 rounded-full object-contain flex-shrink-0"
+          title="{{ request.session.selected_company_instance.company }}"
+          alt="Company logo"
+          onerror="this.onerror=null; this.src='{% static 'horilla_theme/assets/img/selericLogo.png.jpeg' %}';"
         />
       {% else %}
-        <img src="/static/horilla_theme/assets/img/horilla-logo.png" alt="Logo" class="w-10 h-10" />
+        <img src="{% static 'horilla_theme/assets/img/selericLogo.png.jpeg' %}" alt="Logo" class="w-10 h-10 object-contain flex-shrink-0" />
       {% endif %}
     </div>
 

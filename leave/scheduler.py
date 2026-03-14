@@ -6,6 +6,19 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from horilla.signals import post_scheduler, pre_scheduler
 
 
+def leave_six_month_transition():
+    """
+    Transition Full time/Intern employees at 6 months: remove Provisional Leave,
+    add Sick + Casual Leave. Runs once daily.
+    """
+    from leave.signals import transition_employees_at_six_months
+
+    from django.db import connection
+
+    connection.close()
+    transition_employees_at_six_months()
+
+
 def leave_reset():
     from django.db import connection
     from django.db.utils import (
@@ -75,5 +88,6 @@ if not any(
     """
     scheduler = BackgroundScheduler()
     scheduler.add_job(leave_reset, "interval", seconds=20)
+    scheduler.add_job(leave_six_month_transition, "cron", hour=1, minute=0)
 
     scheduler.start()

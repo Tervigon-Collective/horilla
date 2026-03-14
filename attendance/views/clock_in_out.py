@@ -471,6 +471,30 @@ def clock_out(request):
         and attendance_general_settings.enable_check_in
         or request.__dict__.get("datetime")
     ):
+        allowed_attendance_ips = AttendanceAllowedIP.objects.first()
+        if (
+            not request.__dict__.get("datetime")
+            and allowed_attendance_ips
+            and allowed_attendance_ips.is_enabled
+        ):
+            x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+            ip = request.META.get("REMOTE_ADDR")
+            if x_forwarded_for:
+                ip = x_forwarded_for.split(",")[0]
+            allowed_ips = allowed_attendance_ips.additional_data.get("allowed_ips", [])
+            ip_allowed = False
+            for allowed_ip in allowed_ips:
+                try:
+                    if ipaddress.ip_address(ip) in ipaddress.ip_network(
+                        allowed_ip, strict=False
+                    ):
+                        ip_allowed = True
+                        break
+                except ValueError:
+                    continue
+            if not ip_allowed:
+                return HttpResponse(_("You cannot mark attendance from this network"))
+
         datetime_now = timezone.localtime()
         if request.__dict__.get("datetime"):
             datetime_now = request.datetime

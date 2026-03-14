@@ -301,9 +301,13 @@
   opacity: 1;
 }
 
+/* Clock in/out: keep visible on phone and tablet */
 @media (max-width: 991px) {
-  .check {
-    display: none;
+  #attendance-activity-container .check {
+    display: flex !important;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0.5rem;
   }
 }
 
