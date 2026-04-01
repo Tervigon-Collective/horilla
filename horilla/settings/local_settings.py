@@ -5,9 +5,16 @@ This file is intentionally empty by default and should NOT be tracked by Git.
 
 from .base import *
 
-# # --- 1️⃣ Basic overrides ---
-# DEBUG = False
-# ALLOWED_HOSTS = ["client.example.com"]
+# --- 1️⃣ Basic overrides ---
+# Set production-safe defaults here for this deployment.
+DEBUG = False
+ALLOWED_HOSTS = [
+    "hrms.seleric.cloud",
+]
+CSRF_TRUSTED_ORIGINS = [
+    "https://hrms.seleric.cloud",
+    "http://hrms.seleric.cloud",
+]
 # WHITE_LABELLING = True
 # TWO_FACTORS_AUTHENTICATION = True
 
