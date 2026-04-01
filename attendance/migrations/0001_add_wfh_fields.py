@@ -8,10 +8,9 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
+        ('attendance', '0003_alter_attendanceovertime_year'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
         ('employee', '__first__'),
-        # If attendance already has migrations, update this line:
-        # ('attendance', 'XXXX_previous_migration'),
     ]
 
     operations = [
