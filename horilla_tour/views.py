@@ -14,6 +14,7 @@ Two surfaces:
 
 from typing import Any
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required as auth_login_required
 from django.http import HttpResponse, JsonResponse
@@ -128,9 +129,13 @@ def tour_active(request):
             continue
         progress = progress_map.get(tour.id)
         status = progress.status if progress else None
-        auto_start = tour.trigger == "auto_once" and status not in (
-            "completed",
-            "skipped",
+        auto_start = (
+            not getattr(settings, "DISABLE_AUTO_TOURS", False)
+            and tour.trigger == "auto_once"
+            and status not in (
+                "completed",
+                "skipped",
+            )
         )
         payload.append(
             {

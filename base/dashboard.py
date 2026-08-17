@@ -115,6 +115,8 @@ def _get_setup_checklist_context(request):
     )
 
     # 1. Permission gate — only show to admins / managers
+    if getattr(settings, "DISABLE_SETUP_CHECKLIST", False):
+        return {"show_setup_checklist": False}
     if not _is_setup_admin(request):
         return {"show_setup_checklist": False}
 
