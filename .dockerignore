@@ -46,7 +46,9 @@ coverage.xml
 
 # Django stuff:
 *.log
-local_settings.py
+# Only ignore a repo-root local_settings.py. horilla/settings/local_settings.py
+# must ship in the image (Tervigon hosts / CSRF / geofencing).
+/local_settings.py
 media/
 staticfiles/
 static_root/

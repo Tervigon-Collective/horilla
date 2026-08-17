@@ -403,15 +403,28 @@ def verbose_name(instance, field_name):
         return field_name
 
 
+def _fallback_theme():
+    """Prefer the flagged default theme; otherwise use any saved palette.
+
+    Login and list templates interpolate theme hex into Tailwind classes like
+    ``bg-[{{ theme.primary_50 }}]``. A missing theme renders ``bg-[]`` and the
+    page goes black-on-black.
+    """
+    return (
+        HorillaColorTheme.objects.filter(is_default=True).first()
+        or HorillaColorTheme.objects.order_by("id").first()
+    )
+
+
 def _resolve_company_theme(company_id):
     if company_id is not None and company_id != "all":
         company = Company.objects.filter(id=company_id).first()
         theme = CompanyTheme.objects.filter(company=company).first()
         if theme:
-            return HorillaColorTheme.objects.filter(id=theme.theme.id).first()
-        else:
-            return HorillaColorTheme.objects.filter(is_default=True).first()
-    return HorillaColorTheme.objects.filter(is_default=True).first()
+            resolved = HorillaColorTheme.objects.filter(id=theme.theme.id).first()
+            if resolved:
+                return resolved
+    return _fallback_theme()
 
 
 @register.simple_tag(takes_context=True)
@@ -469,4 +482,4 @@ def remove_item_at(obj, idx):
 
 @register.simple_tag(takes_context=True)
 def get_def_theme(context):
-    return HorillaColorTheme.objects.filter(is_default=True).first()
+    return _fallback_theme()
