@@ -469,16 +469,16 @@
             <div class="flex items-center gap-2 min-w-0 flex-1">
                 {% if request.session.selected_company_instance %}
                     <img
-                        src="{{ request.session.selected_company_instance.icon }}"
+                        src="{% if request.session.selected_company_instance.icon %}{{ request.session.selected_company_instance.icon }}{% else %}{% static 'horilla_theme/assets/img/selericLogo.png.jpeg' %}{% endif %}"
                         class="oh-sidebar-label w-7 h-7 rounded-full flex-shrink-0"
-                        title="{{ request.session.selected_company_instance.company }}"
-                        alt="{{ request.session.selected_company_instance.company }}"
+                        title="{{ white_label_company_name }}"
+                        alt="{{ white_label_company_name }}"
                     >
                     <div class="oh-sidebar__company-details oh-sidebar-label min-w-0">
                         <span
                             class="oh-sidebar__company-title truncate"
                             style="font-size: 13px"
-                        >{{ request.session.selected_company_instance.company }}.</span>
+                        >{{ white_label_company_name }}</span>
                         <a href="#" class="oh-sidebar__company-link truncate" style="font-size: 10px">
                             {% trans request.session.selected_company_instance.text %}
                         </a>
@@ -493,7 +493,7 @@
                         <span
                             class="oh-sidebar__company-title truncate"
                             style="font-size: 13px"
-                        >{{ request.user.employee_get.employee_work_info.company_id }}.</span>
+                        >{{ white_label_company_name }}</span>
                         <a href="#" class="oh-sidebar__company-link truncate" style="font-size: 10px">
                             {% trans "My Company" %}
                         </a>
