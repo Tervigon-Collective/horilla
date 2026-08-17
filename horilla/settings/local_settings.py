@@ -1,20 +1,30 @@
 """
-Client-specific overrides.
-
+Tervigon Collective production overrides.
 Imported last from horilla.settings.__init__ (after base + addons).
-Override settings here; do NOT use ``from .base import *`` — that re-exports
-base MEDIA_* values and wipes AWS S3 paths set by addons.py.
-
-Examples:
-
-    DEBUG = False
-    ALLOWED_HOSTS = ["client.example.com"]
-    WHITE_LABELLING = True
-    DOC_BASE_URL = "https://www.horilla.com"
-
-    # Extend lists via selective import (same list object as base):
-    from .base import INSTALLED_APPS, MIDDLEWARE
-
-    INSTALLED_APPS += ["client_portal"]
-    MIDDLEWARE += ["client_portal.middleware.ClientTrackingMiddleware"]
+Do not use ``from .base import *`` here.
 """
+
+DEBUG = False
+ALLOWED_HOSTS = [
+    "hrms.seleric.cloud",
+    "hrms.seleric.com",
+    "hrms.seleric.ai",
+    "localhost",
+    "127.0.0.1",
+]
+CSRF_TRUSTED_ORIGINS = [
+    "https://hrms.seleric.cloud",
+    "http://hrms.seleric.cloud",
+    "https://hrms.seleric.com",
+    "http://hrms.seleric.com",
+    "https://hrms.seleric.ai",
+    "http://hrms.seleric.ai",
+]
+
+from .base import DATABASES, INSTALLED_APPS
+
+DATABASES["default"]["CONN_MAX_AGE"] = 60
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
+
+if "geofencing" not in INSTALLED_APPS:
+    INSTALLED_APPS.append("geofencing")

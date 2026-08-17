@@ -42,6 +42,11 @@ from base.context_processors import (
 )
 from base.models import AttendanceAllowedIP, Company, EmployeeShiftDay
 from horilla.decorators import hx_request_required, login_required
+
+try:
+    from geofencing.utils import validate_request_location
+except ImportError:
+    validate_request_location = None
 from horilla.horilla_middlewares import _thread_locals
 
 
@@ -252,17 +257,51 @@ def clock_in(request):
                     continue
 
             if not ip_allowed:
-                messages.error(
-                    request,
-                    _("Check-In Restricted: Your current network is not authorized "),
+                return HttpResponse(
+                    """
+                    <div class="oh-modal" id="wfh-confirmation-modal" style="display: flex !important;">
+                        <div class="oh-modal__dialog">
+                            <div class="oh-modal__header">
+                                <h3 class="oh-modal__title">Work From Home?</h3>
+                            </div>
+                            <div class="oh-modal__body">
+                                <p>You are checking in from a different IP address ({ip}).</p>
+                                <p>Are you working from home?</p>
+                                <p class="text-muted"><small>Your attendance will be marked as pending until approved by your reporting manager.</small></p>
+                            </div>
+                            <div class="oh-modal__footer">
+                                <button class="oh-btn oh-btn--secondary"
+                                    onclick="$('#wfh-confirmation-modal').hide()">
+                                    No
+                                </button>
+                                <button class="oh-btn oh-btn--primary"
+                                    hx-get="/attendance/clock-in-wfh?ip={ip}"
+                                    hx-target='#attendance-activity-container'
+                                    hx-swap='innerHTML'
+                                    onclick="$('#wfh-confirmation-modal').hide()">
+                                    Yes
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    """.format(
+                        ip=ip
+                    )
                 )
-                return HorillaRedirect(request)
 
         employee, work_info = employee_exists(request)
         datetime_now = timezone.localtime()
         if request.__dict__.get("datetime"):
             datetime_now = request.datetime
         if employee and work_info is not None:
+            if validate_request_location:
+                ok, geofence_error = validate_request_location(request)
+                if not ok:
+                    return render(
+                        request,
+                        "attendance/components/in_out_component.html",
+                        {"run": 0, "geofencing_error": geofence_error},
+                    )
             shift = work_info.shift_id
             date_today = date.today()
             if request.__dict__.get("date"):
@@ -457,6 +496,89 @@ def early_out(attendance, start_time, end_time, shift):
     return
 
 
+
+@login_required
+@hx_request_required
+def clock_in_wfh(request):
+    """Mark attendance as work-from-home pending manager approval."""
+    wfh_ip = request.GET.get("ip", "")
+    selected_company = request.session.get("selected_company")
+    if selected_company == "all":
+        attendance_general_settings = AttendanceGeneralSetting.objects.filter(
+            company_id=None
+        ).first()
+    else:
+        company = Company.objects.filter(id=selected_company).first()
+        attendance_general_settings = AttendanceGeneralSetting.objects.filter(
+            company_id=company
+        ).first()
+
+    if (
+        attendance_general_settings
+        and attendance_general_settings.enable_check_in
+        or request.__dict__.get("datetime")
+    ):
+        employee, work_info = employee_exists(request)
+        datetime_now = timezone.localtime()
+        if request.__dict__.get("datetime"):
+            datetime_now = request.datetime
+        if employee and work_info is not None:
+            shift = work_info.shift_id
+            date_today = date.today()
+            if request.__dict__.get("date"):
+                date_today = request.date
+            attendance_date = date_today
+            day = date_today.strftime("%A").lower()
+            day = EmployeeShiftDay.objects.get(day=day)
+            now = datetime.now().strftime("%H:%M")
+            if request.__dict__.get("time"):
+                now = request.time.strftime("%H:%M")
+            now_sec = strtime_seconds(now)
+            mid_day_sec = strtime_seconds("12:00")
+            minimum_hour, start_time_sec, end_time_sec = shift_schedule_today(
+                day=day, shift=shift
+            )
+            if start_time_sec > end_time_sec:
+                if mid_day_sec > now_sec:
+                    date_yesterday = date_today - timedelta(days=1)
+                    day_yesterday = date_yesterday.strftime("%A").lower()
+                    day_yesterday = EmployeeShiftDay.objects.get(day=day_yesterday)
+                    minimum_hour, start_time_sec, end_time_sec = shift_schedule_today(
+                        day=day_yesterday, shift=shift
+                    )
+                    attendance_date = date_yesterday
+                    day = day_yesterday
+
+            attendance = clock_in_attendance_and_activity(
+                employee=employee,
+                date_today=date_today,
+                attendance_date=attendance_date,
+                day=day,
+                now=now,
+                shift=shift,
+                minimum_hour=minimum_hour,
+                start_time=start_time_sec,
+                end_time=end_time_sec,
+                in_datetime=datetime_now,
+            )
+            attendance.is_work_from_home = True
+            attendance.wfh_requested = True
+            attendance.wfh_request_ip = wfh_ip
+            attendance.wfh_approval_status = "pending"
+            attendance.attendance_validated = False
+            attendance.save()
+            return render(
+                request, "attendance/components/in_out_component.html", {"run": 1}
+            )
+        return HttpResponse(
+            _(
+                "You Don't have work information filled or your employee detail neither entered "
+            )
+        )
+    messages.error(request, _("Check in/Check out feature is not enabled."))
+    return HorillaRedirect(request)
+
+
 @login_required
 @hx_request_required
 def clock_out(request):
@@ -519,6 +641,14 @@ def clock_out(request):
         if request.__dict__.get("datetime"):
             datetime_now = request.datetime
         employee, work_info = employee_exists(request)
+        if validate_request_location:
+            ok, geofence_error = validate_request_location(request)
+            if not ok:
+                return render(
+                    request,
+                    "attendance/components/in_out_component.html",
+                    {"run": 0, "geofencing_error": geofence_error},
+                )
         shift = work_info.shift_id
         date_today = date.today()
         if request.__dict__.get("date"):

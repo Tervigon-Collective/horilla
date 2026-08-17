@@ -310,6 +310,34 @@ class Attendance(HorillaModel):
         verbose_name=_("Approved By"),
         editable=False,
     )
+    is_work_from_home = models.BooleanField(
+        default=False, verbose_name=_("Work From Home")
+    )
+    wfh_requested = models.BooleanField(
+        default=False, verbose_name=_("WFH Requested")
+    )
+    wfh_request_ip = models.GenericIPAddressField(
+        null=True, blank=True, verbose_name=_("WFH Request IP")
+    )
+    wfh_approval_status = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        choices=[
+            ("pending", _("Pending")),
+            ("approved", _("Approved")),
+            ("rejected", _("Rejected")),
+        ],
+        verbose_name=_("WFH Approval Status"),
+    )
+    wfh_approved_by = models.ForeignKey(
+        Employee,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        verbose_name=_("WFH Approved By"),
+        related_name="wfh_approvals",
+    )
     objects = HorillaCompanyManager(
         related_company_field="employee_id__employee_work_info__company_id"
     )

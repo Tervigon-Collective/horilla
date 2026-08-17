@@ -1,0 +1,141 @@
+{% extends 'index.html' %}
+{% load i18n %}
+{% load static %}
+{% load basefilters %}
+
+{% block content %}
+<div class="oh-wrapper">
+    <div class="oh-header">
+        <div class="oh-header__left">
+            <h1 class="oh-header__title">{% trans "Work From Home Approval Requests" %}</h1>
+        </div>
+        <div class="oh-header__right">
+            <a href="{% url 'attendance-view' %}" class="oh-btn oh-btn--secondary">
+                <ion-icon name="arrow-back-outline"></ion-icon>
+                {% trans "Back to Attendance" %}
+            </a>
+        </div>
+    </div>
+
+    <div class="oh-card mt-3">
+        <div class="oh-card__header">
+            <h3 class="oh-card__title">
+                <ion-icon name="home-outline" class="mr-2"></ion-icon>
+                {% trans "Pending WFH Requests" %}
+            </h3>
+        </div>
+        <div class="oh-card__body">
+            {% if pending_requests %}
+                <div class="table-responsive">
+                    <table class="oh-table">
+                        <thead>
+                            <tr>
+                                <th>{% trans "Employee" %}</th>
+                                <th>{% trans "Date" %}</th>
+                                <th>{% trans "Check-In Time" %}</th>
+                                <th>{% trans "IP Address" %}</th>
+                                <th>{% trans "Shift" %}</th>
+                                <th>{% trans "Actions" %}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for request in pending_requests %}
+                            <tr id="wfh-request-{{ request.id }}">
+                                <td>
+                                    <div class="oh-table__cell-wrapper">
+                                        <div class="oh-avatar oh-avatar--sm mr-2">
+                                            <img src="{{ request.employee_id.get_avatar }}" alt="{{ request.employee_id.get_full_name }}">
+                                        </div>
+                                        <div>
+                                            <div class="oh-table__cell-title">{{ request.employee_id.get_full_name }}</div>
+                                            <div class="oh-table__cell-subtitle text-muted">{{ request.employee_id.employee_work_info.job_position_id }}</div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="oh-badge oh-badge--info">
+                                        {{ request.attendance_date|date:"d M Y" }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <ion-icon name="time-outline" class="mr-1"></ion-icon>
+                                    {{ request.attendance_clock_in }}
+                                </td>
+                                <td>
+                                    <code class="oh-code">{{ request.wfh_request_ip }}</code>
+                                </td>
+                                <td>
+                                    {% if request.shift_id %}
+                                        {{ request.shift_id.employee_shift }}
+                                    {% else %}
+                                        <span class="text-muted">{% trans "N/A" %}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <div class="oh-btn-group">
+                                        <button
+                                            class="oh-btn oh-btn--success oh-btn--sm"
+                                            hx-get="{% url 'wfh-approve-request' request.id %}"
+                                            hx-target="#wfh-request-{{ request.id }}"
+                                            hx-swap="outerHTML"
+                                            title="{% trans 'Approve' %}">
+                                            <ion-icon name="checkmark-outline"></ion-icon>
+                                            {% trans "Approve" %}
+                                        </button>
+                                        <button
+                                            class="oh-btn oh-btn--danger oh-btn--sm"
+                                            hx-get="{% url 'wfh-reject-request' request.id %}"
+                                            hx-target="#wfh-request-{{ request.id }}"
+                                            hx-swap="outerHTML"
+                                            title="{% trans 'Reject' %}">
+                                            <ion-icon name="close-outline"></ion-icon>
+                                            {% trans "Reject" %}
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="oh-empty-state">
+                    <div class="oh-empty-state__icon">
+                        <ion-icon name="checkmark-done-circle-outline"></ion-icon>
+                    </div>
+                    <h3 class="oh-empty-state__title">{% trans "No Pending Requests" %}</h3>
+                    <p class="oh-empty-state__description">
+                        {% trans "All work from home requests have been processed." %}
+                    </p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="oh-card mt-3">
+        <div class="oh-card__body">
+            <div class="oh-alert oh-alert--info">
+                <ion-icon name="information-circle-outline"></ion-icon>
+                <div>
+                    <strong>{% trans "About Work From Home Requests:" %}</strong>
+                    <ul class="mt-2">
+                        <li>{% trans "Employees checking in from a different IP address will be prompted to confirm if they are working from home." %}</li>
+                        <li>{% trans "Approved requests will mark the attendance as validated." %}</li>
+                        <li>{% trans "Rejected requests will delete the attendance record." %}</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .oh-code {
+        padding: 2px 6px;
+        background-color: #f5f5f5;
+        border-radius: 3px;
+        font-family: monospace;
+        font-size: 0.9em;
+    }
+</style>
+{% endblock %}

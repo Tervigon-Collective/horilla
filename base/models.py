@@ -105,6 +105,9 @@ class Company(HorillaModel):
         upload_to=upload_path,
         null=True,
     )
+    registration_number = models.CharField(
+        max_length=50, blank=True, null=True, verbose_name=_("Registration Number")
+    )
     objects = models.Manager()
     date_format = models.CharField(max_length=30, blank=True, null=True)
     time_format = models.CharField(max_length=20, blank=True, null=True)

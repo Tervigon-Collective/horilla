@@ -25,7 +25,7 @@ from attendance.cbv import (
 )
 from attendance.views import clock_in_out
 from attendance.views import dashboard as attendance_dashboard
-from attendance.views import geofaceconfig, penalty, requests, search
+from attendance.views import geofaceconfig, penalty, requests, search, wfh_approval
 from base.forms import AttendanceAllowedIPForm
 from base.models import AttendanceAllowedIP
 from base.views import add_remove_dynamic_fields
@@ -305,6 +305,27 @@ urlpatterns = [
         name="own-attendance-filter",
     ),
     path("clock-in/", clock_in_out.clock_in, name="clock-in"),
+    path("clock-in-wfh/", clock_in_out.clock_in_wfh, name="clock-in-wfh"),
+    path(
+        "wfh-pending-requests/",
+        wfh_approval.wfh_pending_requests,
+        name="wfh-pending-requests",
+    ),
+    path(
+        "wfh-approve/<int:attendance_id>/",
+        wfh_approval.wfh_approve_request,
+        name="wfh-approve-request",
+    ),
+    path(
+        "wfh-reject/<int:attendance_id>/",
+        wfh_approval.wfh_reject_request,
+        name="wfh-reject-request",
+    ),
+    path(
+        "wfh-requests-count/",
+        wfh_approval.wfh_requests_count,
+        name="wfh-requests-count",
+    ),
     path("clock-out/", clock_in_out.clock_out, name="clock-out"),
     path(
         "on-time-view/",
