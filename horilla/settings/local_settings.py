@@ -26,5 +26,8 @@ from .base import DATABASES
 DATABASES["default"]["CONN_MAX_AGE"] = 60
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 
+WHITE_LABELLING = True
+WHITE_LABEL_NAME = "Seleric HRMS"
+
 # Official 2.0 already registers geofencing from horilla_api.__init__.
 # Do not append it again — Django rejects duplicate app labels.

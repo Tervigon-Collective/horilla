@@ -201,27 +201,27 @@ urlpatterns.append(
 
 
 def white_labelling_company(request):
+    product_name = getattr(settings, "WHITE_LABEL_NAME", None) or "Seleric HRMS"
     white_labelling = getattr(settings, "WHITE_LABELLING", False)
     if white_labelling:
-        hq = Company.objects.filter(hq=True).last()
+        hq = Company.objects.filter(hq=True).last() or Company.objects.order_by("id").first()
         try:
             company = (
                 request.user.employee_get.get_company()
                 if request.user.employee_get.get_company()
                 else hq
             )
-        except:
+        except Exception:
             company = hq
 
         return {
-            "white_label_company_name": company.company if company else "Horilla",
+            "white_label_company_name": product_name,
             "white_label_company": company,
         }
-    else:
-        return {
-            "white_label_company_name": "Horilla",
-            "white_label_company": None,
-        }
+    return {
+        "white_label_company_name": product_name,
+        "white_label_company": None,
+    }
 
 
 def doc_base_url(request):
