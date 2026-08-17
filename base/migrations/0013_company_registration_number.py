@@ -8,11 +8,24 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name="company",
-            name="registration_number",
-            field=models.CharField(
-                blank=True, max_length=50, null=True, verbose_name="Registration Number"
-            ),
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.AddField(
+                    model_name="company",
+                    name="registration_number",
+                    field=models.CharField(
+                        blank=True,
+                        max_length=50,
+                        null=True,
+                        verbose_name="Registration Number",
+                    ),
+                ),
+            ],
+            database_operations=[
+                migrations.RunSQL(
+                    sql="ALTER TABLE base_company ADD COLUMN IF NOT EXISTS registration_number varchar(50) NULL;",
+                    reverse_sql=migrations.RunSQL.noop,
+                ),
+            ],
         ),
     ]
