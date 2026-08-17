@@ -21,10 +21,10 @@ CSRF_TRUSTED_ORIGINS = [
     "http://hrms.seleric.ai",
 ]
 
-from .base import DATABASES, INSTALLED_APPS
+from .base import DATABASES
 
 DATABASES["default"]["CONN_MAX_AGE"] = 60
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 
-if "geofencing" not in INSTALLED_APPS:
-    INSTALLED_APPS.append("geofencing")
+# Official 2.0 already registers geofencing from horilla_api.__init__.
+# Do not append it again — Django rejects duplicate app labels.
