@@ -564,6 +564,14 @@ class DocumentIndividualTabList(DocumentListView):
         self.search_url = reverse("employee-document-tab-list", kwargs={"pk": pk})
         self.view_id = "document_target"
 
+    def dispatch(self, request, *args, **kwargs):
+        from employee.cbv.accessibility import deny_without_employee_record_access
+
+        blocked = deny_without_employee_record_access(request, kwargs.get("pk"))
+        if blocked:
+            return blocked
+        return super().dispatch(request, *args, **kwargs)
+
     def get_queryset(self, queryset=None, filtered=False, *args, **kwargs):
         # DocumentListView.get_queryset() (the immediate parent) filters by
         # a document_request_id GET param, which doesn't apply to this tab

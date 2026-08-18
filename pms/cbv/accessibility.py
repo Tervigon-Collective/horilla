@@ -15,12 +15,9 @@ def performance_accessibility(
     permission for performance tab
     """
     employee = Employee.objects.get(id=instance.pk)
-    check_manages = check_manager(request.user.employee_get, instance)
-    return (
-        request.user == employee.employee_user_id
-        or check_manages
-        or request.user.has_perm("pms.view_feedback")
-    )
+    from employee.cbv.accessibility import can_access_employee_record
+
+    return can_access_employee_record(request, employee)
 
 
 def create_objective_accessibility(

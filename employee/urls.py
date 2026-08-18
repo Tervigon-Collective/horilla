@@ -833,7 +833,7 @@ urlpatterns = [
     path(
         "employee-profile/<int:pk>/",
         employee_profile.UserProfileView.as_view(),
-        name="employee-profile",
+        name="employee-profile-view",
     ),
     path(
         "employee-related-detail-view/<int:pk>/",

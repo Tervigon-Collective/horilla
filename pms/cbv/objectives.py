@@ -8,6 +8,7 @@ from django.urls import resolve, reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 
+from employee.cbv.accessibility import EmployeeRecordAccessDispatchMixin
 from employee.cbv.employee_profile import EmployeeProfileView
 from employee.models import Employee
 from horilla.http.response import HorillaRedirect
@@ -812,12 +813,14 @@ class EmployeeObjectiveKeyResultDetailListView(HorillaListView):
         ).first()
 
         self.actions = []
+        managers = []
+        if emp_objective and emp_objective.objective_id:
+            managers = list(emp_objective.objective_id.managers.all())
         if (
             self.request.user.has_perm("pms.change_objective")
             or self.request.user.has_perm("pms.change_employeeobjective")
             or self.request.user.has_perm("pms.change_employeekeyresult")
-            or self.request.user.employee_get
-            in emp_objective.objective_id.managers.all()
+            or self.request.user.employee_get in managers
         ):
             self.actions.append(
                 {
@@ -899,7 +902,7 @@ class EmployeeObjectiveKeyResultDetailListView(HorillaListView):
 
 
 @method_decorator(login_required, name="dispatch")
-class EKRTab(EmployeeObjectiveKeyResultDetailListView):
+class EKRTab(EmployeeRecordAccessDispatchMixin, EmployeeObjectiveKeyResultDetailListView):
     """
     EKR tab
     """

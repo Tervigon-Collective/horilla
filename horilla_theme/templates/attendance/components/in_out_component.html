@@ -15,9 +15,10 @@
                     <span class="at_work_seconds" data-at-work-seconds = "{{ get_forecasted_at_work.forecasted_at_work_seconds|default:0 }}" data-run= "{{run|default:1}}" ></span> {% endcomment %}
                     <button
                         class="check checkout"
-                        hx-get="{% url 'clock-out' %}"
+                        data-punch-url="{% url 'clock-out' %}"
                         hx-target="#attendance-activity-container"
                         hx-swap="innerHTML"
+                        onclick="return punchWithLocation(event, this)"
                         {% if request|is_timerunner_enabled and get_forecasted_at_work.has_attendance %}
                             onmouseenter="$(this).find('span.hr-Check-In-out-text').show();$(this).find('.time-runner').hide()"
                             onmouseleave="$(this).find('span.hr-Check-In-out-text').hide();$(this).find('.time-runner').show()"
@@ -58,9 +59,10 @@
                     <span class="at_work_seconds" data-at-work-seconds = "{{ get_forecasted_at_work.forecasted_at_work_seconds|default:0 }}" data-run= "{{run|default:0}}" ></span> {% endcomment %}
                     <button
                         class="check checkin"
-                        hx-get="{% url 'clock-in' %}"
+                        data-punch-url="{% url 'clock-in' %}"
                         hx-target="#attendance-activity-container"
                         hx-swap="innerHTML"
+                        onclick="return punchWithLocation(event, this)"
                         {% if request|is_timerunner_enabled %}
                             onmouseenter="$(this).find('span.hr-Check-In-out-text').show();$(this).find('.at-work-seconds').hide()"
                             onmouseleave="$(this).find('span.hr-Check-In-out-text').hide();$(this).find('.at-work-seconds').show()"
@@ -144,3 +146,29 @@
         }
     </script>
 {% endif %}
+
+<script>
+window.punchWithLocation = window.punchWithLocation || function (event, el) {
+    event.preventDefault();
+    event.stopPropagation();
+    var url = el.getAttribute("data-punch-url");
+    var target = el.getAttribute("hx-target") || "#attendance-activity-container";
+    function go(qs) {
+        htmx.ajax("GET", url + qs, { target: target, swap: "innerHTML" });
+    }
+    if (!navigator.geolocation) {
+        go("");
+        return false;
+    }
+    navigator.geolocation.getCurrentPosition(
+        function (p) {
+            go("?latitude=" + p.coords.latitude + "&longitude=" + p.coords.longitude);
+        },
+        function () {
+            go("");
+        },
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    );
+    return false;
+};
+</script>

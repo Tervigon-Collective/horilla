@@ -9,22 +9,15 @@ from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 
 from asset.cbv.request_and_allocation import AllocationList, AssetRequestList
-from asset.models import AssetAssignment, AssetRequest
+from employee.cbv.accessibility import EmployeeRecordAccessDispatchMixin
 from employee.cbv.employee_profile import EmployeeProfileView
 from employee.models import Employee
-from horilla_views.cbv_methods import owner_can_enter
+from horilla_views.cbv_methods import login_required
 from horilla_views.generic.cbv.views import HorillaTabView
 
 
-@method_decorator(
-    owner_can_enter(
-        "asset.view_assetassignment",
-        AssetAssignment,
-        employee_field="assigned_to_employee_id",
-    ),
-    name="dispatch",
-)
-class AssetTabListView(AllocationList):
+@method_decorator(login_required, name="dispatch")
+class AssetTabListView(EmployeeRecordAccessDispatchMixin, AllocationList):
     """
     Asset tab in individual view
     """
@@ -53,13 +46,8 @@ class AssetTabListView(AllocationList):
         return queryset
 
 
-@method_decorator(
-    owner_can_enter(
-        "asset.view_assetrequest", AssetRequest, employee_field="requested_employee_id"
-    ),
-    name="dispatch",
-)
-class AssetRequestTab(AssetRequestList):
+@method_decorator(login_required, name="dispatch")
+class AssetRequestTab(EmployeeRecordAccessDispatchMixin, AssetRequestList):
     """
     Asset request tab
     """
@@ -81,15 +69,8 @@ class AssetRequestTab(AssetRequestList):
         return queryset
 
 
-@method_decorator(
-    owner_can_enter(
-        "asset.view_assetassignment",
-        AssetRequest,
-        employee_field="requested_employee_id",
-    ),
-    name="dispatch",
-)
-class AssetTabView(HorillaTabView):
+@method_decorator(login_required, name="dispatch")
+class AssetTabView(EmployeeRecordAccessDispatchMixin, HorillaTabView):
     """
     generic tab view for asset tab
     """

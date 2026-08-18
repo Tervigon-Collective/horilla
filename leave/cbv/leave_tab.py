@@ -19,6 +19,14 @@ class IndividualLeaveTab(MainParentListView):
 
     template_name = "cbv/employee_individual/leave_tab.html"
 
+    def dispatch(self, request, *args, **kwargs):
+        from employee.cbv.accessibility import deny_without_employee_record_access
+
+        blocked = deny_without_employee_record_access(request, kwargs.get("pk"))
+        if blocked:
+            return blocked
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs: Any):
         """
         context data

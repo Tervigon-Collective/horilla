@@ -68,6 +68,11 @@ from base.models import (
     WorkTypeRequest,
 )
 from base.views import generate_error_report
+from employee.cbv.accessibility import (
+    employee_record_access_required,
+    hr_user_required,
+    note_access_required,
+)
 from employee.cbv.document_request import htmx_refresh_document_request_container
 from employee.filters import DocumentRequestFilter, EmployeeFilter, EmployeeReGroup
 from employee.forms import (
@@ -207,6 +212,17 @@ def _check_reporting_manager(request, *args, **kwargs):
     return request.user.employee_get.reporting_manager.exists()
 
 
+def _can_view_employee_profile(request, *args, **kwargs):
+    """Own profile, reporting manager, or HR — not every user with view_employee."""
+    from employee.cbv.accessibility import can_access_employee_record
+
+    obj_id = kwargs.get("obj_id") or kwargs.get("pk")
+    if not obj_id:
+        return False
+    emp = Employee.objects.entire().filter(id=obj_id).first()
+    return can_access_employee_record(request, emp)
+
+
 @login_required
 def employee_profile(request):
     """
@@ -243,23 +259,72 @@ def employee_profile(request):
 @login_required
 @enter_if_accessible(
     feature="profile_edit",
-    perm="employee.change_employee",
+    perm="employee.change_profile",
 )
 def self_info_update(request):
     """
     This method is used to update own profile of an employee.
     """
+
+    def configure_self_profile_form(form):
+        """
+        Limit self-service edits to the fields exposed in the profile UI so
+        hidden admin fields never block a save.
+        """
+        allowed_fields = {
+            "employee_profile",
+            "employee_first_name",
+            "employee_last_name",
+            "email",
+            "phone",
+            "dob",
+            "gender",
+            "qualification",
+            "experience",
+            "address",
+            "country",
+            "state",
+            "city",
+            "zip",
+            "emergency_contact",
+            "emergency_contact_name",
+            "emergency_contact_relation",
+            "marital_status",
+            "children",
+        }
+        for field_name in list(form.fields.keys()):
+            if field_name not in allowed_fields:
+                form.fields.pop(field_name, None)
+        return form
+
+    def configure_self_bank_form(form):
+        """
+        Allow employees to save partial bank details while they complete their
+        profile instead of forcing all values in one go.
+        """
+        for field in form.fields.values():
+            field.required = False
+        return form
+
     user = request.user
     employee = Employee.objects.filter(employee_user_id=user).first()
     badge_id = employee.badge_id
-    bank_form = EmployeeBankDetailsForm(
-        instance=EmployeeBankDetails.objects.filter(employee_id=employee).first()
+    bank_instance, _created = EmployeeBankDetails.objects.get_or_create(
+        employee_id=employee
     )
-    form = EmployeeForm(instance=Employee.objects.filter(employee_user_id=user).first())
+    bank_form = configure_self_bank_form(
+        EmployeeBankDetailsForm(instance=bank_instance)
+    )
+    form = configure_self_profile_form(
+        EmployeeForm(instance=Employee.objects.filter(employee_user_id=user).first())
+    )
+    saved = False
     if request.POST:
         if request.POST.get("employee_first_name") is not None:
             instance = Employee.objects.filter(employee_user_id=request.user).first()
-            form = EmployeeForm(request.POST, instance=instance)
+            form = configure_self_profile_form(
+                EmployeeForm(request.POST, request.FILES, instance=instance)
+            )
             if form.is_valid():
                 instance = form.save(commit=False)
                 instance.employee_user_id = user
@@ -267,14 +332,31 @@ def self_info_update(request):
                     instance.badge_id = badge_id
                 instance.save()
                 messages.success(request, _("Profile updated."))
-        elif request.POST.get("any_other_code1") is not None:
-            instance = EmployeeBankDetails.objects.filter(employee_id=employee).first()
-            bank_form = EmployeeBankDetailsForm(request.POST, instance=instance)
+                saved = True
+            else:
+                messages.error(
+                    request,
+                    _("Could not save profile. Please check the highlighted fields."),
+                )
+        elif request.POST.get("bank_name") is not None or request.POST.get(
+            "any_other_code1"
+        ) is not None:
+            bank_form = configure_self_bank_form(
+                EmployeeBankDetailsForm(request.POST, instance=bank_instance)
+            )
             if bank_form.is_valid():
                 instance = bank_form.save(commit=False)
                 instance.employee_id = employee
                 instance.save()
                 messages.success(request, _("Bank details updated."))
+                saved = True
+            else:
+                messages.error(
+                    request,
+                    _("Could not save bank details. Please check the highlighted fields."),
+                )
+    if saved:
+        return redirect("/employee/employee-profile/")
     return render(
         request,
         "employee/profile/profile.html",
@@ -308,10 +390,11 @@ def profile_edit_access(request, emp_id):
 
 
 @login_required
+@employee_record_access_required
 @enter_if_accessible(
     feature="employee_detailed_view",
-    perm="employee.view_employee",
-    method=_check_reporting_manager,
+    perm="employee.change_employee",
+    method=_can_view_employee_profile,
 )
 def employee_view_individual(request, obj_id, **kwargs):
     """
@@ -391,6 +474,7 @@ def employee_view_individual(request, obj_id, **kwargs):
 
 @login_required
 @hx_request_required
+@employee_record_access_required
 def about_tab(request, pk, **kwargs):
     """
     This method is used to view profile of an employee.
@@ -417,6 +501,7 @@ def about_tab(request, pk, **kwargs):
 
 @login_required
 @hx_request_required
+@employee_record_access_required
 def allowances_deductions_tab(request, pk):
     """
     Retrieve and render the allowances and deductions applicable to an employee.
@@ -876,13 +961,11 @@ def document_delete(request, id):
 def can_access_document(request, document, perm):
     """
     Check if the current user is authorized to access the given document.
+    Own files, reporting manager, or HR — not every user with view_document.
     """
-    employee = request.user.employee_get
-    return (
-        document.employee_id == employee
-        or document.employee_id.get_reporting_manager() == employee
-        or request.user.has_perm(perm)
-    )
+    from employee.cbv.accessibility import can_access_employee_record
+
+    return can_access_employee_record(request, document.employee_id)
 
 
 @login_required
@@ -1616,7 +1699,7 @@ def employee_view_new(request):
 
 
 @login_required
-@manager_can_enter("employee.change_employee")
+@permission_required("employee.change_employee")
 def employee_view_update(request, obj_id, **kwargs):
     """
     This method is used to render update form for employee.
@@ -1679,11 +1762,7 @@ def employee_view_update(request, obj_id, **kwargs):
 
         employee.save()
 
-    if (
-        user
-        and user.reporting_manager.filter(employee_id=employee).exists()
-        or request.user.has_perm("employee.change_employee")
-    ):
+    if request.user.has_perm("employee.change_employee"):
         form = EmployeeForm(instance=employee)
         work_form = EmployeeWorkInformationForm(
             instance=EmployeeWorkInformation.objects.filter(
@@ -3310,7 +3389,7 @@ def employee_select_filter(request):
 
 @login_required
 @hx_request_required
-@manager_can_enter(perm="employee.view_employeenote")
+@note_access_required
 def note_tab(request, pk):
     """
     This function is used to view note tab of an employee in employee individual
@@ -3335,6 +3414,7 @@ def note_tab(request, pk):
 
 
 @login_required
+@hr_user_required
 def history_tab(request, pk):
     """
     Activity-history tab for employee profile / individual view.
@@ -3350,6 +3430,7 @@ def history_tab(request, pk):
 
 @login_required
 @hx_request_required
+@hr_user_required
 def employee_history_sidebar(request, pk):
     """
     Same activity-history feed as the profile page's History tab, wrapped
@@ -3368,7 +3449,7 @@ def employee_history_sidebar(request, pk):
 
 @login_required
 @hx_request_required
-@manager_can_enter(perm="employee.add_employeenote")
+@note_access_required
 def add_note(request, emp_id=None):
     """
     Handles the addition of a note to a specific employee, including file attachments.
@@ -3404,7 +3485,7 @@ def add_note(request, emp_id=None):
 
 
 @login_required
-@manager_can_enter(perm="employee.change_employeenote")
+@note_access_required
 def employee_note_update(request, note_id):
     """
     This method is used to update the note
@@ -3440,7 +3521,7 @@ def employee_note_update(request, note_id):
 
 
 @login_required
-@manager_can_enter(perm="employee.delete_employeenote")
+@note_access_required
 def employee_note_delete(request, note_id):
     """
     This method is used to delete the note
@@ -3462,7 +3543,7 @@ def employee_note_delete(request, note_id):
 
 @login_required
 @hx_request_required
-@manager_can_enter(perm="employee.add_notefiles")
+@note_access_required
 def add_more_employee_files(request, note_id):
     """
     This method is used to Add more files to the Employee note.
@@ -3494,7 +3575,7 @@ def add_more_employee_files(request, note_id):
 
 @login_required
 @hx_request_required
-@manager_can_enter(perm="employee.delete_notefiles")
+@note_access_required
 def delete_employee_note_file(request, note_file_id):
     """
     This method is used to delete the stage note file
@@ -3508,7 +3589,6 @@ def delete_employee_note_file(request, note_file_id):
 
 @login_required
 @hx_request_required
-@owner_can_enter("employee.view_bonuspoint", Employee)
 def bonus_points_tab(request, pk):
     """
     This function is used to view Bonus Points tab of an employee in employee individual
@@ -3522,6 +3602,13 @@ def bonus_points_tab(request, pk):
 
     """
     employee_obj = Employee.objects.get(id=pk)
+    from django.contrib.auth.context_processors import PermWrapper
+
+    from payroll.cbv.accessibility import bonus_accessibility
+
+    if not bonus_accessibility(request, employee_obj, PermWrapper(request.user)):
+        messages.info(request, _("You dont have access to the feature"))
+        return HorillaRedirect(request)
     try:
         points = BonusPoint.objects.get(employee_id=pk)
         if apps.is_installed("payroll"):
@@ -3581,7 +3668,7 @@ def bonus_points_tab(request, pk):
 
 
 @login_required
-@manager_can_enter(perm="employee.add_bonuspoint")
+@hr_user_required
 def add_bonus_points(request, emp_id):
     """
     This function is used to add bonus points to an employee

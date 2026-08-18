@@ -189,7 +189,7 @@
     {% include "generic/components.html" %}
     <div id="enlargeImageContainer"></div>
 
-    <div class="oh-wrapper" hx-get="{% url 'employee-profile' request.user.employee_get.id  %}" hx-trigger="load"></div>
+    <div class="oh-wrapper" hx-get="{% url 'employee-profile-view' request.user.employee_get.id  %}" hx-trigger="load"></div>
 
     <div class="oh-checkpoint-badge mb-2" id="selectedInstances" data-ids="[]" data-clicked="" style="display: none">
     </div>

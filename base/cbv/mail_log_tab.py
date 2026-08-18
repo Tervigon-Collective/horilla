@@ -10,28 +10,16 @@ from django.urls import reverse
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 
-from accessibility.cbv_decorators import enter_if_accessible
 from base.filters import MailLogFilter
 from base.models import EmailLog
+from employee.cbv.accessibility import is_hr_user
 from employee.models import Employee
 from horilla.http.response import HorillaRedirect
 from horilla_views.cbv_methods import login_required
 from horilla_views.generic.cbv.views import HorillaDetailedView, HorillaListView
 
 
-def _check_reporting_manager(request, *args, **kwargs):
-    return request.user.employee_get.reporting_manager.exists()
-
-
 @method_decorator(login_required, name="dispatch")
-@method_decorator(
-    enter_if_accessible(
-        feature="view_mail_log",
-        perm="employee.view_employee",
-        method=_check_reporting_manager,
-    ),
-    name="dispatch",
-)
 class MailLogTabList(HorillaListView):
     """
     list view for mail log  tab
@@ -54,6 +42,9 @@ class MailLogTabList(HorillaListView):
     #     return context
 
     def dispatch(self, request, *args, **kwargs):
+        if not is_hr_user(request):
+            messages.info(request, _("You dont have access to the feature"))
+            return HorillaRedirect(request)
         pk = kwargs.get("pk")
         if not Employee.objects.filter(id=pk).exists():
             messages.error(request, _("Employee not found."))
@@ -93,14 +84,6 @@ class MailLogTabList(HorillaListView):
 
 
 @method_decorator(login_required, name="dispatch")
-@method_decorator(
-    enter_if_accessible(
-        feature="view_mail_log",
-        perm="employee.view_employee",
-        method=_check_reporting_manager,
-    ),
-    name="dispatch",
-)
 class MailLogDetailView(HorillaDetailedView):
     """
     detail view for mail log tab
@@ -117,3 +100,9 @@ class MailLogDetailView(HorillaDetailedView):
         return context
 
     header = {"title": "", "subtitle": "", "avatar": ""}
+
+    def dispatch(self, request, *args, **kwargs):
+        if not is_hr_user(request):
+            messages.info(request, _("You dont have access to the feature"))
+            return HorillaRedirect(request)
+        return super().dispatch(request, *args, **kwargs)

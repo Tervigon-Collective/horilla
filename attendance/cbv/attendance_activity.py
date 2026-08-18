@@ -66,7 +66,9 @@ class AttendanceActivityListView(HorillaListView):
         (_("Attendance Date"), "attendance_date"),
         (_("In Date"), "clock_in_date"),
         (_("Check In"), "clock_in"),
+        (_("In Location"), "clock_in_location_col"),
         (_("Check Out"), "clock_out"),
+        (_("Out Location"), "clock_out_location_col"),
         (_("Out Date"), "clock_out_date"),
         (_("Duration (HH:MM:SS)"), "duration_format"),
     ]

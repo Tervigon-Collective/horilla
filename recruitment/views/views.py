@@ -1869,6 +1869,7 @@ def candidate_interview_tab(request, pk, **kwargs):
     )
 
 
+@login_required
 def scheduled_interview_tab(request, pk, **kwargs):
     """
     method for rendering interview tab

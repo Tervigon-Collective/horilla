@@ -17,6 +17,7 @@ from django.db import models, transaction
 from django.db.models import F, Q
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 
 from attendance.methods.utils import (
@@ -42,6 +43,23 @@ from horilla_views.cbv_methods import render_template
 
 # to skip the migration issue with the old migrations
 _validate_time_in_minutes = validate_time_in_minutes
+
+
+def format_punch_location(meta, key):
+    """Street address as a map link; never show raw lat/long."""
+    data = (meta or {}).get(key) or {}
+    address = (data.get("address") or "").strip()
+    lat, lng = data.get("lat"), data.get("lng")
+    if address and lat is not None and lng is not None:
+        return format_html(
+            '<a href="https://maps.google.com/?q={}, {}" target="_blank" rel="noopener" class="text-xs font-medium text-primary-600">{}</a>',
+            lat,
+            lng,
+            address,
+        )
+    if address:
+        return address
+    return "—"
 
 
 # Create your models here.
@@ -75,6 +93,12 @@ class AttendanceActivity(HorillaModel):
     clock_out_date = models.DateField(null=True, verbose_name=_("Out Date"))
     out_datetime = models.DateTimeField(null=True)
     clock_out = models.TimeField(null=True, verbose_name=_("Check Out"))
+    punch_location = models.JSONField(
+        null=True,
+        blank=True,
+        default=dict,
+        verbose_name=_("Punch location"),
+    )
     objects = HorillaCompanyManager(
         related_company_field="employee_id__employee_work_info__company_id"
     )
@@ -107,6 +131,12 @@ class AttendanceActivity(HorillaModel):
             ("sunday", _("Sunday")),
         ]
         return dict(DAY).get(self.shift_day.day)
+
+    def clock_in_location_col(self):
+        return format_punch_location(self.punch_location, "in")
+
+    def clock_out_location_col(self):
+        return format_punch_location(self.punch_location, "out")
 
     def get_delete_attendance(self):
         """
@@ -338,6 +368,12 @@ class Attendance(HorillaModel):
         verbose_name=_("WFH Approved By"),
         related_name="wfh_approvals",
     )
+    punch_location = models.JSONField(
+        null=True,
+        blank=True,
+        default=dict,
+        verbose_name=_("Punch location"),
+    )
     objects = HorillaCompanyManager(
         related_company_field="employee_id__employee_work_info__company_id"
     )
@@ -447,6 +483,12 @@ class Attendance(HorillaModel):
             path="cbv/attendances/attendance_actions.html",
             context={"instance": self},
         )
+
+    def clock_in_location_col(self):
+        return format_punch_location(self.punch_location, "in")
+
+    def clock_out_location_col(self):
+        return format_punch_location(self.punch_location, "out")
 
     def comment_col(self):
         """

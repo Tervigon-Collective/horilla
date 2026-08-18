@@ -50,6 +50,73 @@ except ImportError:
 from horilla.horilla_middlewares import _thread_locals
 
 
+def _client_ip(request):
+    forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR")
+
+
+def reverse_punch_address(lat, lng):
+    """Turn coordinates into a readable address. Empty string on failure."""
+    try:
+        from geopy.geocoders import Nominatim
+
+        geolocator = Nominatim(user_agent="seleric-hrms-punch", timeout=4)
+        location = geolocator.reverse(
+            (lat, lng), exactly_one=True, language="en", addressdetails=True
+        )
+        if not location:
+            return ""
+        raw = getattr(location, "raw", {}) or {}
+        parts = raw.get("address") or {}
+        ordered = [
+            parts.get("building") or parts.get("amenity"),
+            parts.get("road") or parts.get("pedestrian"),
+            parts.get("suburb")
+            or parts.get("neighbourhood")
+            or parts.get("village")
+            or parts.get("town"),
+            parts.get("city") or parts.get("state_district"),
+            parts.get("postcode"),
+            parts.get("country"),
+        ]
+        cleaned = []
+        for part in ordered:
+            if part and part not in cleaned:
+                cleaned.append(part)
+        return ", ".join(cleaned) or location.address or ""
+    except Exception:
+        logger.exception("Punch reverse-geocode failed")
+        return ""
+
+
+def punch_point_from_request(request):
+    """GPS, reverse-geocoded address, and client IP."""
+    if request is None:
+        return {}
+    point = {"ip": _client_ip(request)}
+    data = getattr(request, "GET", {}) or {}
+    try:
+        lat = data.get("latitude")
+        lng = data.get("longitude")
+        if lat is not None and lng is not None and lat != "" and lng != "":
+            point["lat"] = float(lat)
+            point["lng"] = float(lng)
+            address = reverse_punch_address(point["lat"], point["lng"])
+            if address:
+                point["address"] = address
+    except (TypeError, ValueError):
+        pass
+    return point
+
+
+def merge_punch_location(instance, key, point):
+    meta = dict(instance.punch_location or {})
+    meta[key] = point
+    instance.punch_location = meta
+
+
 def late_come_create(attendance):
     """
     used to create late come report
@@ -134,6 +201,7 @@ def clock_in_attendance_and_activity(
     start_time,
     end_time,
     in_datetime,
+    request=None,
 ):
     """
     This method is used to create attendance activity or attendance when an employee clocks-in
@@ -171,6 +239,10 @@ def clock_in_attendance_and_activity(
         clock_in=in_datetime,
         in_datetime=in_datetime,
     )
+    point = punch_point_from_request(request)
+    if point:
+        merge_punch_location(new_activity, "in", point)
+        new_activity.save(update_fields=["punch_location"])
     # create attendance if not exist
     attendance = Attendance.objects.filter(
         employee_id=employee, attendance_date=attendance_date
@@ -185,6 +257,8 @@ def clock_in_attendance_and_activity(
         attendance.attendance_clock_in = now
         attendance.attendance_clock_in_date = date_today
         attendance.minimum_hour = minimum_hour
+        if point:
+            merge_punch_location(attendance, "in", point)
         attendance.save()
         # check here late come or not
 
@@ -196,6 +270,8 @@ def clock_in_attendance_and_activity(
         attendance = attendance[0]
         attendance.attendance_clock_out = None
         attendance.attendance_clock_out_date = None
+        if point:
+            merge_punch_location(attendance, "in", point)
         attendance.save()
         # delete if the attendance marked the early out
         early_out_instance = attendance.late_come_early_out.filter(type="early_out")
@@ -345,6 +421,7 @@ def clock_in(request):
                 start_time=start_time_sec,
                 end_time=end_time_sec,
                 in_datetime=datetime_now,
+                request=request,
             )
             # Refresh employee from DB so template re-evaluates is_clocked_in correctly
             employee.refresh_from_db()
@@ -368,7 +445,9 @@ def clock_in(request):
         return HorillaRedirect(request)
 
 
-def clock_out_attendance_and_activity(employee, date_today, now, out_datetime=None):
+def clock_out_attendance_and_activity(
+    employee, date_today, now, out_datetime=None, request=None
+):
     """
     Clock out the attendance and activity
     args:
@@ -389,6 +468,9 @@ def clock_out_attendance_and_activity(employee, date_today, now, out_datetime=No
         attendance_activity.clock_out = out_datetime
         attendance_activity.clock_out_date = date_today
         attendance_activity.out_datetime = out_datetime
+        point = punch_point_from_request(request)
+        if point:
+            merge_punch_location(attendance_activity, "out", point)
         attendance_activity.save()
 
         attendance_activities = attendance_activities.filter(
@@ -412,6 +494,8 @@ def clock_out_attendance_and_activity(employee, date_today, now, out_datetime=No
         attendance.attendance_clock_out = now + ":00"
         attendance.attendance_clock_out_date = date_today
         attendance.attendance_worked_hour = duration
+        if point:
+            merge_punch_location(attendance, "out", point)
         # Overtime calculation
         attendance.attendance_overtime = overtime_calculation(attendance)
 
@@ -560,6 +644,7 @@ def clock_in_wfh(request):
                 start_time=start_time_sec,
                 end_time=end_time_sec,
                 in_datetime=datetime_now,
+                request=request,
             )
             attendance.is_work_from_home = True
             attendance.wfh_requested = True
@@ -673,7 +758,11 @@ def clock_out(request):
             day=day, shift=shift
         )
         attendance = clock_out_attendance_and_activity(
-            employee=employee, date_today=date_today, now=now, out_datetime=datetime_now
+            employee=employee,
+            date_today=date_today,
+            now=now,
+            out_datetime=datetime_now,
+            request=request,
         )
         if attendance:
             early_out_instance = attendance.late_come_early_out.filter(type="early_out")

@@ -15,6 +15,7 @@ from django.utils.translation import gettext_lazy as _
 from base.methods import has_export_access
 from employee import views as employee_view
 from employee.cbv.employee_profile import EmployeeProfileView
+from employee.models import Employee
 from horilla.http.response import HorillaRedirect
 from horilla_views.cbv_methods import (
     hx_request_required,
@@ -83,7 +84,9 @@ class PayslipList(HorillaListView):
         Return the queryset of Payslip objects based on user permissions.
         """
         queryset = super().get_queryset()
-        if not self.request.user.has_perm("payroll.view_payslip"):
+        from payroll.cbv.accessibility import can_view_all_payslips
+
+        if not can_view_all_payslips(self.request):
             queryset = queryset.filter(employee_id__employee_user_id=self.request.user)
         return queryset
 
@@ -401,6 +404,16 @@ class PayrollTab(PayslipList):
     """
     class for rendering payroll tab in employee profile
     """
+
+    def dispatch(self, request, *args, **kwargs):
+        from payroll.cbv.accessibility import payroll_accessibility
+
+        pk = kwargs.get("pk")
+        employee = Employee.objects.filter(id=pk).first() if pk else None
+        if not employee or not payroll_accessibility(request, employee):
+            messages.info(request, _("You dont have access to the feature"))
+            return HorillaRedirect(request)
+        return super().dispatch(request, *args, **kwargs)
 
     def get_queryset(self):
         queryset = super().get_queryset()

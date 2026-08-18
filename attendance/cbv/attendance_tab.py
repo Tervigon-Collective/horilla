@@ -16,6 +16,7 @@ from attendance.filters import AttendanceFilters
 from attendance.models import Attendance
 from base.methods import filtersubordinates
 from base.request_and_approve import paginator_qry
+from employee.cbv.accessibility import EmployeeRecordAccessDispatchMixin
 from employee.models import Employee
 from horilla_views.cbv_methods import login_required
 from horilla_views.generic.cbv.views import HorillaListView, HorillaTabView
@@ -26,6 +27,14 @@ class AttendanceTabView(HorillaTabView):
     """
     generic tab view for attendance
     """
+
+    def dispatch(self, request, *args, **kwargs):
+        from employee.cbv.accessibility import deny_without_employee_record_access
+
+        blocked = deny_without_employee_record_access(request, kwargs.get("pk"))
+        if blocked:
+            return blocked
+        return super().dispatch(request, *args, **kwargs)
 
     # template_name = "cbv/work_shift_tab/extended_work-shift.html"
 
@@ -69,7 +78,9 @@ class AttendanceTabView(HorillaTabView):
 
 
 @method_decorator(login_required, name="dispatch")
-class RequestedAttendanceIndividualView(AttendanceRequestListTab):
+class RequestedAttendanceIndividualView(
+    EmployeeRecordAccessDispatchMixin, AttendanceRequestListTab
+):
     """
     list view for requested attendance tab view
     """
@@ -92,7 +103,7 @@ class RequestedAttendanceIndividualView(AttendanceRequestListTab):
 
 
 @method_decorator(login_required, name="dispatch")
-class HourAccountIndividualTabView(HourAccountList):
+class HourAccountIndividualTabView(EmployeeRecordAccessDispatchMixin, HourAccountList):
     """
     list view for hour account tab
     """
@@ -115,7 +126,7 @@ class HourAccountIndividualTabView(HourAccountList):
 
 
 @method_decorator(login_required, name="dispatch")
-class AllAttendancesList(MyAttendancesListView):
+class AllAttendancesList(EmployeeRecordAccessDispatchMixin, MyAttendancesListView):
 
     def get_context_data(self, **kwargs: Any):
         context = super().get_context_data(**kwargs)

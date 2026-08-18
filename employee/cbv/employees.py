@@ -293,7 +293,9 @@ class EmployeesList(HorillaListView):
         self.search_url = reverse("employees-list")
 
     def get_queryset(self, *args, **kwargs):
-        return (
+        from employee.cbv.accessibility import accessible_employees_queryset, is_hr_user
+
+        queryset = (
             super()
             .get_queryset(*args, **kwargs)
             .select_related(
@@ -308,6 +310,10 @@ class EmployeesList(HorillaListView):
                 "employee_work_info__company_id",
             )
         )
+        queryset = accessible_employees_queryset(self.request, queryset)
+        if not is_hr_user(self.request):
+            self.columns = [col for col in self.columns if col[0] != _("History")]
+        return queryset
 
     columns = [
         (_("Employee"), "employee_name_with_badge_id", "get_avatar"),
@@ -736,9 +742,7 @@ class EmployeeCard(HorillaCardView):
                 "employees__pk", flat=True
             )
         )
-        if self.request.user.has_perm(
-            "employee.change_employee"
-        ) or is_reportingmanager(self.request):
+        if self.request.user.has_perm("employee.change_employee"):
             self.actions = [
                 {
                     "action": _("Edit"),
@@ -790,6 +794,13 @@ class EmployeeCard(HorillaCardView):
                 )
         else:
             self.actions = None
+
+    def get_queryset(self, *args, **kwargs):
+        from employee.cbv.accessibility import accessible_employees_queryset
+
+        return accessible_employees_queryset(
+            self.request, super().get_queryset(*args, **kwargs)
+        )
 
     details = {
         "image_src": "get_avatar",

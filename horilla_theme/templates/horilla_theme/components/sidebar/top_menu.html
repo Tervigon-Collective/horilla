@@ -1,18 +1,13 @@
 {% load i18n static %}
 {% comment %}
-  Dashboard (top-level icon, no submenu panel). We attach the same
-  htmx boost params used by submenu links so clicking Dashboard swaps
-  only the main content region instead of doing a full page reload.
+  Full page load — the modern dashboard is a large inline-JS page. Swapping it
+  through HTMX re-executes that script in a scope where registerAutoRefresh
+  is missing and also double-fetches every card API.
 {% endcomment %}
 <a
     href="{% url 'dashboard' %}"
     class="sideboxmain group flex items-center gap-3 px-3 py-2.5 rounded-lg w-full transition duration-300"
     data-menu="Dashboard"
-    hx-get="{% url 'dashboard' %}"
-    hx-target="#ohMainContent"
-    hx-select="#ohMainContent > *"
-    hx-swap="innerHTML show:window:top"
-    hx-push-url="true"
 >
     <img
         src="{% static 'images/ui/dashboard.svg' %}"

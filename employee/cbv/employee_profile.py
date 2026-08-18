@@ -21,7 +21,7 @@ from employee.filters import EmployeeFilter
 from employee.models import Employee
 from horilla import settings
 from horilla.http.response import HorillaRedirect
-from horilla_views.cbv_methods import login_required, permission_required
+from horilla_views.cbv_methods import login_required
 from horilla_views.generic.cbv.views import HorillaDetailedView, HorillaProfileView
 
 Employee.cbv_employee_profile_edi_url = reverse_lazy("edit-profile")
@@ -55,6 +55,13 @@ class EmployeeProfileView(HorillaProfileView):
             )
 
         employee = request.user.employee_get
+        target = Employee.objects.entire().filter(id=obj_id).first()
+        from employee.cbv.accessibility import can_access_employee_record
+
+        if not can_access_employee_record(request, target):
+            return HorillaRedirect(
+                request, message=_("You dont have access to the feature")
+            )
 
         if request.user.has_perm("employee.change_employee"):
             self.actions = [
@@ -78,7 +85,7 @@ class EmployeeProfileView(HorillaProfileView):
                     "title": _("Send password reset link"),
                     "src": f"/{settings.STATIC_URL}images/ui/key.png",
                     "accessibility": "employee.cbv.accessibility.password_reset_accessibility",
-                    "attrs": """onclick="$('#reset-button').click();" """,
+                    "attrs": """href="#" onclick="$('#reset-button').click();" """,
                 },
                 {
                     "divider": True,
@@ -87,14 +94,14 @@ class EmployeeProfileView(HorillaProfileView):
                     "title": _("Block Account"),
                     "src": f"/{settings.STATIC_URL}images/ui/block-user.png",
                     "accessibility": "employee.cbv.accessibility.block_account_accessibility",
-                    "attrs": """id="block-account" """,
+                    "attrs": """href="#" id="block-account" """,
                     "variant": "danger",
                 },
                 {
                     "title": _("Un-Block Account"),
                     "src": f"/{settings.STATIC_URL}images/ui/unlock.png",
                     "accessibility": "employee.cbv.accessibility.un_block_account_accessibility",
-                    "attrs": """id="block-account" """,
+                    "attrs": """href="#" id="block-account" """,
                     "variant": "success",
                 },
             ]
@@ -106,13 +113,14 @@ class EmployeeProfileView(HorillaProfileView):
                     "title": _("Edit Profile"),
                     "src": f"/{settings.STATIC_URL}images/ui/editing.png",
                     "accessibility": "employee.cbv.accessibility.edit_accessibility",
-                    "attrs": """onclick="window.location.href='{cbv_employee_profile_edi_url}'" """,
-                },
-                {
-                    "title": _("Send password reset link"),
-                    "src": f"/{settings.STATIC_URL}images/ui/key.png",
-                    "accessibility": "employee.cbv.accessibility.password_reset_accessibility",
-                    "attrs": """onclick="$('#reset-button').click();" """,
+                    "attrs": """
+                        href="{cbv_employee_profile_edi_url}"
+                        hx-get="{cbv_employee_profile_edi_url}"
+                        hx-target="#ohMainContent"
+                        hx-select="#ohMainContent > *"
+                        hx-swap="innerHTML show:window:top"
+                        hx-push-url="true"
+                    """,
                 },
             ]
 
@@ -128,7 +136,6 @@ class UserProfileView(EmployeeProfileView):
 
 
 @method_decorator(login_required, name="dispatch")
-@method_decorator(permission_required(perm="employee.view_employee"), name="dispatch")
 class EmployeeRelatedDetailView(HorillaDetailedView):
     """
     Concise employee summary opened via related-object navigation (e.g. from
@@ -137,7 +144,7 @@ class EmployeeRelatedDetailView(HorillaDetailedView):
 
     model = Employee
     detail_view_url_name = "employee-related-detail-view"
-    detail_view_permission = "employee.view_employee"
+    detail_view_permission = "employee.change_employee"
     title = _("Employee")
     header = {
         "title": "get_full_name",
@@ -163,6 +170,14 @@ class EmployeeRelatedDetailView(HorillaDetailedView):
         context = super().get_context_data(**kwargs)
         context["instance_ids"] = None
         return context
+
+    def dispatch(self, request, *args, **kwargs):
+        from employee.cbv.accessibility import deny_without_employee_record_access
+
+        blocked = deny_without_employee_record_access(request, kwargs.get("pk"))
+        if blocked:
+            return blocked
+        return super().dispatch(request, *args, **kwargs)
 
 
 EmployeeProfileView.add_tab(

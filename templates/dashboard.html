@@ -2,7 +2,7 @@
 {% load static i18n %}
 
 {% block content %}
-    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <script src="{% static 'build/js/apexcharts.min.js' %}"></script>
     <style>
         :root {
             --md-indigo: #E54F38;
@@ -1646,6 +1646,13 @@
 
     <script>
         (function() {
+            window.registerAutoRefresh = window.registerAutoRefresh || function (intervalId) {
+                window._activeAutoRefreshTimers = window._activeAutoRefreshTimers || [];
+                window._activeAutoRefreshTimers.push(intervalId);
+            };
+            function registerAutoRefresh(intervalId) {
+                window.registerAutoRefresh(intervalId);
+            }
             const isDark = document.documentElement.classList.contains('dark') || document.body.classList.contains('dark');
             const textColor = isDark ? '#cbd5e1' : '#334155';
             const subTextColor = isDark ? '#64748b' : '#94a3b8';
@@ -2039,7 +2046,8 @@
             function loadAllData() {
                 const params = periodParams();
                 const newUrl = location.pathname + (params ? '?' + params : '');
-                location.assign(newUrl);
+                history.replaceState({}, '', newUrl);
+                if (typeof refreshAllData === 'function') refreshAllData();
             }
 
             // Helper: fetch with period params for period-sensitive endpoints
@@ -2078,7 +2086,9 @@
                 const mins = Math.floor((Date.now() - lastRefresh) / 60000);
                 refreshText.textContent = mins < 1 ? '{% trans "Just now" %}' : mins + '{% trans "m ago" %}';
             }
-            registerAutoRefresh(setInterval(updateRefreshText, 30000));
+            if (typeof registerAutoRefresh === 'function') {
+                (window.registerAutoRefresh || function () {})(setInterval(updateRefreshText, 30000));
+            }
 
             // Re-runs every data/chart load in place instead of reloading
             // the whole document -- refreshAllData() is defined further
@@ -2095,7 +2105,7 @@
                     updateRefreshText();
                     refreshAllData();
                 }, REFRESH_INTERVAL);
-                registerAutoRefresh(refreshTimer);
+                if (typeof registerAutoRefresh === 'function') if (window.registerAutoRefresh) window.registerAutoRefresh(refreshTimer);
             }
             function stopAutoRefresh() {
                 autoRefreshOn = false;
@@ -2105,7 +2115,9 @@
                 refreshToggle.title = '{% trans "Auto-refresh OFF" %}';
                 if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
             }
-            refreshToggle.addEventListener('click', () => { if (autoRefreshOn) stopAutoRefresh(); else startAutoRefresh(); });
+            if (refreshToggle) {
+                refreshToggle.addEventListener('click', () => { if (autoRefreshOn) stopAutoRefresh(); else startAutoRefresh(); });
+            }
             if (autoRefreshOn) startAutoRefresh(); else stopAutoRefresh();
 
             // ─── KPI CARDS ───
@@ -2122,6 +2134,9 @@
                             kpiCard("{% url 'attendance-view' %}",  PERM.attendance,  'md-kpi-card__icon--green',  attSvg,   '{% trans "Present Today" %}',     data.present_today,     '<span class="md-badge ' + (data.attendance_rate >= 80 ? 'md-badge--green' : 'md-badge--amber') + '">' + data.attendance_rate + '% {% trans "rate" %}</span>') +
                             kpiCard(`{% url 'request-view' %}?from_date=${getToday()}&to_date=${getToday()}&status=approved`,     PERM.leave,       'md-kpi-card__icon--amber',  leaveSvg, '{% trans "On Leave" %}',           data.on_leave,          data.pending_leaves > 0 ? '<span class="md-badge md-badge--amber">' + data.pending_leaves + ' {% trans "pending" %}</span>' : '<span style="opacity:0.5">{% trans "No pending" %}</span>') +
                             (PERM.recruitment ? kpiCard("{% url 'recruitment-view' %}", true, 'md-kpi-card__icon--purple', recruSvg, '{% trans "Open Recruitments" %}', data.open_recruitments, '<span style="opacity:0.5">{% trans "Active hiring" %}</span>') : '');
+                    }).catch(() => {
+                        const grid = document.getElementById('md-kpi-grid');
+                        if (grid) grid.innerHTML = emptyHtml('{% trans "Unable to load summary" %}');
                     });
             }
             loadKpiCards();

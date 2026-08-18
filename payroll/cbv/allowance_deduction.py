@@ -41,6 +41,21 @@ class AllowanceDeductionTabView(HorillaTabView):
     generic tab view for allowance and deduction
     """
 
+    def dispatch(self, request, *args, **kwargs):
+        from django.contrib import messages
+
+        from horilla.http.response import HorillaRedirect
+        from payroll.cbv.accessibility import allowance_and_deduction_accessibility
+
+        pk = kwargs.get("pk")
+        employee = Employee.objects.filter(id=pk).first() if pk else None
+        if not employee or not allowance_and_deduction_accessibility(
+            request, employee
+        ):
+            messages.info(request, _("You dont have access to the feature"))
+            return HorillaRedirect(request)
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         """
         Adds tab information for allowances and deductions, including actions for adding bonuses
@@ -126,8 +141,20 @@ class AllowanceTabList(AllowanceListView):
     row_status_indications = None
 
     @method_decorator(login_required, name="dispatch")
-    def dispatch(self, *args, **kwargs):
-        return super(AllowanceListView, self).dispatch(*args, **kwargs)
+    def dispatch(self, request, *args, **kwargs):
+        from django.contrib import messages
+
+        from horilla.http.response import HorillaRedirect
+        from payroll.cbv.accessibility import allowance_and_deduction_accessibility
+
+        pk = kwargs.get("pk")
+        employee = Employee.objects.filter(id=pk).first() if pk else None
+        if not employee or not allowance_and_deduction_accessibility(
+            request, employee
+        ):
+            messages.info(request, _("You dont have access to the feature"))
+            return HorillaRedirect(request)
+        return super(AllowanceListView, self).dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs: Any):
         """
@@ -220,8 +247,20 @@ class DeductionTab(DeductionListView):
     """
 
     @method_decorator(login_required, name="dispatch")
-    def dispatch(self, *args, **kwargs):
-        return super(DeductionListView, self).dispatch(*args, **kwargs)
+    def dispatch(self, request, *args, **kwargs):
+        from django.contrib import messages
+
+        from horilla.http.response import HorillaRedirect
+        from payroll.cbv.accessibility import allowance_and_deduction_accessibility
+
+        pk = kwargs.get("pk")
+        employee = Employee.objects.filter(id=pk).first() if pk else None
+        if not employee or not allowance_and_deduction_accessibility(
+            request, employee
+        ):
+            messages.info(request, _("You dont have access to the feature"))
+            return HorillaRedirect(request)
+        return super(DeductionListView, self).dispatch(request, *args, **kwargs)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)

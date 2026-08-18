@@ -220,13 +220,12 @@
                     </div>
                 {% endif %}
                 {% if actions %}
-                    <div class="oh-dropdown oh-profile-settings" x-data="{open: false}">
+                    <div class="oh-dropdown oh-profile-settings" x-data="{open: false}" @click.outside="open = false">
                         <button
                             type="button"
                             class="oh-btn oh-stop-prop oh-btn--transparent oh-profile-settings__trigger py-0 px-2 mb-2"
                             :class="{ 'oh-profile-settings__trigger--active': open }"
                             @click="open = !open"
-                            @click.outside="open = false"
                             @keydown.escape="open = false"
                             title="{% trans 'Settings' %}"
                             aria-haspopup="true"
@@ -255,7 +254,6 @@
                                     {% if action.accessibility|accessibility:instance %}
                                         <li class="oh-profile-settings__item">
                                             <a
-                                                href="#"
                                                 class="oh-profile-settings__link"
                                                 @click="open = false"
                                                 {{action.attrs|format:instance|safe}}

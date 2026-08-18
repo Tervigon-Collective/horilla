@@ -538,10 +538,9 @@ def view_payslip_pdf(request, payslip_id):
     if Payslip.objects.filter(id=payslip_id).exists():
         payslip = Payslip.objects.get(id=payslip_id)
         company = Company.objects.filter(hq=True).first()
-        if (
-            request.user.has_perm("payroll.view_payslip")
-            or payslip.employee_id.employee_user_id == request.user
-        ):
+        from payroll.cbv.accessibility import can_view_payslip_record
+
+        if can_view_payslip_record(request, payslip):
             user = request.user
             employee = user.employee_get
 
@@ -621,10 +620,9 @@ def view_created_payslip(request, payslip_id, **kwargs):
     This method is used to view the saved payslips
     """
     payslip = Payslip.objects.filter(id=payslip_id).first()
-    if payslip is not None and (
-        request.user.has_perm("payroll.view_payslip")
-        or payslip.employee_id.employee_user_id == request.user
-    ):
+    from payroll.cbv.accessibility import can_view_payslip_record
+
+    if payslip is not None and can_view_payslip_record(request, payslip):
         # the data must be dictionary in the payslip model for the json field
         data = payslip.pay_head_data
         data["employee"] = payslip.employee_id
@@ -1532,10 +1530,9 @@ def payslip_pdf(request, id):
     if Payslip.objects.filter(id=id).exists():
         payslip = Payslip.objects.get(id=id)
         company = Company.objects.filter(hq=True).first()
-        if (
-            request.user.has_perm("payroll.view_payslip")
-            or payslip.employee_id.employee_user_id == request.user
-        ):
+        from payroll.cbv.accessibility import can_view_payslip_record
+
+        if can_view_payslip_record(request, payslip):
             user = request.user
             employee = user.employee_get
 
@@ -1652,11 +1649,13 @@ def contract_select_filter(request):
 @login_required
 @hx_request_required
 def payslip_select(request):
+    from payroll.cbv.accessibility import can_view_all_payslips
+
     page_number = request.GET.get("page")
     payslip = Payslip.objects.none()
 
     if page_number == "all":
-        if request.user.has_perm("payroll.view_payslip"):
+        if can_view_all_payslips(request):
             payslip = Payslip.objects.all()
         else:
             payslip = Payslip.objects.filter(employee_id__employee_user_id=request.user)

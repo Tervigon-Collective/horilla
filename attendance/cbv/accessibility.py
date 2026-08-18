@@ -14,16 +14,10 @@ def attendance_accessibility(
     """
     permission for attendance tab
     """
-
-    check_manages = check_manager(request.user.employee_get, instance)
     employee = Employee.objects.get(id=instance.pk)
-    if (
-        check_manages
-        or request.user.has_perm("attendance.view_attendance")
-        or request.user == employee.employee_user_id
-    ):
-        return True
-    return False
+    from employee.cbv.accessibility import can_access_employee_record
+
+    return can_access_employee_record(request, employee)
 
 
 def penalty_accessibility(
@@ -32,16 +26,10 @@ def penalty_accessibility(
     """
     permission for penalty tab
     """
-
     employee = Employee.objects.get(id=instance.pk)
-    check_manages = check_manager(request.user.employee_get, instance)
-    if (
-        request.user.has_perm("base.view_penaltyaccounts")
-        or request.user == employee.employee_user_id
-        or check_manages
-    ):
-        return True
-    return False
+    from employee.cbv.accessibility import can_access_employee_record
+
+    return can_access_employee_record(request, employee)
 
 
 def create_attendance_request_accessibility(

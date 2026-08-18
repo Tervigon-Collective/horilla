@@ -1,7 +1,8 @@
 {% load static i18n %}
 
 <div class="grid gap-4 lg:grid-cols-12">
-    <!-- Personal Information -->
+    {% if perms.employee.change_employee or perms.employee.add_employee or request.user.is_superuser or request.user.employee_get == employee %}
+    <!-- Personal Information: own profile or HR only -->
     <section class="lg:col-span-4">
         <div class="overflow-hidden rounded-xl border border-[#ebebeb]">
             <div class="flex items-center justify-between bg-[#f3f3f3] px-3 py-3">
@@ -42,7 +43,7 @@
                     </dl>
                 </div>
 
-                {% if perms.employee.view_employee or request.user.employee_get == employee %}
+                {% if perms.employee.change_employee or perms.employee.add_employee or request.user.is_superuser or request.user.employee_get == employee %}
                     <div class="px-3 py-3">
                         <p class="mb-1.5 text-xxs font-semibold uppercase tracking-wide text-dark-100">
                             {% trans "Address" %}
@@ -76,6 +77,7 @@
                     </div>
                 {% endif %}
 
+                {% if perms.employee.change_employee or perms.employee.add_employee or request.user.is_superuser or request.user.employee_get == employee %}
                 <div class="px-3 py-3">
                     <p class="mb-1.5 text-xxs font-semibold uppercase tracking-wide text-dark-100">
                         {% trans "Emergency contact" %}
@@ -101,12 +103,14 @@
                         </div>
                     </dl>
                 </div>
+                {% endif %}
             </div>
         </div>
     </section>
+    {% endif %}
 
     <!-- Work + Bank -->
-    <div class="space-y-4 lg:col-span-8">
+    <div class="space-y-4 {% if perms.employee.change_employee or perms.employee.add_employee or request.user.is_superuser or request.user.employee_get == employee %}lg:col-span-8{% else %}lg:col-span-12{% endif %}">
         <!-- Work Information -->
         <section>
             <div class="overflow-hidden rounded-xl border border-[#ebebeb]">
@@ -302,20 +306,18 @@
                                     {% endif %}
                                 </dd>
                             </div>
+                            {% if perms.employee.change_employee or perms.payroll.view_contract or request.user.is_superuser or request.user.employee_get == employee %}
                             <div class="flex items-baseline justify-between gap-3 py-2">
                                 <dt class="text-xs font-medium text-color-600">{% trans "Salary" %}</dt>
                                 <dd class="text-right text-sm {% if work_info.basic_salary %}font-medium text-dark-500{% else %}italic text-dark-100{% endif %}">
                                     {% if work_info.basic_salary %}
-                                        {% if perms.employee.view_employee or request.user == employee.employee_user_id %}
-                                            {{ work_info.basic_salary }}
-                                        {% else %}
-                                            **********
-                                        {% endif %}
+                                        {{ work_info.basic_salary }}
                                     {% else %}
                                         {% trans "Not set" %}
                                     {% endif %}
                                 </dd>
                             </div>
+                            {% endif %}
                             <div class="flex items-baseline justify-between gap-3 py-2">
                                 <dt class="text-xs font-medium text-color-600">{% trans "Company" %}</dt>
                                 <dd class="text-right {% if work_info.company_id %}{% if not perms.base.view_company %}text-sm font-medium text-dark-500{% endif %}{% else %}text-sm italic text-dark-100{% endif %}">
@@ -387,7 +389,7 @@
         </section>
 
         <!-- Bank Information -->
-        {% if perms.employee.view_employeebankdetails or request.user == employee.employee_user_id %}
+        {% if perms.employee.change_employee or perms.employee.add_employee or request.user.is_superuser or request.user == employee.employee_user_id %}
             <section>
                 <div class="overflow-hidden rounded-xl border border-[#ebebeb]">
                     <div class="flex items-center justify-between bg-[#f3f3f3] px-3 py-3">

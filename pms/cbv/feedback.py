@@ -14,6 +14,7 @@ from django.utils.translation import gettext_lazy as _
 
 from base.decorators import manager_can_enter
 from base.methods import choosesubordinates, is_reportingmanager
+from employee.cbv.accessibility import EmployeeRecordAccessDispatchMixin
 from employee.cbv.employee_profile import EmployeeProfileView
 from employee.models import Employee
 from horilla.http.response import HorillaRedirect
@@ -543,7 +544,7 @@ class AddAnonymousFeedbackForm(HorillaFormView):
 
 
 @method_decorator(login_required, name="dispatch")
-class PerformanceTab(SelfFeedbacktab):
+class PerformanceTab(EmployeeRecordAccessDispatchMixin, SelfFeedbacktab):
     """
     performance tab in employee profile
     """

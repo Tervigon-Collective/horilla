@@ -14,6 +14,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views.generic import ListView
 
 from base.methods import has_export_access
+from employee.cbv.accessibility import EmployeeRecordAccessDispatchMixin
 from employee.models import Employee
 from horilla_views.cbv_methods import login_required
 from horilla_views.generic.cbv.views import (
@@ -508,7 +509,7 @@ class ProjectCardView(HorillaCardView):
 
 
 @method_decorator(login_required, name="dispatch")
-class ProjectsTabView(ListView):
+class ProjectsTabView(EmployeeRecordAccessDispatchMixin, ListView):
     model = Project
     template_name = "cbv/projects/project_tab.html"
     context_object_name = "projects"

@@ -28,6 +28,7 @@ from base.methods import (
     is_reportingmanager,
 )
 from base.models import PenaltyAccounts
+from employee.cbv.accessibility import EmployeeRecordAccessDispatchMixin
 from employee.cbv.employee_profile import EmployeeProfileView
 from employee.cbv.employees import EmployeeCard, EmployeeNav, EmployeesList
 from employee.filters import EmployeeFilter
@@ -83,8 +84,10 @@ class AttendancesListView(HorillaListView):
         (_("Day"), "attendance_day"),
         (_("Check-In"), "attendance_clock_in"),
         (_("In Date"), "attendance_clock_in_date"),
+        (_("In Location"), "clock_in_location_col"),
         (_("Check-Out"), "attendance_clock_out"),
         (_("Out Date"), "attendance_clock_out_date"),
+        (_("Out Location"), "clock_out_location_col"),
         (_("Shift"), "shift_id"),
         (_("Work Type"), "work_type_id"),
         (_("Min Hour"), "minimum_hour"),
@@ -96,7 +99,9 @@ class AttendancesListView(HorillaListView):
         (_("Employee"), "employee_id", "employee_id__get_avatar"),
         (_("Date"), "attendance_date"),
         (_("Check-In"), "attendance_clock_in"),
+        (_("In Location"), "clock_in_location_col"),
         (_("Check-Out"), "attendance_clock_out"),
+        (_("Out Location"), "clock_out_location_col"),
         (_("Shift"), "shift_id"),
         (_("At Work"), "attendance_worked_hour"),
     ]
@@ -674,6 +679,14 @@ class PenaltyAccountListView(HorillaListView):
         pk = self.request.resolver_match.kwargs.get("pk")
         self.search_url = reverse("individual-panalty-list-view", kwargs={"pk": pk})
 
+    def dispatch(self, request, *args, **kwargs):
+        from employee.cbv.accessibility import deny_without_employee_record_access
+
+        blocked = deny_without_employee_record_access(request, kwargs.get("pk"))
+        if blocked:
+            return blocked
+        return super().dispatch(request, *args, **kwargs)
+
     def get_queryset(self):
         queryset = super().get_queryset()
         pk = self.kwargs.get("pk")
@@ -682,7 +695,9 @@ class PenaltyAccountListView(HorillaListView):
 
 
 @method_decorator(login_required, name="dispatch")
-class ValidateAttendancesIndividualTabView(AttendancesListView):
+class ValidateAttendancesIndividualTabView(
+    EmployeeRecordAccessDispatchMixin, AttendancesListView
+):
     """
     list view for validate attendance tab view
     """

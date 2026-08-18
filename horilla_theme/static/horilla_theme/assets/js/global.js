@@ -1,3 +1,8 @@
+window.registerAutoRefresh = window.registerAutoRefresh || function (intervalId) {
+  window._activeAutoRefreshTimers = window._activeAutoRefreshTimers || [];
+  window._activeAutoRefreshTimers.push(intervalId);
+};
+
 // Shared by permission/group tab fragments (base/templates/base/auth/*, employee/templates/cbv/allocations/auth/*).
 // Defined globally so it's available regardless of which htmx fragment loads first, since several of
 // those fragments call checkSelected() without defining it themselves.
@@ -95,6 +100,7 @@ window.registerAutoRefresh = function (intervalId) {
   window._activeAutoRefreshTimers.push(intervalId);
 };
 
+if (window.jQuery) {
 $(function () {
   $("#ohMainContent").on("htmx:beforeSwap", function () {
     $.each(window._activeAutoRefreshTimers || [], function (i, id) {
@@ -103,6 +109,7 @@ $(function () {
     window._activeAutoRefreshTimers = [];
   });
 });
+}
 
 // SIDEBARModal DSESIGN
 document.addEventListener("DOMContentLoaded", () => {

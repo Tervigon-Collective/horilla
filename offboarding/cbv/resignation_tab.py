@@ -8,6 +8,7 @@ from django.urls import reverse
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 
+from employee.cbv.accessibility import deny_without_employee_record_access
 from employee.cbv.employee_profile import EmployeeProfileView
 from horilla_views.cbv_methods import check_feature_enabled, login_required
 from offboarding.cbv.resignation import ResignationLetterDetailView, ResignationListView
@@ -35,8 +36,11 @@ class ResignationTabView(ResignationListView):
         check_feature_enabled("resignation_request", OffboardingGeneralSetting),
         name="dispatch",
     )
-    def dispatch(self, *args, **kwargs):
-        return super(ResignationListView, self).dispatch(*args, **kwargs)
+    def dispatch(self, request, *args, **kwargs):
+        blocked = deny_without_employee_record_access(request, kwargs.get("pk"))
+        if blocked:
+            return blocked
+        return super(ResignationListView, self).dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs: Any):
         context = super().get_context_data(**kwargs)

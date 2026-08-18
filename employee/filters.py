@@ -14,8 +14,6 @@ from django.utils.translation import gettext as _
 from django_filters import CharFilter
 
 # from attendance.models import Attendance
-from accessibility.methods import check_is_accessible
-from base.methods import filtersubordinatesemployeemodel
 from employee.models import (
     Actiontype,
     DisciplinaryAction,
@@ -198,16 +196,13 @@ class EmployeeFilter(HorillaFilterSet):
         """
         from django.db.models import Q
 
-        # Handle default accessibility and filter based on reporting manager
+        # Restrict to employees this user may actually open (own + reports).
+        # view_employee must not show the whole company directory.
         request = getattr(_thread_locals, "request", None)
         if request:
-            employee = getattr(request.user, "employee_get", None)
-            cache_key = request.session.session_key + "accessibility_filter"
-            accessible = check_is_accessible("employee_view", cache_key, employee)
-            if not accessible and employee.reporting_manager.exists():
-                queryset = filtersubordinatesemployeemodel(
-                    request=request, queryset=queryset, perm="employee.view_employee"
-                )
+            from employee.cbv.accessibility import accessible_employees_queryset
+
+            queryset = accessible_employees_queryset(request, queryset)
 
         # Handle 'not_set' values in the cleaned data
         data = self.form.cleaned_data

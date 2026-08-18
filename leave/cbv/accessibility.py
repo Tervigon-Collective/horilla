@@ -23,10 +23,6 @@ def leave_accessibility(
     accessibility for leave tab in individual view
     """
     employee = Employee.objects.get(id=instance.pk)
-    if (
-        request.user.has_perm("leave.view_leaverequest")
-        or check_manager(request.user.employee_get, instance)
-        or request.user == employee.employee_user_id
-    ):
-        return True
-    return False
+    from employee.cbv.accessibility import can_access_employee_record
+
+    return can_access_employee_record(request, employee)

@@ -20,7 +20,7 @@ from django.db import transaction
 from django.db.models import CharField, F
 from django.db.models.functions import Cast
 from django.http import Http404, HttpRequest, HttpResponse, JsonResponse, QueryDict
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
 from django.urls import resolve, reverse
 from django.utils.decorators import method_decorator
@@ -2480,9 +2480,9 @@ class HorillaProfileView(DetailView):
         """
         prefix = cls.__name__.lower()
         for tab in cls.tabs:
+            key = f"{prefix}-{tab['title']}"
+            HorillaProfileView._tab_view_registry[key] = tab
             if not tab.get("url"):
-                key = f"{prefix}-{tab['title']}"
-                HorillaProfileView._tab_view_registry[key] = tab["view"]
                 tab["url"] = f"/hzp-tab/{key}/" + "{pk}/"
 
     def __init__(self, **kwargs: Any) -> None:
@@ -2645,7 +2645,52 @@ def dispatch_profile_tab(request, tab_key: str, pk: int, *args, **kwargs):
     request (see HorillaProfileView._register_tabs), the same as it would be
     in every worker process.
     """
-    view_func = HorillaProfileView._tab_view_registry.get(tab_key)
+    from django.contrib.auth.context_processors import PermWrapper
+
+    from horilla.config import import_method
+
+    if not request.user.is_authenticated:
+        login_url = reverse("login")
+        params = urlencode(request.GET)
+        url = f"{login_url}?next={request.path}"
+        if params:
+            url += f"&{params}"
+        return redirect(url)
+
+    entry = HorillaProfileView._tab_view_registry.get(tab_key)
+    if entry is None:
+        raise Http404(f"No profile tab registered for '{tab_key}'")
+
+    if isinstance(entry, dict):
+        view_func = entry.get("view")
+        accessibility_path = entry.get("accessibility")
+    else:
+        view_func = entry
+        accessibility_path = None
+
     if view_func is None:
         raise Http404(f"No profile tab registered for '{tab_key}'")
+
+    if tab_key.startswith("employeeprofileview-") or tab_key.startswith(
+        "userprofileview-"
+    ):
+        from employee.cbv.accessibility import (
+            deny_without_employee_record_access,
+        )
+        from employee.models import Employee
+
+        blocked = deny_without_employee_record_access(request, pk)
+        if blocked:
+            return blocked
+        if accessibility_path:
+            try:
+                method = import_method(accessibility_path)
+                employee = Employee.objects.entire().filter(id=pk).first()
+                allowed = method(request, employee, PermWrapper(request.user))
+            except Exception:
+                allowed = False
+            if not allowed:
+                messages.info(request, _("You dont have access to the feature"))
+                return HorillaRedirect(request)
+
     return view_func(request, pk=pk, *args, **kwargs)

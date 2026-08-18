@@ -305,10 +305,9 @@ def main_dashboard_view(request):
         except Exception:
             pass
 
-        try:
-            get_forecasted_at_work = request.user.employee_get.get_forecasted_at_work()
-        except Exception:
-            pass
+    # Chart prefs / timerunner only — at-work seconds are already computed in
+    # header_scripts.html. Calling get_forecasted_at_work() again here doubled
+    # dashboard HTML time for no template benefit.
 
     # Load saved chart preferences from DB for the current employee
     employee_chart_prefs = "[]"

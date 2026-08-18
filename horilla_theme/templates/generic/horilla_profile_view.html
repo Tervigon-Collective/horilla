@@ -255,7 +255,7 @@
                 {% endif %}
 
                 {% if actions %}
-                    <div class="oh-dropdown relative inline-block shrink-0" x-data="{open: false}">
+                    <div class="oh-dropdown relative inline-block shrink-0" x-data="{open: false}" @click.outside="open = false">
                         <button
                             type="button"
                             class="flex h-9 w-9 items-center justify-center rounded-xl border border-secondary-200 bg-white text-color-600 shadow-sm transition-all hover:border-primary-500 hover:text-primary-600"
@@ -264,7 +264,6 @@
                             aria-haspopup="true"
                             :aria-expanded="open.toString()"
                             @click="open = !open"
-                            @click.outside="open = false"
                             @keydown.escape="open = false"
                         >
                             <i class="fas fa-cog transition-transform duration-200" :class="{ 'rotate-45': open }"></i>
@@ -290,7 +289,6 @@
                                     {% elif action.accessibility|accessibility:instance %}
                                         <li>
                                             <a
-                                                href="#"
                                                 class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs font-medium transition duration-200
                                                     {% if action.variant == 'danger' %}
                                                         text-danger hover:bg-danger/10
@@ -299,7 +297,7 @@
                                                     {% else %}
                                                         text-dark-500 hover:bg-primary-100 hover:text-primary-600
                                                     {% endif %}"
-                                                @click="open = false"
+                                                @click.stop="open = false"
                                                 {{action.attrs|format:instance|safe}}
                                             >
                                                 <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg
@@ -361,20 +359,18 @@
                     {% if not tab.accessibility or tab.accessibility|accessibility:instance %}
                         <li>
                             <button
+                                type="button"
                                 onclick="$('#{{view_id}} li button.active').removeClass('active'); $(this).addClass('active')"
                                 data-url="{{tab.url|format:instance}}"
                                 hx-get="{{tab.url|format:instance}}"
                                 hx-target="#{{view_id}}profileTab"
+                                hx-swap="innerHTML"
+                                hx-trigger="click"
                                 data-tab="{{tab.title}}"
                                 class="bg-white {% if forloop.counter == 1 and not active_target %} active {% endif %}"
                             >
                                 {{ tab.title }}
                             </button>
-                            <span
-                                hx-get="{{tab.url|format:instance}}"
-                                hx-target="#{{view_id}}profileTab"
-                            >
-                            </span>
                         </li>
                     {% endif %}
                 {% endfor %}
@@ -440,28 +436,49 @@
 </div>
 
 <script>
-    $("#{{view_id}} ul.usertablist li button").click(function (e) {
-        var target = `[data-url="${$(this).attr('data-url')}"]`
-        e.preventDefault();
-        $.ajax({
-            type: "get",
-            url: "{% url 'active-tab' %}",
-            data: {
-                "path":"{{request.path}}",
-                "target":target,
-            },
-            success: function (response) {}
+    (function () {
+        var rootId = "{{view_id|safe}}";
+        var $root = $("#" + rootId);
+        var tabTarget = "#" + rootId + "profileTab";
+
+        function rememberTab(btn) {
+            var url = $(btn).attr("data-url");
+            if (!url) return;
+            $.ajax({
+                type: "get",
+                url: "{% url 'active-tab' %}",
+                data: {
+                    "path": "{{request.path}}",
+                    "target": '[data-url="' + url + '"]'
+                }
+            });
+        }
+
+        function loadTab(btn) {
+            if (!btn) return;
+            var url = btn.getAttribute("data-url") || btn.getAttribute("hx-get");
+            if (!url) return;
+            $root.find("li button.active").removeClass("active");
+            $(btn).addClass("active");
+            if (window.htmx) {
+                htmx.ajax("GET", url, {target: tabTarget, source: btn, swap: "innerHTML"});
+            }
+            rememberTab(btn);
+        }
+
+        $root.find("ul.usertablist li button").on("click", function () {
+            rememberTab(this);
         });
-    });
-    {% if active_target %}
-        $("#{{view_id|safe}}").find(`{{active_target|safe}}`).click();
-        setTimeout(() => {
-            $("#{{view_id|safe}}").find(`{{active_target|safe}}`).parent().find('span').click()
-        }, 100);
-    {% else %}
-        setTimeout(() => {
-            $("#{{view_id|safe}} .usertablist").find(`li button[data-url]:first`).click()
-            $("#{{view_id|safe}} .usertablist").find(`li button[data-url]:first`).parent().find('span').click()
-        }, 100);
-    {% endif %}
+
+        setTimeout(function () {
+            var panel = document.querySelector(tabTarget);
+            if (panel && panel.innerHTML.trim()) return;
+            {% if active_target %}
+            var activeBtn = $root.find(`{{active_target|safe}}`).get(0);
+            loadTab(activeBtn || $root.find(".usertablist li button[data-url]").get(0));
+            {% else %}
+            loadTab($root.find(".usertablist li button[data-url]").get(0));
+            {% endif %}
+        }, 50);
+    })();
 </script>

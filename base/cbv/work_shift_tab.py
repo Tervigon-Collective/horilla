@@ -17,12 +17,14 @@ from base.cbv.shift_request import ShiftRequestList
 from base.cbv.work_type_request import WorkRequestListView
 from base.methods import filtersubordinates, is_reportingmanager
 from base.models import WorkTypeRequest
+from employee.cbv.accessibility import EmployeeRecordAccessDispatchMixin
 from employee.models import Employee
 from horilla_views.cbv_methods import login_required
 from horilla_views.generic.cbv.views import HorillaTabView
 
 
-class WorkAndShiftTabView(HorillaTabView):
+@method_decorator(login_required, name="dispatch")
+class WorkAndShiftTabView(EmployeeRecordAccessDispatchMixin, HorillaTabView):
     """
     generic tab view for work type and shift
     """
@@ -119,7 +121,8 @@ class WorkAndShiftTabView(HorillaTabView):
         return context
 
 
-class WorkTypeIndividualTabList(WorkRequestListView):
+@method_decorator(login_required, name="dispatch")
+class WorkTypeIndividualTabList(EmployeeRecordAccessDispatchMixin, WorkRequestListView):
     """
     List view for work type tab
     """
@@ -141,7 +144,8 @@ class WorkTypeIndividualTabList(WorkRequestListView):
     ] + [(_("Status"), "request_status")]
 
 
-class ShiftRequestIndividualTabView(ShiftRequestList):
+@method_decorator(login_required, name="dispatch")
+class ShiftRequestIndividualTabView(EmployeeRecordAccessDispatchMixin, ShiftRequestList):
     """
     List view for shift request tab
     """
@@ -166,7 +170,10 @@ class ShiftRequestIndividualTabView(ShiftRequestList):
         return queryset
 
 
-class RotatingShiftAssignIndividualView(RotatingShiftListParent):
+@method_decorator(login_required, name="dispatch")
+class RotatingShiftAssignIndividualView(
+    EmployeeRecordAccessDispatchMixin, RotatingShiftListParent
+):
     """
     List view for Rotating shift request tab
     """
@@ -197,7 +204,8 @@ class RotatingShiftAssignIndividualView(RotatingShiftListParent):
         return queryset
 
 
-class RotatingWorkIndividualTab(GeneralParent):
+@method_decorator(login_required, name="dispatch")
+class RotatingWorkIndividualTab(EmployeeRecordAccessDispatchMixin, GeneralParent):
     """
     List view for rotating work type tab
     """

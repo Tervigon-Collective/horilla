@@ -1200,7 +1200,9 @@ def view_payslip(request):
     """
     This method is used to render the template for viewing a payslip.
     """
-    if request.user.has_perm("payroll.view_payslip"):
+    from payroll.cbv.accessibility import can_view_all_payslips
+
+    if can_view_all_payslips(request):
         payslips = Payslip.objects.all()
     else:
         payslips = Payslip.objects.filter(employee_id__employee_user_id=request.user)
@@ -1236,8 +1238,10 @@ def filter_payslip(request):
     """
     Filter and retrieve a list of payslips based on the provided query parameters.
     """
+    from payroll.cbv.accessibility import can_view_all_payslips
+
     query_string = request.GET.urlencode()
-    if request.user.has_perm("payroll.view_payslip"):
+    if can_view_all_payslips(request):
         payslips = PayslipFilter(request.GET).qs
     else:
         emp_request = request.GET.copy()

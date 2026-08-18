@@ -271,6 +271,12 @@ def breadcrumbs(request):
 
     try:
         breadcrumbs = request.session["breadcrumbs"]
+        # Keep the home crumb on the current product name. Session crumbs
+        # otherwise stay stuck on an old label after a rebrand.
+        if breadcrumbs:
+            breadcrumbs[0]["name"] = company
+            breadcrumbs[0]["url"] = base_url
+            request.session.modified = True
 
         qs = request.META.get("QUERY_STRING", "")
         pairs = qs.split("&")
@@ -322,12 +328,21 @@ def breadcrumbs(request):
         if apps.is_installed("recruitment"):
             from recruitment.models import Candidate
 
-            candidates = Candidate.objects.filter(is_active=True)
-
+            candidates = None
+            if len(parts) > 1 and "recruitment" in parts:
+                candidates = Candidate.objects.filter(is_active=True)
         else:
             candidates = None
 
-        employees = Employee.objects.all()
+        employees = None
+        if (
+            len(parts) > 1
+            and "employee-filter-view" not in parts
+            and "employee-view" not in parts
+            and "view-penalties" not in parts
+            and not (parts[0] == "employee" and parts[-1].isdigit())
+        ):
+            employees = Employee.objects.all()
 
         if len(parts) > 1:
 
@@ -356,7 +371,7 @@ def breadcrumbs(request):
                 # Store the employees in the session
                 request.session["filtered_employees"] = [
                     employee.id for employee in employees
-                ]
+                ] if employees is not None else []
 
         if len(parts) == 0:
             request.session["breadcrumbs"].clear()
