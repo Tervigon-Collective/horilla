@@ -174,6 +174,7 @@ class ClockOutAPIView(APIView):
                 from django.http import QueryDict
 
                 from attendance.methods.utils import Request as ClockRequest
+                from attendance.views.clock_in_out import punch_coords_from_request
 
                 fake = ClockRequest(
                     user=request.user,
@@ -181,11 +182,10 @@ class ClockOutAPIView(APIView):
                     time=current_time,
                     datetime=current_datetime,
                 )
+                fake.META = getattr(request, "META", {}) or {}
                 fake.GET = QueryDict("", mutable=True)
-                data = getattr(request, "data", {}) or {}
-                lat = data.get("latitude")
-                lng = data.get("longitude")
-                if lat not in (None, "") and lng not in (None, ""):
+                lat, lng = punch_coords_from_request(request)
+                if lat is not None and lng is not None:
                     fake.GET["latitude"] = str(lat)
                     fake.GET["longitude"] = str(lng)
                 clock_out(fake)

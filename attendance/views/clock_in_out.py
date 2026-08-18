@@ -152,6 +152,46 @@ def inject_punch_coords(request):
     return request
 
 
+def _is_public_ip(ip):
+    if not ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip.split("%")[0])
+        return addr.is_global
+    except ValueError:
+        return False
+
+
+def ip_approx_location(ip):
+    """City-level location from public IP when the app did not send GPS."""
+    if not _is_public_ip(ip):
+        return {}
+    try:
+        import json
+        import urllib.request
+
+        url = (
+            f"http://ip-api.com/json/{ip}"
+            "?fields=status,lat,lon,city,regionName,country"
+        )
+        with urllib.request.urlopen(url, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if data.get("status") != "success":
+            return {}
+        extra = {"source": "ip"}
+        if data.get("lat") is not None and data.get("lon") is not None:
+            extra["lat"] = float(data["lat"])
+            extra["lng"] = float(data["lon"])
+        parts = [data.get("city"), data.get("regionName"), data.get("country")]
+        address = ", ".join(part for part in parts if part)
+        if address:
+            extra["address"] = address
+        return extra
+    except Exception:
+        logger.exception("IP geolocation failed")
+        return {}
+
+
 def punch_point_from_request(request):
     """GPS, reverse-geocoded address, and client IP (web GET or app POST)."""
     if request is None:
@@ -166,6 +206,8 @@ def punch_point_from_request(request):
         address = reverse_punch_address(lat, lng)
         if address:
             point["address"] = address
+    else:
+        point.update(ip_approx_location(point.get("ip")))
     return point
 
 
