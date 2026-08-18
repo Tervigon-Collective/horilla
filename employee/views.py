@@ -486,6 +486,11 @@ def about_tab(request, pk, **kwargs):
     )
     bank_details = EmployeeBankDetails.objects.filter(employee_id=employee).first()
     work_info = EmployeeWorkInformation.objects.filter(employee_id=employee).first()
+    from employee.cbv.accessibility import can_view_salary
+
+    show_salary = can_view_salary(request, employee)
+    if not show_salary:
+        contracts = None
     return render(
         request,
         "tabs/personal_tab.html",
@@ -495,6 +500,7 @@ def about_tab(request, pk, **kwargs):
             "contracts": contracts,
             "bank_details": bank_details,
             "work_info": work_info,
+            "show_salary": show_salary,
         },
     )
 

@@ -91,6 +91,67 @@ def reverse_punch_address(lat, lng):
         return ""
 
 
+def _coords_from_mapping(data):
+    if not data:
+        return None, None
+    getter = data.get if hasattr(data, "get") else None
+    if getter is None:
+        return None, None
+    try:
+        lat_val = getter("latitude")
+        if lat_val in (None, ""):
+            lat_val = getter("lat")
+        lng_val = getter("longitude")
+        if lng_val in (None, ""):
+            lng_val = getter("lng")
+        if lng_val in (None, ""):
+            lng_val = getter("long")
+        loc = getter("location")
+        if (lat_val in (None, "") or lng_val in (None, "")) and isinstance(loc, dict):
+            if lat_val in (None, ""):
+                lat_val = loc.get("latitude", loc.get("lat"))
+            if lng_val in (None, ""):
+                lng_val = loc.get("longitude", loc.get("lng"))
+        if lat_val not in (None, "") and lng_val not in (None, ""):
+            return float(lat_val), float(lng_val)
+    except (TypeError, ValueError, AttributeError):
+        return None, None
+    return None, None
+
+
+def punch_coords_from_request(request):
+    """Latitude/longitude from web query params or mobile JSON body."""
+    if request is None:
+        request = getattr(_thread_locals, "request", None)
+    if request is None:
+        return None, None
+    for attr in ("data", "GET", "POST"):
+        lat, lng = _coords_from_mapping(getattr(request, attr, None))
+        if lat is not None and lng is not None:
+            return lat, lng
+    inner = getattr(request, "_request", None)
+    if inner is not None and inner is not request:
+        return punch_coords_from_request(inner)
+    return None, None
+
+
+def inject_punch_coords(request):
+    """Copy JSON GPS onto request.GET so punch_point_from_request always sees it."""
+    if request is None:
+        return request
+    lat, lng = punch_coords_from_request(request)
+    if lat is None or lng is None:
+        return request
+    try:
+        get = request.GET.copy()
+        get["latitude"] = str(lat)
+        get["longitude"] = str(lng)
+        request.GET = get
+    except Exception:
+        pass
+    return request
+
+
 def punch_point_from_request(request):
     """GPS, reverse-geocoded address, and client IP (web GET or app POST)."""
     if request is None:
@@ -98,22 +159,7 @@ def punch_point_from_request(request):
     if request is None:
         return {}
     point = {"ip": _client_ip(request)}
-    sources = []
-    for attr in ("GET", "POST", "data"):
-        src = getattr(request, attr, None)
-        if src:
-            sources.append(src)
-    lat = lng = None
-    for data in sources:
-        try:
-            lat_val = data.get("latitude")
-            lng_val = data.get("longitude")
-            if lat_val not in (None, "") and lng_val not in (None, ""):
-                lat = float(lat_val)
-                lng = float(lng_val)
-                break
-        except (TypeError, ValueError, AttributeError):
-            continue
+    lat, lng = punch_coords_from_request(request)
     if lat is not None and lng is not None:
         point["lat"] = lat
         point["lng"] = lng

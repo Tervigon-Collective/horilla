@@ -4,15 +4,20 @@ from base.methods import check_manager
 from employee.models import Employee
 
 
-def can_view_all_payslips(request) -> bool:
-    """HR/admin or payroll staff — not every user with view_payslip."""
+def is_payroll_admin(request) -> bool:
+    """HR/admin, or staff who can generate payslips — not view-only / managers."""
+    from employee.cbv.accessibility import is_hr_user
+
     if not request.user.is_authenticated:
         return False
-    if request.user.is_superuser or request.user.has_perm("employee.change_employee"):
+    if is_hr_user(request):
         return True
-    return request.user.has_perm("payroll.view_payslip") and request.user.has_perm(
-        "payroll.view_contract"
-    )
+    return request.user.has_perm("payroll.add_payslip")
+
+
+def can_view_all_payslips(request) -> bool:
+    """Everyone's slips/contracts/wages — payroll admin only, not reporting managers."""
+    return is_payroll_admin(request)
 
 
 def can_view_payslip_record(request, payslip) -> bool:
@@ -27,18 +32,12 @@ def payroll_accessibility(
     request, instance: object = None, user_perms: PermWrapper = [], *args, **kwargs
 ) -> bool:
     """
-    Own payslips, or HR/payroll staff — not every viewer of the profile.
+    Own payslips, or HR/payroll staff — not a reporting manager of someone else.
     """
     employee = Employee.objects.get(id=instance.pk)
     if request.user == employee.employee_user_id:
         return True
-    if request.user.has_perm("payroll.view_payslip") and (
-        request.user.is_superuser
-        or request.user.has_perm("employee.change_employee")
-        or request.user.has_perm("payroll.view_contract")
-    ):
-        return True
-    return False
+    return is_payroll_admin(request)
 
 
 def bonus_accessibility(
@@ -64,10 +63,4 @@ def allowance_and_deduction_accessibility(
     employee = Employee.objects.get(id=instance.pk)
     if request.user == employee.employee_user_id:
         return True
-    if request.user.has_perm("payroll.view_payslip") and (
-        request.user.is_superuser
-        or request.user.has_perm("employee.change_employee")
-        or request.user.has_perm("payroll.view_contract")
-    ):
-        return True
-    return False
+    return is_payroll_admin(request)

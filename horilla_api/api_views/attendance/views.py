@@ -69,6 +69,7 @@ class ClockInAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        inject_punch_coords(request)
         if not request.user.employee_get.check_online():
             try:
                 if request.user.employee_get.get_company().geo_fencing.start:
@@ -152,6 +153,7 @@ class ClockOutAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        inject_punch_coords(request)
 
         try:
             if request.user.employee_get.get_company().geo_fencing.start:
@@ -805,8 +807,16 @@ class OfflineEmployeesCountView(APIView):
         )
 
         if request.user.has_perm("employee.view_employee") or is_manager:
+            from employee.cbv.accessibility import accessible_employees_queryset
+            from employee.models import Employee
+
             count = (
-                EmployeeFilter({"not_in_yet": date.today()})
+                EmployeeFilter(
+                    {"not_in_yet": date.today()},
+                    queryset=accessible_employees_queryset(
+                        request, Employee.objects.all()
+                    ),
+                )
                 .qs.exclude(employee_work_info__isnull=True)
                 .filter(is_active=True)
                 .count()
@@ -825,24 +835,24 @@ class OfflineEmployeesListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from employee.cbv.accessibility import accessible_employees_queryset
+        from employee.models import Employee
+
         user = request.user
         employee = getattr(user, "employee_get", None)
         today = date.today()
-
-        # Manager access: get employees reporting to current user
-        managed_employee_ids = EmployeeWorkInformation.objects.filter(
+        is_manager = EmployeeWorkInformation.objects.filter(
             reporting_manager_id=employee
-        ).values_list("employee_id", flat=True)
-
-        # Superusers or users with view permission see all employees
-        if user.has_perm("employee.view_employee"):
-            base_queryset = Employee.objects.all()
-        elif managed_employee_ids.exists():
-            base_queryset = Employee.objects.filter(id__in=managed_employee_ids)
-        else:
+        ).exists()
+        if not (
+            user.has_perm("employee.view_employee")
+            or is_manager
+            or employee
+        ):
             return Response(
                 {"error": _("Permission denied")}, status=status.HTTP_403_FORBIDDEN
             )
+        base_queryset = accessible_employees_queryset(request, Employee.objects.all())
 
         # Apply filtering for offline employees
         filtered_qs = (

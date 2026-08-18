@@ -133,7 +133,7 @@ class ContractView(APIView):
                 ).first()
             if not contract:
                 return Response({"error": _("Contract not found.")}, status=404)
-            serializer = ContractSerializer(contract)
+            serializer = ContractSerializer(contract, context={"request": request})
             return Response(serializer.data, status=200)
         if can_view_all_payslips(request):
             contracts = Contract.objects.all()
@@ -147,7 +147,7 @@ class ContractView(APIView):
             return groupby_queryset(request, url, field_name, filter_queryset)
         pagination = PageNumberPagination()
         page = pagination.paginate_queryset(filter_queryset, request)
-        serializer = ContractSerializer(page, many=True)
+        serializer = ContractSerializer(page, many=True, context={"request": request})
         return pagination.get_paginated_response(serializer.data)
 
     @method_decorator(permission_required("payroll.add_contract"))
@@ -267,11 +267,26 @@ class LoanAccountView(APIView):
 
     @method_decorator(permission_required("payroll.view_loanaccount"))
     def get(self, request, pk=None):
+        from payroll.cbv.accessibility import can_view_all_payslips
+
         if pk:
-            loan_account = LoanAccount.objects.get(id=pk)
+            loan_account = LoanAccount.objects.filter(id=pk).first()
+            if not loan_account:
+                return Response({"error": _("Not found.")}, status=404)
+            own = (
+                getattr(loan_account.employee_id, "employee_user_id", None)
+                == request.user
+            )
+            if not (own or can_view_all_payslips(request)):
+                return Response({"detail": _("Permission denied.")}, status=403)
             serializer = LoanAccountSerializer(instance=loan_account)
             return Response(serializer.data, status=200)
-        loan_accounts = LoanAccount.objects.all()
+        if can_view_all_payslips(request):
+            loan_accounts = LoanAccount.objects.all()
+        else:
+            loan_accounts = LoanAccount.objects.filter(
+                employee_id=request.user.employee_get
+            )
         pagination = PageNumberPagination()
         page = pagination.paginate_queryset(loan_accounts, request)
         serializer = LoanAccountSerializer(page, many=True)
@@ -299,19 +314,28 @@ class ReimbursementView(APIView):
 
     def get(self, request, pk=None):
         if pk:
-            if request.user.has_perm("payroll.view_reimbursement"):
-                reimbursement = Reimbursement.objects.filter(id=pk).first()
-            else:
-                reimbursement = Reimbursement.objects.filter(
-                    id=pk, employee_id=request.user.employee_get
-                ).first()
+            reimbursement = Reimbursement.objects.filter(id=pk).first()
             if not reimbursement:
+                return Response({"error": _("Reimbursement not found.")}, status=404)
+            from payroll.cbv.accessibility import can_view_all_payslips
+
+            own = (
+                getattr(reimbursement.employee_id, "employee_user_id", None)
+                == request.user
+            )
+            if not (
+                own
+                or can_view_all_payslips(request)
+                or request.user.has_perm("payroll.change_reimbursement")
+            ):
                 return Response({"error": _("Reimbursement not found.")}, status=404)
             serializer = self.serializer_class(reimbursement)
             return Response(serializer.data, status=200)
-        reimbursements = Reimbursement.objects.all()
+        from payroll.cbv.accessibility import can_view_all_payslips
 
-        if request.user.has_perm("payroll.view_reimbursement"):
+        if can_view_all_payslips(request) or request.user.has_perm(
+            "payroll.change_reimbursement"
+        ):
             reimbursements = Reimbursement.objects.all()
         else:
             reimbursements = Reimbursement.objects.filter(

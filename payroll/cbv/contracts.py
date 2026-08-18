@@ -61,6 +61,18 @@ class ContractsList(HorillaListView):
     model = Contract
     filter_class = ContractFilter
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        from payroll.cbv.accessibility import can_view_all_payslips
+
+        if not can_view_all_payslips(self.request):
+            employee = getattr(self.request.user, "employee_get", None)
+            if employee:
+                queryset = queryset.filter(employee_id=employee)
+            else:
+                queryset = queryset.none()
+        return queryset
+
     columns = [
         (_("Contract"), "contract_name"),
         (_("Employee"), "employee_id"),

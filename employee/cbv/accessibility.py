@@ -78,6 +78,17 @@ def can_view_confidential_hr_data(request, employee=None) -> bool:
     return is_hr_user(request)
 
 
+def can_view_salary(request, employee=None) -> bool:
+    """Own salary, or HR/admin. Reporting managers cannot see others' pay."""
+    if not request or not request.user.is_authenticated:
+        return False
+    if is_hr_user(request):
+        return True
+    if employee is None:
+        return False
+    return getattr(employee, "employee_user_id", None) == request.user
+
+
 def deny_without_employee_record_access(request, pk):
     """Redirect if the user may not open this employee's record."""
     employee = Employee.objects.entire().filter(id=pk).first() if pk else None

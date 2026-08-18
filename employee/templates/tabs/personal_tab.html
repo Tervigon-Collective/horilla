@@ -138,7 +138,7 @@
 					</li>
 
 					{% if "payroll"|app_installed %}
-						{% if perms.employee.change_employee or perms.payroll.view_contract or request.user.is_superuser or request.user == employee.employee_user_id %}
+						{% if show_salary %}
 							<li class="oh-tabs__tab" data-target="#tab_2">
 								<div>
 									<img src="{% static 'images/ui/contract.png' %}" alt=""
@@ -234,7 +234,7 @@
 												class="oh-profile__info-value">{{employee.employee_work_info.work_type_id|default:_("None")}}</span>
 										</li>
 
-										{% if perms.employee.change_employee or perms.payroll.view_contract or request.user.is_superuser or request.user.employee_get == employee %}
+										{% if show_salary %}
 										<li class="oh-profile__card-info-item">
 											<span class="oh-profile__info-label mb-1">
 												<ion-icon name="cash-outline"></ion-icon>
@@ -293,7 +293,7 @@
 							</div>
 						</div>
 					</div>
-					{% if perms.employee.change_employee or perms.payroll.view_contract or request.user.is_superuser or request.user == employee.employee_user_id %}
+					{% if show_salary %}
 						{% if "payroll"|app_installed %}
 							<div class="oh-tabs__content" id="tab_2">
 								{% include "tabs/contract-tab.html" %}

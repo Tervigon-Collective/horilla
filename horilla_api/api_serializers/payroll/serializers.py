@@ -82,6 +82,16 @@ class ContractSerializer(serializers.ModelSerializer):
         model = Contract
         fields = "__all__"
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        from employee.cbv.accessibility import can_view_salary
+
+        request = self.context.get("request")
+        employee = getattr(instance, "employee_id", None)
+        if not can_view_salary(request, employee):
+            data.pop("wage", None)
+        return data
+
 
 class MultipleConditionSerializer(serializers.ModelSerializer):
     class Meta:

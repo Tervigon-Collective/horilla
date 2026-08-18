@@ -64,14 +64,12 @@ class LoginAPIView(APIView):
                 employee = user.employee_get
                 face_detection = False
                 face_detection_image = None
-                geo_fencing = False
+                # Official mobile app only sends GPS when this flag is true.
+                # Radius enforcement still uses GeoFencing.start on clock-in/out.
+                geo_fencing = True
                 company_id = None
                 try:
                     face_detection = employee.get_company().face_detection.start
-                except:
-                    pass
-                try:
-                    geo_fencing = employee.get_company().geo_fencing.start
                 except:
                     pass
                 try:

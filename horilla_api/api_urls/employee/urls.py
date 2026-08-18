@@ -10,6 +10,11 @@ urlpatterns = [
         name="api-employee-detail",
     ),
     path(
+        "employees/<int:pk>",
+        views.EmployeeAPIView.as_view(),
+        name="api-employee-detail-noslash",
+    ),
+    path(
         "employee-type/<int:pk>",
         views.EmployeeTypeAPIView.as_view(),
         name="api-employees",
@@ -19,11 +24,21 @@ urlpatterns = [
         "list/employees/",
         views.EmployeeListAPIView.as_view(),
         name="api-employee-list-detailed",
-    ),  # Alternative endpoint for listing employees
+    ),
+    path(
+        "list/employees",
+        views.EmployeeListAPIView.as_view(),
+        name="api-employee-list-detailed-noslash",
+    ),
     path(
         "employee-bank-details/<int:pk>/",
         views.EmployeeBankDetailsAPIView.as_view(),
         name="api-employee-bank-details-detail",
+    ),
+    path(
+        "employee-bank-details/<int:pk>",
+        views.EmployeeBankDetailsAPIView.as_view(),
+        name="api-employee-bank-details-detail-noslash",
     ),
     path(
         "employee-work-information/",
@@ -34,6 +49,11 @@ urlpatterns = [
         "employee-work-information/<int:pk>/",
         views.EmployeeWorkInformationAPIView.as_view(),
         name="api-employee-work-information-detail",
+    ),
+    path(
+        "employee-work-information/<int:pk>",
+        views.EmployeeWorkInformationAPIView.as_view(),
+        name="api-employee-work-information-detail-noslash",
     ),
     path(
         "employee-work-info-export/",

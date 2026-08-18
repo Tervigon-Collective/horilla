@@ -331,7 +331,15 @@ class EmployeeWorkInformationAPIView(APIView):
 
     @manager_permission_required("employee.add_employeeworkinformation")
     def post(self, request):
-        serializer = EmployeeWorkInformationSerializer(data=request.data)
+        from employee.cbv.accessibility import is_hr_user
+
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        if not is_hr_user(request):
+            data.pop("basic_salary", None)
+            data.pop("salary_hour", None)
+        serializer = EmployeeWorkInformationSerializer(
+            data=data, context={"request": request}
+        )
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -339,13 +347,26 @@ class EmployeeWorkInformationAPIView(APIView):
 
     @manager_permission_required("employee.change_employeeworkinformation")
     def put(self, request, pk):
+        from employee.cbv.accessibility import is_hr_user
+
         work_info = EmployeeWorkInformation.objects.get(pk=pk)
         if (
             request.user.employee_get == work_info.reporting_manager_id
             or request.user.has_perm("employee.change_employeeworkinformation")
         ):
+            data = (
+                request.data.copy()
+                if hasattr(request.data, "copy")
+                else dict(request.data)
+            )
+            if not is_hr_user(request):
+                data.pop("basic_salary", None)
+                data.pop("salary_hour", None)
             serializer = EmployeeWorkInformationSerializer(
-                work_info, data=request.data, partial=True
+                work_info,
+                data=data,
+                partial=True,
+                context={"request": request},
             )
             if serializer.is_valid():
                 serializer.save()
