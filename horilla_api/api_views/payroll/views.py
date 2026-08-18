@@ -46,18 +46,20 @@ class PayslipView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, id=None):
+        from payroll.cbv.accessibility import (
+            can_view_all_payslips,
+            can_view_payslip_record,
+        )
+
         if id:
             payslip = Payslip.objects.filter(id=id).first()
             if payslip is None:
                 return Response({"detail": "Not found."}, status=404)
-            if (
-                request.user.has_perm("payroll.view_payslip")
-                or payslip.employee_id == request.user.employee_get
-            ):
+            if can_view_payslip_record(request, payslip):
                 serializer = PayslipSerializer(payslip)
                 return Response(serializer.data, status=200)
             return Response({"detail": _("Permission denied.")}, status=403)
-        if request.user.has_perm("payroll.view_payslip"):
+        if can_view_all_payslips(request):
             payslips = Payslip.objects.all()
         else:
             payslips = Payslip.objects.filter(
@@ -81,13 +83,12 @@ class PayslipDownloadView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, id):
-        if request.user.has_perm("payroll.view_payslip"):
-            return payslip_pdf(request, id)
+        from payroll.cbv.accessibility import can_view_payslip_record
 
-        if Payslip.objects.filter(id=id, employee_id=request.user.employee_get):
+        payslip = Payslip.objects.filter(id=id).first()
+        if can_view_payslip_record(request, payslip):
             return payslip_pdf(request, id)
-        else:
-            raise Response({"error": _("You don't have permission")})
+        return Response({"error": _("You don't have permission")}, status=403)
 
 
 class PayslipSendMailView(APIView):
@@ -121,8 +122,10 @@ class ContractView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, id=None):
+        from payroll.cbv.accessibility import can_view_all_payslips
+
         if id:
-            if request.user.has_perm("payroll.view_contract"):
+            if can_view_all_payslips(request):
                 contract = Contract.objects.filter(id=id).first()
             else:
                 contract = Contract.objects.filter(
@@ -132,7 +135,7 @@ class ContractView(APIView):
                 return Response({"error": _("Contract not found.")}, status=404)
             serializer = ContractSerializer(contract)
             return Response(serializer.data, status=200)
-        if request.user.has_perm("payroll.view_contract"):
+        if can_view_all_payslips(request):
             contracts = Contract.objects.all()
         else:
             contracts = Contract.objects.filter(employee_id=request.user.employee_get)
@@ -441,19 +444,16 @@ class PayslipPDFAPIView(APIView):
         # get payslip or 404
         payslip = get_object_or_404(Payslip, id=id)
 
-        # authorization: same logic as your view
-        user = request.user
-        if not (
-            user.has_perm("payroll.view_payslip")
-            or payslip.employee_id.employee_user_id == user
-        ):
+        from payroll.cbv.accessibility import can_view_payslip_record
+
+        if not can_view_payslip_record(request, payslip):
             return Response(
                 {"detail": _("You do not have permission to view this payslip.")},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
         # employee & company date format resolution
-        employee = user.employee_get  # keep same accessor you used
+        employee = request.user.employee_get  # keep same accessor you used
         info = EmployeeWorkInformation.objects.filter(employee_id=employee)
         if info.exists():
             # take the last one (mirrors your loop behavior)

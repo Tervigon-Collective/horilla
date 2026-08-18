@@ -102,38 +102,23 @@ class EmployeeAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
-        user = request.user
+        from employee.cbv.accessibility import can_access_employee_record
+
         try:
-            employee = Employee.objects.only(
-                "id",
-                "employee_first_name",
-                "employee_last_name",  # include only needed fields
-            ).get(pk=pk)
+            employee = Employee.objects.get(pk=pk)
         except Employee.DoesNotExist:
             return Response(
                 {"error": _("Employee does not exist")},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # If user has global view permission
-        if user.has_perm("employee.view_employee"):
-            serializer = EmployeeSerializer(employee)
-            return Response(serializer.data)
+        if not can_access_employee_record(request, employee):
+            return Response(
+                {"error": _("Permission denied")}, status=status.HTTP_403_FORBIDDEN
+            )
 
-        # If employee is in user's subordinates
-        subordinates = user.employee_get.get_subordinate_employees()
-        if subordinates.filter(pk=pk).exists():
-            serializer = EmployeeSerializer(employee)
-            return Response(serializer.data)
-
-        # If requesting own data
-        if employee.pk == user.employee_get.id:
-            serializer = EmployeeSerializer(employee)
-            return Response(serializer.data)
-
-        return Response(
-            {"error": _("Permission denied")}, status=status.HTTP_403_FORBIDDEN
-        )
+        serializer = EmployeeSerializer(employee, context={"request": request})
+        return Response(serializer.data)
 
         # paginator = PageNumberPagination()
         # if request.user.has_perm('employee.view_employee'):
@@ -197,38 +182,23 @@ class EmployeeListAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user = request.user
-        search = request.query_params.get("search")
+        from employee.cbv.accessibility import accessible_employees_queryset
 
-        # Start with a base queryset with only required fields
-        employees_queryset = Employee.objects.only(
-            "id", "employee_first_name", "employee_last_name"
+        search = request.query_params.get("search")
+        employees_queryset = accessible_employees_queryset(
+            request, Employee.objects.all()
         )
 
-        # Permission-based filtering
-        if user.has_perm("employee.view_employee"):
-            pass  # employees_queryset is already all employees
-        else:
-            subordinate_qs = user.employee_get.get_subordinate_employees()
-            if subordinate_qs.exists():
-                employees_queryset = subordinate_qs.only(
-                    "id", "employee_first_name", "employee_last_name"
-                )
-            else:
-                employees_queryset = employees_queryset.filter(id=user.employee_get.id)
-
-        # Apply search filter if provided
         if search:
             employees_queryset = employees_queryset.filter(
                 Q(employee_first_name__icontains=search)
                 | Q(employee_last_name__icontains=search)
             )
 
-        # Paginate
         paginator = PageNumberPagination()
         page = paginator.paginate_queryset(employees_queryset, request)
 
-        serializer = EmployeeListSerializer(page, many=True)
+        serializer = EmployeeListSerializer(page, many=True, context={"request": request})
         return paginator.get_paginated_response(serializer.data)
 
 
@@ -254,32 +224,35 @@ class EmployeeBankDetailsAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Handle schema generation for DRF-YASG
+        from employee.cbv.accessibility import is_hr_user
+
         if getattr(self, "swagger_fake_view", False):
             return EmployeeBankDetails.objects.none()
         queryset = EmployeeBankDetails.objects.all()
         user = self.request.user
-        # Handle AnonymousUser during schema generation
         if not user.is_authenticated:
             return EmployeeBankDetails.objects.none()
-        # checking user level permissions
-        perm = "base.view_employeebankdetails"
-        queryset = permission_based_queryset(user, perm, queryset)
-        return queryset
+        if is_hr_user(self.request):
+            return queryset
+        employee = getattr(user, "employee_get", None)
+        if not employee:
+            return queryset.none()
+        return queryset.filter(employee_id=employee)
 
     def get(self, request, pk=None):
+        from employee.cbv.accessibility import is_hr_user
+
         bank_detail = EmployeeBankDetails.objects.get(pk=pk)
-        if (
-            request.user.employee_get
-            in [
-                bank_detail.employee_id,
-                bank_detail.employee_id.get_reporting_manager(),
-            ]
-        ) or request.user.has_perm("employee.view_employeebankdetails"):
-            serializer = EmployeeBankDetailsSerializer(bank_detail)
+        own = (
+            getattr(bank_detail.employee_id, "employee_user_id", None) == request.user
+        )
+        if is_hr_user(request) or own:
+            serializer = EmployeeBankDetailsSerializer(
+                bank_detail, context={"request": request}
+            )
             return Response(serializer.data)
 
-        return Response({"message": _("No permission")}, status=400)
+        return Response({"message": _("No permission")}, status=403)
 
     @manager_or_owner_permission_required(
         EmployeeBankDetails, "employee.add_employeebankdetails"
@@ -346,14 +319,15 @@ class EmployeeWorkInformationAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
+        from employee.cbv.accessibility import can_access_employee_record
+
         work_info = EmployeeWorkInformation.objects.get(pk=pk)
-        if (
-            request.user.employee_get
-            in [work_info.employee_id, work_info.reporting_manager_id]
-        ) or request.user.has_perm("employee.view_employeeworkinformation"):
-            serializer = EmployeeWorkInformationSerializer(work_info)
-            return Response(serializer.data, status=200)
-        return Response({"message": _("No permission")}, status=400)
+        if not can_access_employee_record(request, work_info.employee_id):
+            return Response({"message": _("No permission")}, status=403)
+        serializer = EmployeeWorkInformationSerializer(
+            work_info, context={"request": request}
+        )
+        return Response(serializer.data, status=200)
 
     @manager_permission_required("employee.add_employeeworkinformation")
     def post(self, request):
@@ -959,20 +933,9 @@ class EmployeeSelectorView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        employee = request.user.employee_get
-        employees = Employee.objects.filter(employee_user_id=request.user)
+        from employee.cbv.accessibility import accessible_employees_queryset
 
-        is_manager = EmployeeWorkInformation.objects.filter(
-            reporting_manager_id=employee
-        ).exists()
-
-        if is_manager:
-            employees = Employee.objects.filter(
-                Q(pk=employee.pk) | Q(employee_work_info__reporting_manager_id=employee)
-            )
-        if request.user.has_perm("employee.view_employee"):
-            employees = Employee.objects.all()
-
+        employees = accessible_employees_queryset(request, Employee.objects.all())
         paginator = PageNumberPagination()
         page = paginator.paginate_queryset(employees, request)
         serializer = EmployeeSelectorSerializer(page, many=True)

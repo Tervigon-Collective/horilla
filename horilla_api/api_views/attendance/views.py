@@ -128,6 +128,7 @@ class ClockInAPIView(APIView):
                     start_time=start_time_sec,
                     end_time=end_time_sec,
                     in_datetime=datetime_now,
+                    request=request,
                 )
                 return Response({"message": "Clocked-In"}, status=200)
             return Response(
@@ -168,14 +169,24 @@ class ClockOutAPIView(APIView):
             current_datetime = datetime.now()
 
             try:
-                clock_out(
-                    Request(
-                        user=request.user,
-                        date=current_date,
-                        time=current_time,
-                        datetime=current_datetime,
-                    )
+                from django.http import QueryDict
+
+                from attendance.methods.utils import Request as ClockRequest
+
+                fake = ClockRequest(
+                    user=request.user,
+                    date=current_date,
+                    time=current_time,
+                    datetime=current_datetime,
                 )
+                fake.GET = QueryDict("", mutable=True)
+                data = getattr(request, "data", {}) or {}
+                lat = data.get("latitude")
+                lng = data.get("longitude")
+                if lat not in (None, "") and lng not in (None, ""):
+                    fake.GET["latitude"] = str(lat)
+                    fake.GET["longitude"] = str(lng)
+                clock_out(fake)
                 return Response({"message": "Clocked-Out"}, status=200)
 
             except Exception as error:

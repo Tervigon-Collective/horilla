@@ -92,22 +92,34 @@ def reverse_punch_address(lat, lng):
 
 
 def punch_point_from_request(request):
-    """GPS, reverse-geocoded address, and client IP."""
+    """GPS, reverse-geocoded address, and client IP (web GET or app POST)."""
+    if request is None:
+        request = getattr(_thread_locals, "request", None)
     if request is None:
         return {}
     point = {"ip": _client_ip(request)}
-    data = getattr(request, "GET", {}) or {}
-    try:
-        lat = data.get("latitude")
-        lng = data.get("longitude")
-        if lat is not None and lng is not None and lat != "" and lng != "":
-            point["lat"] = float(lat)
-            point["lng"] = float(lng)
-            address = reverse_punch_address(point["lat"], point["lng"])
-            if address:
-                point["address"] = address
-    except (TypeError, ValueError):
-        pass
+    sources = []
+    for attr in ("GET", "POST", "data"):
+        src = getattr(request, attr, None)
+        if src:
+            sources.append(src)
+    lat = lng = None
+    for data in sources:
+        try:
+            lat_val = data.get("latitude")
+            lng_val = data.get("longitude")
+            if lat_val not in (None, "") and lng_val not in (None, ""):
+                lat = float(lat_val)
+                lng = float(lng_val)
+                break
+        except (TypeError, ValueError, AttributeError):
+            continue
+    if lat is not None and lng is not None:
+        point["lat"] = lat
+        point["lng"] = lng
+        address = reverse_punch_address(lat, lng)
+        if address:
+            point["address"] = address
     return point
 
 

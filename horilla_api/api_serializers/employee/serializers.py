@@ -69,6 +69,39 @@ class EmployeeSerializer(serializers.ModelSerializer):
         model = Employee
         fields = "__all__"
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        from employee.cbv.accessibility import is_hr_user
+
+        request = self.context.get("request")
+        own_or_hr = bool(
+            request
+            and request.user.is_authenticated
+            and (
+                is_hr_user(request)
+                or getattr(instance, "employee_user_id", None) == request.user
+            )
+        )
+        if not own_or_hr:
+            for field in (
+                "dob",
+                "gender",
+                "address",
+                "country",
+                "state",
+                "city",
+                "zip",
+                "qualification",
+                "experience",
+                "marital_status",
+                "children",
+                "emergency_contact",
+                "emergency_contact_name",
+                "emergency_contact_relation",
+            ):
+                data.pop(field, None)
+        return data
+
     def create(self, validated_data):
         validated_data["badge_id"] = get_next_badge_id()
         return super().create(validated_data)
@@ -106,6 +139,25 @@ class EmployeeWorkInformationSerializer(serializers.ModelSerializer):
     class Meta:
         model = EmployeeWorkInformation
         fields = "__all__"
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        from employee.cbv.accessibility import is_hr_user
+
+        request = self.context.get("request")
+        employee = getattr(instance, "employee_id", None)
+        own_or_hr = bool(
+            request
+            and request.user.is_authenticated
+            and (
+                is_hr_user(request)
+                or getattr(employee, "employee_user_id", None) == request.user
+            )
+        )
+        if not own_or_hr:
+            data.pop("basic_salary", None)
+            data.pop("salary_hour", None)
+        return data
 
 
 class EmployeeBankDetailsSerializer(serializers.ModelSerializer):
