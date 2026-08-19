@@ -3,6 +3,7 @@ from rest_framework import serializers
 
 from attendance.models import *
 from base.models import HorillaMailTemplate
+from horilla_api.api_methods.base.methods import mobile_file_path
 
 
 class AttendanceSerializer(serializers.ModelSerializer):
@@ -48,9 +49,8 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
     def get_employee_profile_url(self, obj):
         try:
-            employee_profile = obj.employee_id.employee_profile
-            return employee_profile.url
-        except:
+            return mobile_file_path(obj.employee_id.employee_profile)
+        except Exception:
             return None
 
 
@@ -141,9 +141,8 @@ class AttendanceRequestSerializer(serializers.ModelSerializer):
 
     def get_employee_profile_url(self, obj):
         try:
-            employee_profile = obj.employee_id.employee_profile
-            return employee_profile.url
-        except:
+            return mobile_file_path(obj.employee_id.employee_profile)
+        except Exception:
             return None
 
 
@@ -175,9 +174,8 @@ class AttendanceOverTimeSerializer(serializers.ModelSerializer):
 
     def get_employee_profile_url(self, obj):
         try:
-            employee_profile = obj.employee_id.employee_profile
-            return employee_profile.url
-        except:
+            return mobile_file_path(obj.employee_id.employee_profile)
+        except Exception:
             return None
 
 

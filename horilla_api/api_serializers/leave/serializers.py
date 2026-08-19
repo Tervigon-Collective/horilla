@@ -2,6 +2,7 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from employee.models import Employee
+from horilla_api.api_methods.base.methods import mobile_file_path
 from leave.methods import calculate_requested_days
 from leave.models import *
 
@@ -105,8 +106,8 @@ class GetAvailableLeaveTypeSerializer(serializers.ModelSerializer):
 
     def get_icon(self, obj):
         try:
-            return obj.leave_type_id.icon.url
-        except:
+            return mobile_file_path(obj.leave_type_id.icon)
+        except Exception:
             return None
 
 
@@ -133,8 +134,8 @@ class GetAvailableLeaveTypeSerializer(serializers.ModelSerializer):
 
     def get_icon(self, obj):
         try:
-            return obj.leave_type_id.icon.url
-        except:
+            return mobile_file_path(obj.leave_type_id.icon)
+        except Exception:
             return None
 
     def get_total_leave_days(self, obj):
@@ -228,6 +229,11 @@ class LeaveTypeGetCreateSerilaizer(serializers.ModelSerializer):
         model = LeaveType
         fields = "__all__"
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["icon"] = mobile_file_path(instance.icon)
+        return data
+
     def validate(self, data):
         reset = data.get("reset")
         reset_based = data.get("reset_based")
@@ -261,6 +267,11 @@ class LeaveTypeAllGetSerializer(serializers.ModelSerializer):
     class Meta:
         model = LeaveType
         fields = ["id", "name", "icon"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["icon"] = mobile_file_path(instance.icon)
+        return data
 
 
 class LeaveAllocationRequestCreateSerializer(serializers.ModelSerializer):
@@ -331,6 +342,11 @@ class EmployeeGetSerializer(serializers.ModelSerializer):
 
     def get_full_name(self, obj):
         return obj.get_full_name()
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["employee_profile"] = mobile_file_path(instance.employee_profile)
+        return data
 
 
 class AvailableLeaveUpdateSerializer(serializers.ModelSerializer):

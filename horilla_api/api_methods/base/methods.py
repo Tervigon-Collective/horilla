@@ -1,10 +1,33 @@
 from collections import Counter
+from urllib.parse import urlparse
 
+from django.conf import settings
 from django.db.models import Q
 from django.http import QueryDict
 from rest_framework.pagination import PageNumberPagination
 
 from employee.models import EmployeeWorkInformation
+
+
+def mobile_file_path(file_field):
+    """
+    Relative /media/... path. The official Horilla app always does
+    ``serverUrl + path``, so an absolute http(s) URL would break images.
+    """
+    if not file_field:
+        return None
+    try:
+        url = file_field.url
+    except (ValueError, AttributeError):
+        return None
+    if not url:
+        return None
+    if url.startswith("http://") or url.startswith("https://"):
+        url = urlparse(url).path or url
+    if not url.startswith("/"):
+        media = (getattr(settings, "MEDIA_URL", "/media/") or "/media/").rstrip("/")
+        url = f"{media}/{url.lstrip('/')}"
+    return url
 
 
 def get_filter_url(current_url, request):

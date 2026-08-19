@@ -4,6 +4,7 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from employee.models import Employee
+from horilla_api.api_methods.base.methods import mobile_file_path
 
 
 class GetEmployeeSerializer(serializers.ModelSerializer):
@@ -15,6 +16,11 @@ class GetEmployeeSerializer(serializers.ModelSerializer):
 
     def get_full_name(self, obj):
         return obj.get_full_name()
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["employee_profile"] = mobile_file_path(instance.employee_profile)
+        return data
 
 
 class LoginRequestSerializer(serializers.Serializer):

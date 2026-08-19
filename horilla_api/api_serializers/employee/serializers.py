@@ -12,6 +12,7 @@ from employee.models import (
 from horilla_documents.models import Document, DocumentRequest
 
 from ...api_methods.employee.methods import get_next_badge_id
+from ...api_methods.base.methods import mobile_file_path
 
 
 class ActiontypeSerializer(serializers.ModelSerializer):
@@ -44,6 +45,11 @@ class EmployeeListSerializer(serializers.ModelSerializer):
             "employee_bank_details_id",
         ]
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["employee_profile"] = mobile_file_path(instance.employee_profile)
+        return data
+
 
 class EmployeeSerializer(serializers.ModelSerializer):
     department_name = serializers.CharField(
@@ -73,6 +79,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
         from employee.cbv.accessibility import is_hr_user
 
+        data["employee_profile"] = mobile_file_path(instance.employee_profile)
         request = self.context.get("request")
         own_or_hr = bool(
             request
@@ -228,3 +235,8 @@ class EmployeeSelectorSerializer(serializers.ModelSerializer):
             "badge_id",
             "employee_profile",
         ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["employee_profile"] = mobile_file_path(instance.employee_profile)
+        return data
