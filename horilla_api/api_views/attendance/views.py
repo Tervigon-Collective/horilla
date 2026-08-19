@@ -16,7 +16,6 @@ from rest_framework.views import APIView
 
 from attendance.models import Attendance, AttendanceActivity, EmployeeShiftDay
 from attendance.views.clock_in_out import *
-from attendance.views.clock_in_out import clock_out
 from attendance.views.dashboard import (
     find_expected_attendances,
     find_late_come,
@@ -58,6 +57,38 @@ def query_dict(data):
     return query_dict
 
 
+def employee_is_clocked_in(employee):
+    """
+    Whether the employee currently has an open punch.
+
+    Uses attendance rows directly so mobile JWT requests do not depend on
+    ``check_online()`` thread-local web session state.
+    """
+    if not employee:
+        return False
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    last_attendance = (
+        employee.employee_attendances.filter(attendance_date__in=[yesterday, today])
+        .order_by("attendance_date", "id")
+        .last()
+    )
+    if last_attendance is None:
+        return False
+    if last_attendance.attendance_clock_out_date is not None:
+        return False
+    last_activity = (
+        employee.employee_attendance_activities.filter(
+            attendance_date=last_attendance.attendance_date
+        )
+        .order_by("id")
+        .last()
+    )
+    if last_activity is None:
+        return last_attendance.attendance_clock_out is None
+    return last_activity.clock_out is None
+
+
 class ClockInAPIView(APIView):
     """
     Allows authenticated employees to clock in, determining the correct shift and attendance date, including handling night shifts.
@@ -70,9 +101,10 @@ class ClockInAPIView(APIView):
 
     def post(self, request):
         inject_punch_coords(request)
-        if not request.user.employee_get.check_online():
+        employee = request.user.employee_get
+        if not employee_is_clocked_in(employee):
             try:
-                if request.user.employee_get.get_company().geo_fencing.start:
+                if employee.get_company().geo_fencing.start:
                     from geofencing.views import GeoFencingEmployeeLocationCheckAPIView
 
                     location_api_view = GeoFencingEmployeeLocationCheckAPIView()
@@ -154,47 +186,49 @@ class ClockOutAPIView(APIView):
 
     def post(self, request):
         inject_punch_coords(request)
+        employee = request.user.employee_get
+
+        if not employee_is_clocked_in(employee):
+            return Response({"message": "Already clocked-out"}, status=400)
 
         try:
-            if request.user.employee_get.get_company().geo_fencing.start:
+            if employee.get_company().geo_fencing.start:
                 from geofencing.views import GeoFencingEmployeeLocationCheckAPIView
 
                 location_api_view = GeoFencingEmployeeLocationCheckAPIView()
                 response = location_api_view.post(request)
                 if response.status_code != 200:
                     return response
-        except:
+        except Exception:
             pass
-        if request.user.employee_get.check_online():
-            current_date = date.today()
-            current_time = datetime.now().time()
-            current_datetime = datetime.now()
 
-            try:
-                from django.http import QueryDict
+        employee_obj, work_info = employee_exists(request)
+        if employee_obj is None or work_info is None:
+            return Response(
+                {
+                    "error": _(
+                        "You Don't have work information filled or your employee detail neither entered "
+                    )
+                },
+                status=400,
+            )
 
-                from attendance.methods.utils import Request as ClockRequest
-                from attendance.views.clock_in_out import punch_coords_from_request
-
-                fake = ClockRequest(
-                    user=request.user,
-                    date=current_date,
-                    time=current_time,
-                    datetime=current_datetime,
-                )
-                fake.META = getattr(request, "META", {}) or {}
-                fake.GET = QueryDict("", mutable=True)
-                lat, lng = punch_coords_from_request(request)
-                if lat is not None and lng is not None:
-                    fake.GET["latitude"] = str(lat)
-                    fake.GET["longitude"] = str(lng)
-                clock_out(fake)
-                return Response({"message": "Clocked-Out"}, status=200)
-
-            except Exception as error:
-                logger.error("Got an error in clock_out", error)
-            # return Response({"message": "Clocked-Out"}, status=200)
-        return Response({"message": "Already clocked-out"}, status=400)
+        datetime_now = datetime.now()
+        date_today = date.today()
+        now = datetime.now().strftime("%H:%M")
+        attendance = clock_out_attendance_and_activity(
+            employee=employee_obj,
+            date_today=date_today,
+            now=now,
+            out_datetime=datetime_now,
+            request=request,
+        )
+        if not attendance:
+            return Response(
+                {"error": _("No open check-in found to clock out.")},
+                status=400,
+            )
+        return Response({"message": "Clocked-Out"}, status=200)
 
 
 class AttendanceView(APIView):
@@ -937,49 +971,42 @@ class CheckingStatus(APIView):
         return f"{hours:02}:{minutes:02}:{seconds:02}"
 
     def get(self, request):
-        attendance_activity = (
-            AttendanceActivity.objects.filter(employee_id=request.user.employee_get)
-            .order_by("-id")
-            .first()
-        )
-        duration = None
-        work_seconds = request.user.employee_get.get_forecasted_at_work()[
+        employee = request.user.employee_get
+        work_seconds = employee.get_forecasted_at_work()[
             "forecasted_at_work_seconds"
         ]
         duration = CheckingStatus._format_seconds(int(work_seconds))
-        status = False
+        clocked_in = employee_is_clocked_in(employee)
         clock_in_time = None
 
-        today = datetime.now()
-        attendance_activity_first = (
-            AttendanceActivity.objects.filter(
-                employee_id=request.user.employee_get, clock_in_date=today
-            )
-            .order_by("in_datetime")
-            .first()
-        )
-        if attendance_activity:
-            try:
-                clock_in_time = attendance_activity_first.clock_in.strftime("%I:%M %p")
-                if attendance_activity.clock_out_date:
-                    status = False
-                else:
-                    status = True
-                    return Response(
-                        {
-                            "status": status,
-                            "duration": duration,
-                            "clock_in": clock_in_time,
-                        },
-                        status=200,
-                    )
-            except:
-                return Response(
-                    {"status": status, "duration": duration, "clock_in": clock_in_time},
-                    status=200,
+        if clocked_in:
+            today = date.today()
+            yesterday = today - timedelta(days=1)
+            attendance_activity_first = (
+                AttendanceActivity.objects.filter(
+                    employee_id=employee,
+                    clock_in_date__in=[yesterday, today],
                 )
+                .order_by("in_datetime")
+                .first()
+            )
+            if attendance_activity_first:
+                clock_in_time = attendance_activity_first.clock_in.strftime("%I:%M %p")
+            return Response(
+                {
+                    "status": True,
+                    "duration": duration,
+                    "clock_in": clock_in_time,
+                },
+                status=200,
+            )
+
         return Response(
-            {"status": status, "duration": duration, "clock_in_time": clock_in_time},
+            {
+                "status": False,
+                "duration": duration,
+                "clock_in_time": clock_in_time,
+            },
             status=200,
         )
 
