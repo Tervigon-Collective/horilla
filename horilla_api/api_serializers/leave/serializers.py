@@ -185,6 +185,11 @@ class UserLeaveRequestGetSerilaizer(serializers.ModelSerializer):
             return LeaveTypeAllGetSerializer(obj.leave_type_id).data
         return None
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["attachment"] = mobile_file_path(instance.attachment)
+        return data
+
 
 class LeaveRequestCreateUpdateSerializer(serializers.ModelSerializer):
 
@@ -437,6 +442,11 @@ class LeaveRequestGetSerilaizer(serializers.ModelSerializer):
             )
             return {"count": count, "is_approved": is_approved}
         return None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["attachment"] = mobile_file_path(instance.attachment)
+        return data
 
 
 class LeaveAllocationRequestSerilaizer(serializers.ModelSerializer):

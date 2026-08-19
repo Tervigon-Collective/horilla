@@ -134,6 +134,11 @@ urlpatterns = [
         name="api-employee-selector",
     ),
     path(
+        "employee-selector",
+        views.EmployeeSelectorView.as_view(),
+        name="api-employee-selector-noslash",
+    ),
+    path(
         "manager-check/",
         views.ReportingManagerCheck.as_view(),
         name="api-manager-check",

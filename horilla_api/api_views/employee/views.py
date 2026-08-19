@@ -146,18 +146,32 @@ class EmployeeAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request, pk):
-        user = request.user
-        employee = Employee.objects.get(pk=pk)
-        if (
-            employee
-            in [user.employee_get, request.user.employee_get.get_reporting_manager()]
-        ) or user.has_perm("employee.change_employee"):
-            serializer = EmployeeSerializer(employee, data=request.data, partial=True)
+        from employee.cbv.accessibility import is_hr_user
+
+        try:
+            employee = Employee.objects.get(pk=pk)
+        except Employee.DoesNotExist:
+            return Response(
+                {"error": _("Employee does not exist")},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        own = getattr(employee, "employee_user_id", None) == request.user
+        if is_hr_user(request) or own:
+            serializer = EmployeeSerializer(
+                employee,
+                data=request.data,
+                partial=True,
+                context={"request": request},
+            )
             if serializer.is_valid():
                 serializer.save()
                 return Response(serializer.data)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"error": _("You don't have permission")}, status=400)
+
+        return Response(
+            {"error": _("Permission denied")}, status=status.HTTP_403_FORBIDDEN
+        )
 
     @method_decorator(permission_required("employee.delete_employee"))
     def delete(self, request, pk):
@@ -242,7 +256,14 @@ class EmployeeBankDetailsAPIView(APIView):
     def get(self, request, pk=None):
         from employee.cbv.accessibility import is_hr_user
 
-        bank_detail = EmployeeBankDetails.objects.get(pk=pk)
+        try:
+            bank_detail = EmployeeBankDetails.objects.get(pk=pk)
+        except EmployeeBankDetails.DoesNotExist:
+            return Response(
+                {"error": _("Bank details do not exist")},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
         own = (
             getattr(bank_detail.employee_id, "employee_user_id", None) == request.user
         )
@@ -252,7 +273,7 @@ class EmployeeBankDetailsAPIView(APIView):
             )
             return Response(serializer.data)
 
-        return Response({"message": _("No permission")}, status=403)
+        return Response({"error": _("Permission denied")}, status=403)
 
     @manager_or_owner_permission_required(
         EmployeeBankDetails, "employee.add_employeebankdetails"

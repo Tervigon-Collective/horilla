@@ -7,6 +7,7 @@ from django.http import Http404, QueryDict
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -1089,7 +1090,21 @@ class EmployeeAvailableLeaveTypeGetAPIView(APIView):
             raise serializers.ValidationError(e)
 
     def get(self, request, pk):
-        employee = self.get_employee(pk)
+        from employee.cbv.accessibility import can_access_employee_record
+
+        try:
+            employee = Employee.objects.get(pk=pk)
+        except Employee.DoesNotExist:
+            return Response(
+                {"error": _("Employee does not exist")},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not can_access_employee_record(request, employee):
+            return Response(
+                {"error": _("Permission denied")}, status=status.HTTP_403_FORBIDDEN
+            )
+
         available_leave = employee.available_leave.all()
         leave_type_ids = available_leave.values_list("leave_type_id", flat=True)
         leave_types = LeaveType.objects.filter(id__in=leave_type_ids)

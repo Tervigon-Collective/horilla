@@ -8,6 +8,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from horilla_api.docs import document_api
 
+from horilla_api.api_methods.base.methods import mobile_file_path
+
 from ...api_serializers.auth.serializers import (
     GetEmployeeSerializer,
     LoginRequestSerializer,
@@ -73,8 +75,10 @@ class LoginAPIView(APIView):
                 except:
                     pass
                 try:
-                    face_detection_image = employee.face_detection.image.url
-                except:
+                    face_detection_image = mobile_file_path(
+                        employee.face_detection.image
+                    )
+                except Exception:
                     pass
                 try:
                     company_id = employee.get_company().id
