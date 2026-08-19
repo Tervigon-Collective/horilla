@@ -202,6 +202,8 @@ class ClockOutAPIView(APIView):
         except Exception:
             pass
 
+        from django.utils import timezone as dj_timezone
+
         employee_obj, work_info = employee_exists(request)
         if employee_obj is None or work_info is None:
             return Response(
@@ -213,9 +215,9 @@ class ClockOutAPIView(APIView):
                 status=400,
             )
 
-        datetime_now = datetime.now()
-        date_today = date.today()
-        now = datetime.now().strftime("%H:%M")
+        datetime_now = dj_timezone.localtime()
+        date_today = dj_timezone.localdate()
+        now = datetime_now.strftime("%H:%M")
         attendance = clock_out_attendance_and_activity(
             employee=employee_obj,
             date_today=date_today,
@@ -944,12 +946,22 @@ class OfflineEmployeesListView(APIView):
             "job_position_id",
         )
 
-        for employee in employees_with_leave_status:
+        from urllib.parse import urlparse
 
-            if employee["employee_profile"]:
-                employee["employee_profile"] = (
-                    settings.MEDIA_URL + employee["employee_profile"]
-                )
+        media = (getattr(settings, "MEDIA_URL", "/media/") or "/media/").rstrip("/")
+        for employee in employees_with_leave_status:
+            profile = employee.get("employee_profile")
+            if not profile:
+                employee["employee_profile"] = None
+                continue
+            if isinstance(profile, str) and (
+                profile.startswith("http://") or profile.startswith("https://")
+            ):
+                profile = urlparse(profile).path or profile
+            profile = str(profile)
+            if not profile.startswith("/"):
+                profile = f"{media}/{profile.lstrip('/')}"
+            employee["employee_profile"] = profile
         return employees_with_leave_status
 
 

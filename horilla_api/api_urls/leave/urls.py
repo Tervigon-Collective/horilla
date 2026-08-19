@@ -55,5 +55,7 @@ urlpatterns = [
     path("check-request/", LeaveRequestGetPermissionCheckAPIView.as_view()),
     path("check-request", LeaveRequestGetPermissionCheckAPIView.as_view()),
     path("check-assign/", LeaveAssignGetPermissionCheckAPIView.as_view()),
+    path("check-assign", LeaveAssignGetPermissionCheckAPIView.as_view()),
     path("check-perm/", LeavePermissionCheckAPIView.as_view()),
+    path("check-perm", LeavePermissionCheckAPIView.as_view()),
 ]

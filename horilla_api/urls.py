@@ -1,10 +1,24 @@
-from django.conf import settings
 from django.urls import include, path
 from drf_yasg import openapi
 from drf_yasg.views import get_schema_view
-from rest_framework import permissions
+from rest_framework import permissions, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from horilla_api.schema import OrderedTagSchemaGenerator
+
+
+class WardCheckStubAPIView(APIView):
+    """Official app probes this; ward module is not installed here."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        return Response(
+            {"detail": "Ward module not enabled"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
 
 # Create schema view for Swagger and ReDoc
 schema_view = get_schema_view(
@@ -48,4 +62,6 @@ urlpatterns = [
     path("offboarding/", include("horilla_api.api_urls.offboarding.urls")),
     path("recruitment/", include("horilla_api.api_urls.recruitment.urls")),
     path("pms/", include("horilla_api.api_urls.pms.urls")),
+    path("ward/check-ward/", WardCheckStubAPIView.as_view()),
+    path("ward/check-ward", WardCheckStubAPIView.as_view()),
 ]
