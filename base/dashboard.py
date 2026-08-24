@@ -1069,6 +1069,7 @@ def get_pending_approvals_counts(request):
     has_shift_perm = user.has_perm("base.change_shiftrequest")
     has_wt_perm = user.has_perm("base.change_worktyperequest")
     has_reimb_perm = user.has_perm("payroll.change_reimbursement")
+    has_ot_perm = user.has_perm("attendance.change_attendance")
     is_mgr = _is_manager(user)
 
     can_approve = any(
@@ -1079,6 +1080,7 @@ def get_pending_approvals_counts(request):
             has_shift_perm,
             has_wt_perm,
             has_reimb_perm,
+            has_ot_perm,
             is_mgr,
         ]
     )
@@ -1245,6 +1247,31 @@ def get_pending_approvals_counts(request):
         pending["reimbursements"] = reimb_count
     except Exception:
         pending["reimbursements"] = 0
+
+    # Overtime awaiting approval
+    try:
+        from attendance.models import Attendance
+
+        ot_base = Attendance.objects.filter(
+            attendance_overtime_approve=False,
+            overtime_second__gt=0,
+        )
+        if can_approve:
+            if has_ot_perm or has_attendance_perm:
+                ot_count = ot_base.count()
+            else:
+                from base.methods import filtersubordinates
+
+                ot_count = filtersubordinates(
+                    request, ot_base, "attendance.change_attendance"
+                ).count()
+        else:
+            ot_count = (
+                ot_base.filter(employee_id=employee).count() if employee else 0
+            )
+        pending["overtime"] = ot_count
+    except Exception:
+        pending["overtime"] = 0
 
     pending["total"] = sum(pending.values())
 

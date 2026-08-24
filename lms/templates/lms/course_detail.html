@@ -12,6 +12,12 @@
     {% if perms.lms.change_course %}
     <a href="{% url 'lms-course-edit' pk=course.pk %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Edit" %}</a>
     {% endif %}
+    {% if not my_enrollment %}
+    <form method="post" action="{% url 'lms-enroll-self' pk=course.pk %}" style="display:inline;">
+      {% csrf_token %}
+      <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Enroll" %}</button>
+    </form>
+    {% endif %}
   </div>
 
   <div class="is-section" style="margin-bottom:16px;">
@@ -23,15 +29,14 @@
           <strong>{{ lesson.title }}</strong>
           {% if lesson.duration_minutes %} ({{ lesson.duration_minutes }} {% trans "min" %}){% endif %}
           {% if my_enrollment %}
-            {% with done=False %}
-            {% for p in my_enrollment.lesson_progress.all %}
-              {% if p.lesson_id_id == lesson.id and p.completed %}{% with done=True %}{% endwith %}{% endif %}
-            {% endfor %}
-            {% endwith %}
+            {% if lesson.id in completed_lesson_ids %}
+              <span class="is-muted">{% trans "Completed" %}</span>
+            {% else %}
             <form method="post" action="{% url 'lms-complete-lesson' enrollment_id=my_enrollment.pk lesson_id=lesson.pk %}" style="display:inline;">
               {% csrf_token %}
               <button type="submit" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Mark complete" %}</button>
             </form>
+            {% endif %}
           {% endif %}
           {% if lesson.content %}<div class="is-muted" style="font-size:13px;">{{ lesson.content|truncatechars:160 }}</div>{% endif %}
         </li>

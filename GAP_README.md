@@ -18,8 +18,8 @@ The largest **remaining** gaps vs Keka / greytHR / Zoho People:
 | Indian statutory payroll (PF, ESI, PT, TDS, Form 16) | Critical | **Partial — engine, challans, Form 24Q CSV, TRACES text files live** |
 | Attendance → payroll LOP | Critical | **Done** |
 | Leave accrual, sandwich, balance hold | High | **Done — FIFO + reservation + accrual + sandwich** |
-| Unified approvals + mobile API parity | High | **Done — web inbox + mobile inbox/actions** |
-| Expense / travel, F&F settlement, LMS | Medium | **Partial — travel expense + F&F workflow; LMS not started** |
+| Unified approvals + mobile API parity | High | **Done — web inbox + mobile inbox/actions (incl. OT)** |
+| Expense / travel, F&F settlement, LMS | Medium | **Partial — travel + mileage/limits + F&F + LMS MVP live** |
 
 ---
 
@@ -48,6 +48,12 @@ The largest **remaining** gaps vs Keka / greytHR / Zoho People:
 | Arrears pay-out + salary hold/release | ✅ Live Aug 24 | `/payroll/salary-holds/`; one-time allowance from revision letter |
 | Full & Final settlement workflow | ✅ Live Aug 24 | `/offboarding/fnf-settlements/` draft → confirm (salary hold) → paid + PDF |
 | Grade / position leave accrual rules | ✅ Live Aug 24 | `job_grade` on work info + leave type accrual rules; service-duration eligibility |
+| LMS (courses, enroll, lesson progress) | ✅ Live Aug 24 | `/lms/` catalog + My Learning; not a full Docebo/Keka LMS |
+| OT in unified approval inbox | ✅ Live Aug 24 | `/approvals/inbox/` type `overtime` |
+| Effective shift at punch (roster) | ✅ Live Aug 24 | Published roster for the date, else work-info shift |
+| Missing punch → regularization | ✅ Live Aug 24 | Dashboard **Regularize** → attendance request (`request_type=missing_punch`) |
+| Expense mileage + claim limits | ✅ Live Aug 24 | Encashment settings + travel km × rate; cap via `max_claim_amount` |
+| Probation on employee work info | ✅ Live Aug 24 | `probation_end` + `employment_status`; copied from candidate on hire |
 | Unit tests (calc only) | ✅ | `payroll/tests/test_india_statutory.py` |
 
 **Not yet compliance-grade:**
@@ -105,7 +111,7 @@ The largest **remaining** gaps vs Keka / greytHR / Zoho People:
 
 ### Installed apps (production)
 
-Core: `employee`, `attendance`, `leave`, `payroll`, `recruitment`, `onboarding`, `offboarding`, `pms`, `asset`, `helpdesk`, `project`, `report`, `biometric`, `horilla_api`, `horilla_automations`, `whatsapp`, `horilla_ldap`, `horilla_meet`, `horilla_backup`, and platform apps (`base`, `horilla_views`, `horilla_theme`, etc.).
+Core: `employee`, `attendance`, `leave`, `payroll`, `recruitment`, `onboarding`, `offboarding`, `pms`, `lms`, `asset`, `helpdesk`, `project`, `report`, `biometric`, `horilla_api`, `horilla_automations`, `whatsapp`, `horilla_ldap`, `horilla_meet`, `horilla_backup`, and platform apps (`base`, `horilla_views`, `horilla_theme`, etc.).
 
 **Runtime add-ons** (via `horilla_api`): `geofencing`, `facedetection`.
 
@@ -113,16 +119,17 @@ Core: `employee`, `attendance`, `leave`, `payroll`, `recruitment`, `onboarding`,
 
 | Module | Present (web) | Partial | Absent |
 |--------|---------------|---------|--------|
-| **Employee** | CRUD, org chart, import/export, documents, disciplinary, statutory profile link | Field masking, probation workflow | Skills matrix, workforce planning |
-| **Attendance** | Punch in/out, shifts, roster, monthly summary, missing punch flags, OT, hour balance, biometric hooks | Geo/face (API-first), regularization pipeline | OT approval before payroll |
-| **Leave** | Types, half-day, CF, multi-approval, comp-off, restrictions, **FIFO + reservation + accrual + sandwich**, encashment pipeline | Grade-based accrual rules | Advanced policy engine |
-| **Payroll** | Contracts, allowances/deductions, payslip PDF, loans, reimbursement, **India statutory (PF/ESI/PT/TDS/Form16/challans/24Q/TRACES)**, **CTC wizard**, **accounting export**, **WhatsApp payslip notifications** | US-style tax coexists | Salary revision letters |
+| **Employee** | CRUD, org chart, import/export, documents, disciplinary, statutory profile link, **probation end + employment status** | Field masking | Skills matrix, workforce planning |
+| **Attendance** | Punch in/out, shifts, **roster shift at punch**, monthly summary, missing punch **regularize**, OT **inbox**, hour balance, biometric hooks | Geo/face (API-first) | Break / multi-punch rules |
+| **Leave** | Types, half-day, CF, multi-approval, comp-off, restrictions, **FIFO + reservation + accrual + sandwich**, encashment pipeline | — | Advanced policy engine |
+| **Payroll** | Contracts, allowances/deductions, payslip PDF, loans, reimbursement, **India statutory**, **CTC wizard**, **accounting export**, **WhatsApp payslip notifications**, **salary revision letters**, **holds/arrears** | US-style tax coexists | Live Tally API |
 | **Recruitment** | Pipeline, stages, LinkedIn, offer status, surveys | — | Naukri/Indeed, resume AI, career portal, e-sign |
 | **Onboarding / Offboarding** | Stages, tasks, resignation flow, **F&F workflow** | IT/asset return still manual | — |
-| **PMS** | OKRs, key results, feedback, meetings | 360° not full cycle | Calibration, LMS, comp-linked increments |
-| **Expense** | Reimbursement, encashment, **travel expense type** | Policy limits, mileage | OCR, full travel module |
-| **Reports** | Pivot reports (attendance, leave, payroll, etc.) | No API | Statutory registers, scheduled delivery |
-| **Mobile / API** | JWT API, monthly summary, payslip scoping, **pending approvals inbox + actions (web + mobile)** | — | LMS |
+| **PMS** | OKRs, key results, feedback, meetings | 360° not full cycle | Calibration, comp-linked increments |
+| **LMS** | **Course catalog, enroll, lesson complete, My Learning** | No SCORM/quizzes/certificates | Full Docebo-style LMS |
+| **Expense** | Reimbursement, encashment, **travel + mileage + claim cap** | — | OCR, full travel booking module |
+| **Reports** | Pivot reports (attendance, leave, payroll, etc.) | No API | Scheduled delivery |
+| **Mobile / API** | JWT API, monthly summary, payslip scoping, **pending approvals inbox + actions (web + mobile, incl. OT)** | — | Native LMS API |
 
 ---
 
@@ -150,11 +157,11 @@ Core: `employee`, `attendance`, `leave`, `payroll`, `recruitment`, `onboarding`,
 |---------|----------|---------|
 | Attendance-linked LOP in payroll | ✅ | ✅ Validated absent working days |
 | Sandwich leave | ✅ | ✅ `sandwich_policy` on leave type |
-| Effective shift at punch (rotation) | ✅ | ⚠️ Static `shift_id` on employee |
-| OT approval → payroll | ✅ | ⚠️ OT allowance on approved OT; no separate approval queue |
+| Effective shift at punch (rotation) | ✅ | ✅ Published roster for the date, else `work_info.shift_id` |
+| OT approval → payroll | ✅ | ✅ OT allowance on approved OT + **unified inbox** type `overtime` |
 | Break / multi-punch rules | ✅ | ❌ |
 | Facial recognition | ✅ (Keka) | ⚠️ Optional API app |
-| Missing punch → regularization workflow | ✅ | ⚠️ Flags only |
+| Missing punch → regularization workflow | ✅ | ✅ Dashboard Regularize → attendance request |
 | Web = mobile punch rules | ✅ | ⚠️ API gaps |
 | Monthly summary on mobile | ✅ | ✅ `/api/attendance/monthly-summary/` |
 
@@ -236,6 +243,22 @@ Core: `employee`, `attendance`, `leave`, `payroll`, `recruitment`, `onboarding`,
 - Payslips generated **before** statutory enable show PF ₹0 until regenerated
 - Horilla theme does not load legacy `oh-sticky-table` CSS — use HTML `<table>` in new UIs
 
+### Still open (not shippable as MVP — industry-scale)
+
+These remain **intentionally open** after the Aug 24 gap close. Do not treat them as done:
+
+- Naukri / Indeed ATS integrations, resume parsing AI, public career portal, offer e-sign
+- Full LMS: SCORM, quizzes, certificates, learning paths (MVP catalog/progress only)
+- Expense OCR and a full travel-booking module (mileage + claim cap is live)
+- Break / multi-punch attendance rules
+- 360° review cycle + calibration + compensation-linked increments
+- Live Tally / Zoho Books API (journal CSV export is live)
+- Native mobile LMS API parity
+- Skills matrix / workforce planning
+
+Grant HR `lms.add_course` (and `lms.add_lesson`, `lms.add_courseenrollment`) to create/assign courses; employees can self-enroll and complete lessons without extra perms.
+
+
 ---
 
 ## Priority roadmap (Tervigon)
@@ -261,10 +284,10 @@ Core: `employee`, `attendance`, `leave`, `payroll`, `recruitment`, `onboarding`,
 - ~~Form 24Q CSV export~~ ✅
 - ~~Leave monthly accrual + sandwich policy~~ ✅ + grade/position accrual rules + `job_grade`
 - ~~F&F settlement estimate~~ ✅ `/offboarding/fnf-settlement/<pk>/` + workflow `/offboarding/fnf-settlements/`
-- ~~Travel expense type on reimbursement~~ ✅
+- ~~Travel expense type on reimbursement~~ ✅ + mileage + claim cap
 - ~~EPS/EDLI PF split + PF/ESI/PT registers~~ ✅ `/payroll/india-statutory/registers/`
 - ~~TRACES e-filing integration~~ ✅ `/payroll/india-statutory/traces/`
-- LMS module
+- ~~LMS module~~ ✅ MVP `/lms/` (catalog, enroll, lessons — not SCORM/certificates)
 
 ### Phase 2 progress (Aug 22)
 
@@ -288,10 +311,10 @@ Core: `employee`, `attendance`, `leave`, `payroll`, `recruitment`, `onboarding`,
 
 ### Phase 3 — Keka parity (12+ months)
 
-11. Travel & expense module  
-12. 360° + calibration + LMS  
-13. Resume AI, career portal, Naukri integration  
-14. Advanced analytics & compliance registers  
+11. Travel & expense module — **partial** (travel type + mileage + limits; no OCR / booking)
+12. 360° + calibration — **open**; LMS — **MVP live** `/lms/`
+13. Resume AI, career portal, Naukri integration — **open**
+14. Advanced analytics & compliance registers — registers live; scheduled analytics **open**
 
 ---
 
@@ -334,6 +357,7 @@ Core: `employee`, `attendance`, `leave`, `payroll`, `recruitment`, `onboarding`,
 | Accounting export | `payroll/methods/accounting_export.py`, `/payroll/india-statutory/accounting-export/` |
 | Statutory Excel import/export | `payroll/methods/india_statutory_excel.py`, `/payroll/india-statutory/excel/` |
 | F&F settlement | `offboarding/settlement.py`, `/offboarding/fnf-settlement/<pk>/`, `/offboarding/fnf-settlements/` |
+| LMS | `lms/`, `/lms/`, `/lms/my/` |
 | Leave accrual / sandwich | `leave/services.py`, `LeaveType.monthly_accrual`, `sandwich_policy` |
 | Installed apps | `horilla/settings/base.py` |
 
@@ -346,7 +370,7 @@ Core: `employee`, `attendance`, `leave`, `payroll`, `recruitment`, `onboarding`,
 docker cp /var/jenkins_apps/horilla-src/<path> horilla-app-prod:/app/<path>
 
 # Migrations (when models change)
-docker exec horilla-app-prod python manage.py migrate payroll leave --noinput
+docker exec horilla-app-prod python manage.py migrate payroll leave employee lms --noinput
 
 # Restart
 docker restart horilla-app-prod

@@ -360,6 +360,7 @@ class EmployeeWorkInformationForm(ModelForm):
 
         widgets = {
             "date_joining": DateInput(attrs={"type": "date"}),
+            "probation_end": DateInput(attrs={"type": "date"}),
             "contract_end_date": DateInput(attrs={"type": "date"}),
         }
 
@@ -465,6 +466,7 @@ class EmployeeWorkInformationUpdateForm(ModelForm):
 
         widgets = {
             "date_joining": DateInput(attrs={"type": "date"}),
+            "probation_end": DateInput(attrs={"type": "date"}),
             "contract_end_date": DateInput(attrs={"type": "date"}),
         }
 

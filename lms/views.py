@@ -94,10 +94,17 @@ def course_detail(request, pk):
     )
     employee = getattr(request.user, "employee_get", None)
     my_enrollment = None
+    completed_lesson_ids = set()
     if employee:
         my_enrollment = CourseEnrollment.objects.filter(
             course_id=course, employee_id=employee
         ).first()
+        if my_enrollment:
+            completed_lesson_ids = set(
+                my_enrollment.lesson_progress.filter(completed=True).values_list(
+                    "lesson_id", flat=True
+                )
+            )
     employees = Employee.objects.filter(is_active=True).order_by(
         "employee_first_name", "employee_last_name"
     )[:500]
@@ -109,6 +116,7 @@ def course_detail(request, pk):
             "lessons": course.lessons.filter(is_active=True),
             "enrollments": course.enrollments.select_related("employee_id")[:100],
             "my_enrollment": my_enrollment,
+            "completed_lesson_ids": completed_lesson_ids,
             "employees": employees,
         },
     )
@@ -165,6 +173,26 @@ def enroll_employees(request, pk):
         if was_created:
             created += 1
     messages.success(request, _("%(n)s employees enrolled.") % {"n": created})
+    return redirect("lms-course-detail", pk=course.pk)
+
+
+@login_required
+@require_http_methods(["POST"])
+def enroll_self(request, pk):
+    course = get_object_or_404(Course, pk=pk, is_active=True)
+    employee = getattr(request.user, "employee_get", None)
+    if not employee:
+        messages.error(request, _("No employee profile is linked to this user."))
+        return redirect("lms-course-detail", pk=course.pk)
+    _, created = CourseEnrollment.objects.get_or_create(
+        course_id=course,
+        employee_id=employee,
+        defaults={"status": "enrolled"},
+    )
+    if created:
+        messages.success(request, _("You are enrolled."))
+    else:
+        messages.info(request, _("You are already enrolled."))
     return redirect("lms-course-detail", pk=course.pk)
 
 

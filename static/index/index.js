@@ -523,6 +523,19 @@ function switchGeneralTab(e) {
 }
 
 function toggleReimbursmentType(element) {
+    function setGroup(name, show, required) {
+        var $el = $(`#genericModalBody [name=${name}]`);
+        var $wrap = $el.closest(".oh-input-group, .col, td, .form-group").length
+            ? $el.closest(".oh-input-group, .col, td, .form-group")
+            : $el.parent().parent();
+        if (show) {
+            $wrap.show();
+        } else {
+            $wrap.hide();
+        }
+        $el.attr("required", !!required);
+    }
+    var travelFields = ["travel_from", "travel_to", "travel_date", "mileage_km", "mileage_rate"];
     if (element.val() == "reimbursement") {
         $("#genericModalBody [name=attachment]").parent().show();
         $("#genericModalBody [name=attachment]").attr("required", true);
@@ -549,6 +562,7 @@ function toggleReimbursmentType(element) {
             .parent().parent()
             .hide()
             .attr("required", false);
+        travelFields.forEach(function (name) { setGroup(name, false, false); });
     } else if (element.val() == "leave_encashment") {
         $("#genericModalBody [name=attachment]").parent().hide();
         $("#genericModalBody [name=attachment]").attr("required", false);
@@ -577,6 +591,7 @@ function toggleReimbursmentType(element) {
             .attr("required", false);
         // #819
         $("#objectCreateModalTarget [name=employee_id]").trigger("change");
+        travelFields.forEach(function (name) { setGroup(name, false, false); });
     } else if (element.val() == "bonus_encashment") {
         $("#genericModalBody [name=attachment]").parent().hide();
         $("#genericModalBody [name=attachment]").attr("required", false);
@@ -603,6 +618,36 @@ function toggleReimbursmentType(element) {
             .parent().parent()
             .show()
             .attr("required", true);
+        travelFields.forEach(function (name) { setGroup(name, false, false); });
+    } else if (element.val() == "travel") {
+        $("#genericModalBody [name=attachment]").parent().show();
+        $("#genericModalBody [name=attachment]").attr("required", true);
+        $("#genericModalBody [name=leave_type_id]")
+            .parent().parent()
+            .hide()
+            .attr("required", false);
+        $("#genericModalBody [name=cfd_to_encash]")
+            .parent().parent()
+            .hide()
+            .attr("required", false);
+        $("#genericModalBody [name=ad_to_encash]")
+            .parent().parent()
+            .hide()
+            .attr("required", false);
+        $("#genericModalBody [name=amount]")
+            .parent().parent()
+            .show()
+            .attr("required", false);
+        $("#genericModalBody #availableTable")
+            .hide()
+            .attr("required", false);
+        $("#genericModalBody [name=bonus_to_encash]")
+            .parent().parent()
+            .hide()
+            .attr("required", false);
+        travelFields.forEach(function (name) {
+            setGroup(name, true, name === "travel_from" || name === "travel_to");
+        });
     }
 }
 

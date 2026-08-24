@@ -35,6 +35,24 @@
                 </p>
                 {{ encashment_form.leave_amount }}
             </div>
+            <div class="w-full">
+                <div class="flex space-x-2 pb-1">
+                    <label> {% trans "Max claim amount" %}</label>
+                </div>
+                <p class="text-xs text-gray-500 mt-1 pb-2">
+                    {% trans "0 = no limit. Applies to reimbursement and travel claims." %}
+                </p>
+                {{ encashment_form.max_claim_amount }}
+            </div>
+            <div class="w-full">
+                <div class="flex space-x-2 pb-1">
+                    <label> {% trans "Default mileage rate (₹/km)" %}</label>
+                </div>
+                <p class="text-xs text-gray-500 mt-1 pb-2">
+                    {% trans "Used when a travel claim has mileage but no rate." %}
+                </p>
+                {{ encashment_form.default_mileage_rate }}
+            </div>
             <button class="btn mt-[23px] mb-[13px] h-[33px]" type="submit">
                 {% trans 'Save' %}
             </button>

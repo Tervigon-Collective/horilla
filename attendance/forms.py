@@ -763,6 +763,13 @@ class NewRequestForm(AttendanceRequestForm):
         new_dict.update(old_dict)
         self.fields = new_dict
         kwargs["initial"] = view_initial
+        self.fields["missing_punch"] = forms.CharField(
+            required=False, widget=forms.HiddenInput()
+        )
+        if view_initial.get("missing_punch") or (
+            self.data and self.data.get("missing_punch")
+        ):
+            self.fields["missing_punch"].initial = "1"
 
     def as_p(self, *args, **kwargs):
         """
@@ -845,7 +852,9 @@ class NewRequestForm(AttendanceRequestForm):
                 data[key] = str(value)
             attendance.requested_data = json.dumps(data)
             attendance.is_validate_request = True
-            if attendance.request_type != "create_request":
+            if self._is_missing_punch_request() or attendance.missing_punch_in or attendance.missing_punch_out:
+                attendance.request_type = "missing_punch"
+            elif attendance.request_type != "create_request":
                 attendance.request_type = "update_request"
             attendance.request_description = self.data.get("request_description", "")
             attendance.save()
@@ -856,9 +865,20 @@ class NewRequestForm(AttendanceRequestForm):
         new_instance.is_validate_request = True
         new_instance.attendance_validated = False
         new_instance.request_description = self.data.get("request_description", "")
-        new_instance.request_type = "create_request"
+        new_instance.request_type = (
+            "missing_punch" if self._is_missing_punch_request() else "create_request"
+        )
         self.new_instance = new_instance
         return self.cleaned_data
+
+    def _is_missing_punch_request(self):
+        raw = (
+            self.cleaned_data.get("missing_punch")
+            or self.data.get("missing_punch")
+            or self.initial.get("missing_punch")
+            or ""
+        )
+        return str(raw).lower() in ("1", "true", "on", "yes")
 
 
 excluded_fields = [

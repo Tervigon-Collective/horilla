@@ -12,6 +12,7 @@ urlpatterns = [
     path("courses/<int:pk>/edit/", views.course_edit, name="lms-course-edit"),
     path("courses/<int:pk>/lesson/", views.lesson_add, name="lms-lesson-add"),
     path("courses/<int:pk>/enroll/", views.enroll_employees, name="lms-enroll"),
+    path("courses/<int:pk>/enroll-self/", views.enroll_self, name="lms-enroll-self"),
     path(
         "enrollments/<int:enrollment_id>/lesson/<int:lesson_id>/complete/",
         views.complete_lesson,

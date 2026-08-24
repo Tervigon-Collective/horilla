@@ -60,6 +60,11 @@
                         {{ work_form.job_role_id|add_class:"emp-input w-full h-9 px-3 text-xs border border-secondary-200 rounded-md bg-white text-dark-500" }}
                         {{ work_form.job_role_id.errors }}
                     </div>
+                    <div>
+                        <label class="block text-xs font-medium text-color-600 mb-1" for="id_job_grade">{% trans "Job Grade" %}</label>
+                        {{ work_form.job_grade|add_class:"emp-input w-full h-9 px-3 text-xs border border-secondary-200 rounded-md bg-white text-dark-500" }}
+                        {{ work_form.job_grade.errors }}
+                    </div>
                 </div>
             </div>
 
@@ -136,6 +141,16 @@
                         <label class="block text-xs font-medium text-color-600 mb-1" for="id_date_joining">{% trans "Joining Date" %}</label>
                         {{ work_form.date_joining|add_class:"emp-input w-full h-9 px-3 text-xs border border-secondary-200 rounded-md bg-white text-dark-500" }}
                         {{ work_form.date_joining.errors }}
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-color-600 mb-1" for="id_probation_end">{% trans "Probation end date" %}</label>
+                        {{ work_form.probation_end|add_class:"emp-input w-full h-9 px-3 text-xs border border-secondary-200 rounded-md bg-white text-dark-500" }}
+                        {{ work_form.probation_end.errors }}
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-color-600 mb-1" for="id_employment_status">{% trans "Employment status" %}</label>
+                        {{ work_form.employment_status|add_class:"emp-input w-full h-9 px-3 text-xs border border-secondary-200 rounded-md bg-white text-dark-500" }}
+                        {{ work_form.employment_status.errors }}
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-color-600 mb-1" for="id_contract_end_date">{% trans "Contract End Date" %}</label>

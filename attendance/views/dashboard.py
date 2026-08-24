@@ -9,8 +9,8 @@ from datetime import date, datetime
 
 from django.apps import apps
 from django.db.models import Q
-from django.http import JsonResponse
-from django.shortcuts import render
+from django.http import HttpResponseForbidden, JsonResponse
+from django.shortcuts import get_object_or_404, render
 from django.utils.translation import gettext_lazy as _
 
 from attendance.filters import (
@@ -253,6 +253,47 @@ def dashboard_missing_punches(request):
     return render(
         request, "attendance/dashboard/missing_punch_table.html", context
     )
+
+
+@login_required
+def regularize_missing_punch(request, record_id):
+    """Open the attendance request form for a missing-punch work record."""
+    from attendance.cbv.attendance_request import (
+        NewAttendanceRequestFormView,
+        UpdateAttendanceRequestFormView,
+    )
+    from attendance.methods.missing_punch import can_regularize_missing_punch
+    from attendance.models import WorkRecords
+
+    record = get_object_or_404(
+        WorkRecords.objects.select_related("attendance_id", "employee_id", "shift_id"),
+        pk=record_id,
+    )
+    if not can_regularize_missing_punch(request, record):
+        return HttpResponseForbidden()
+
+    if record.attendance_id_id:
+        attendance = record.attendance_id
+        if not attendance.request_description and record.message:
+            attendance.request_description = record.message
+            attendance.save(update_fields=["request_description"])
+        return UpdateAttendanceRequestFormView.as_view()(
+            request, pk=record.attendance_id_id
+        )
+
+    get = request.GET.copy()
+    get.setdefault("employee_id", str(record.employee_id_id))
+    get.setdefault("emp_id", str(record.employee_id_id))
+    if record.date:
+        get.setdefault("attendance_date", record.date.isoformat())
+    get.setdefault("missing_punch", "1")
+    get.setdefault(
+        "request_description", record.message or str(_("Missing punch regularization"))
+    )
+    if record.shift_id_id:
+        get.setdefault("shift_id", str(record.shift_id_id))
+    request.GET = get
+    return NewAttendanceRequestFormView.as_view()(request)
 
 
 def total_attendance(start_date, department, end_date=None):

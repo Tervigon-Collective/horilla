@@ -914,6 +914,8 @@ class ReimbursementForm(ModelForm):
                 "travel_from",
                 "travel_to",
                 "travel_date",
+                "mileage_km",
+                "mileage_rate",
             ]
         elif type == "leave_encashment" and (is_edit or self.data):
             exclude_fields += [
@@ -923,6 +925,8 @@ class ReimbursementForm(ModelForm):
                 "travel_from",
                 "travel_to",
                 "travel_date",
+                "mileage_km",
+                "mileage_rate",
             ]
         elif type == "bonus_encashment" and (is_edit or self.data):
             exclude_fields += [
@@ -934,6 +938,8 @@ class ReimbursementForm(ModelForm):
                 "travel_from",
                 "travel_to",
                 "travel_date",
+                "mileage_km",
+                "mileage_rate",
             ]
         elif type == "travel" and (is_edit or self.data):
             exclude_fields += [

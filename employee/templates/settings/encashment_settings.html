@@ -40,6 +40,28 @@
             {{ encashment_form.leave_amount }}
           </div>
         </div>
+        <div class="col-sm-12 col-md-12 col-lg-3">
+          <div class="oh-input-group">
+            <div class="oh-label__info">
+                <label class="oh-label">{% trans "Max claim amount" %}</label>
+              </div>
+            <p class="text-xs text-gray-500 mt-1 pb-1">
+                {% trans "0 = no limit. Applies to reimbursement and travel claims." %}
+            </p>
+            {{ encashment_form.max_claim_amount }}
+          </div>
+        </div>
+        <div class="col-sm-12 col-md-12 col-lg-3">
+          <div class="oh-input-group">
+            <div class="oh-label__info">
+                <label class="oh-label">{% trans "Default mileage rate" %}</label>
+              </div>
+            <p class="text-xs text-gray-500 mt-1 pb-1">
+                {% trans "₹ per km used when a travel claim has mileage but no rate." %}
+            </p>
+            {{ encashment_form.default_mileage_rate }}
+          </div>
+        </div>
         {% if perms.payroll.change_payrollsettings %}
           <div  class="d-flex align-items-end col-sm-12 col-md-12 col-lg-3">
             <button type="submit" class="oh-btn oh-btn--secondary mt-2 mr-0 oh-btn--w-100-resp">{% trans 'Save Changes' %}</button>

@@ -24,6 +24,7 @@ def get_approval_context(user) -> dict[str, Any]:
     has_shift_perm = user.has_perm("base.change_shiftrequest")
     has_wt_perm = user.has_perm("base.change_worktyperequest")
     has_reimb_perm = user.has_perm("payroll.change_reimbursement")
+    has_ot_perm = user.has_perm("attendance.change_attendance")
     is_mgr = _is_manager(user)
 
     can_approve = any(
@@ -34,6 +35,7 @@ def get_approval_context(user) -> dict[str, Any]:
             has_shift_perm,
             has_wt_perm,
             has_reimb_perm,
+            has_ot_perm,
             is_mgr,
         ]
     )
@@ -48,6 +50,7 @@ def get_approval_context(user) -> dict[str, Any]:
         "has_shift_perm": has_shift_perm,
         "has_wt_perm": has_wt_perm,
         "has_reimb_perm": has_reimb_perm,
+        "has_ot_perm": has_ot_perm,
         "is_mgr": is_mgr,
     }
 
@@ -166,6 +169,26 @@ def pending_reimbursement_queryset(request):
     return Reimbursement.objects.filter(employee_id=employee, status="requested")
 
 
+def pending_overtime_queryset(request):
+    from attendance.models import Attendance
+
+    ctx = get_approval_context(request.user)
+    base = Attendance.objects.filter(
+        attendance_overtime_approve=False,
+        overtime_second__gt=0,
+    )
+    if ctx["can_approve"]:
+        if ctx["has_ot_perm"] or ctx["has_attendance_perm"]:
+            return base
+        from base.methods import filtersubordinates
+
+        return filtersubordinates(request, base, "attendance.change_attendance")
+    employee = ctx["employee"]
+    if not employee:
+        return Attendance.objects.none()
+    return base.filter(employee_id=employee)
+
+
 def _can_act_on_type(ctx: dict[str, Any], item_type: str) -> bool:
     if ctx["is_restricted"]:
         return False
@@ -176,6 +199,7 @@ def _can_act_on_type(ctx: dict[str, Any], item_type: str) -> bool:
         "shift": ctx["has_shift_perm"] or ctx["is_mgr"],
         "work_type": ctx["has_wt_perm"] or ctx["is_mgr"],
         "reimbursement": ctx["has_reimb_perm"],
+        "overtime": ctx["has_ot_perm"] or ctx["has_attendance_perm"] or ctx["is_mgr"],
     }
     return perm_map.get(item_type, False)
 
@@ -305,9 +329,26 @@ def _serialize_reimbursement(obj, ctx):
     )
 
 
+def _serialize_overtime(obj, ctx):
+    hours = round(float(obj.overtime_second or 0) / 3600.0, 2)
+    return _inbox_item(
+        "overtime",
+        obj,
+        summary=f"Overtime · {obj.attendance_date} · {hours}h",
+        requested_at=obj.attendance_date,
+        detail={
+            "attendance_date": _iso_date(obj.attendance_date),
+            "overtime_hours": hours,
+            "overtime_second": obj.overtime_second,
+        },
+        ctx=ctx,
+    )
+
+
 INBOX_SOURCES = [
     ("leave", pending_leave_queryset, _serialize_leave, "employee_id", "leave_type_id"),
     ("attendance", pending_attendance_queryset, _serialize_attendance, "employee_id", None),
+    ("overtime", pending_overtime_queryset, _serialize_overtime, "employee_id", None),
     ("asset", pending_asset_queryset, _serialize_asset, "requested_employee_id", "asset_category_id"),
     ("shift", pending_shift_queryset, _serialize_shift, "employee_id", "shift_id"),
     ("work_type", pending_work_type_queryset, _serialize_work_type, "employee_id", "work_type_id"),
@@ -490,5 +531,22 @@ def execute_pending_action(
             request._data = merged
             return AssetApproveAPIView().put(request, pk=item_id)
         return AssetRejectAPIView().put(request, pk=item_id)
+
+    if item_type == "overtime":
+        from attendance.models import Attendance
+
+        try:
+            attendance = Attendance.objects.get(pk=item_id)
+        except Attendance.DoesNotExist:
+            return Response({"error": _("Not found.")}, status=status.HTTP_404_NOT_FOUND)
+        if action == "approve":
+            from horilla_api.api_views.attendance.views import OvertimeApproveView
+
+            return OvertimeApproveView().put(request, pk=item_id)
+        # Reject: clear OT seconds so it won't pay / reappear
+        attendance.overtime_second = 0
+        attendance.attendance_overtime_approve = False
+        attendance.save(update_fields=["overtime_second", "attendance_overtime_approve"])
+        return Response({"status": "rejected"}, status=status.HTTP_200_OK)
 
     return Response({"error": _("Unsupported type.")}, status=status.HTTP_400_BAD_REQUEST)

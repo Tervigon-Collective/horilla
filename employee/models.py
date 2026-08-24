@@ -904,6 +904,20 @@ class EmployeeWorkInformation(models.Model):
     date_joining = models.DateField(
         null=True, blank=True, verbose_name=_("Joining Date")
     )
+    probation_end = models.DateField(
+        null=True, blank=True, verbose_name=_("Probation end date")
+    )
+    employment_status = models.CharField(
+        max_length=20,
+        choices=[
+            ("probation", _("On probation")),
+            ("confirmed", _("Confirmed")),
+            ("notice", _("Notice period")),
+        ],
+        default="confirmed",
+        blank=True,
+        verbose_name=_("Employment status"),
+    )
     contract_end_date = models.DateField(
         blank=True, null=True, verbose_name=_("Contract End Date")
     )

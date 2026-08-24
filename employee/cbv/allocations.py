@@ -384,6 +384,9 @@ def work_info_post_save(sender, instance, created, **kwargs):
             instance.job_position_id = candidate.job_position_id
             instance.department_id = candidate.job_position_id.department_id
             instance.company_id = candidate.recruitment_id.company_id
+            if getattr(candidate, "probation_end", None):
+                instance.probation_end = candidate.probation_end
+                instance.employment_status = "probation"
         except Exception as e:
             logger.error(e)
         django_models.Model.save(instance)

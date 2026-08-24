@@ -267,6 +267,19 @@
 											<span
 												class="oh-profile__info-value dateformat_changer">{{employee.employee_work_info.date_joining|default:_("None")}}</span>
 										</li>
+										<li class="oh-profile__card-info-item">
+											<span class="oh-profile__info-label mb-1">
+												<ion-icon name="hourglass-outline"></ion-icon>
+												<span>{% trans "Employment status" %}</span>
+											</span>
+											<span class="oh-profile__info-value">
+												{{employee.employee_work_info.get_employment_status_display|default:_("None")}}
+												{% if employee.employee_work_info.probation_end %}
+													· {% trans "until" %}
+													<span class="dateformat_changer">{{ employee.employee_work_info.probation_end }}</span>
+												{% endif %}
+											</span>
+										</li>
 
 										<li class="oh-profile__card-info-item">
 											<span class="oh-profile__info-label mb-1">

@@ -462,12 +462,28 @@ class NewAttendanceRequestFormView(HorillaFormView):
             Employee.objects.filter(employee_user_id=self.request.user)
         ).distinct()
         self.form.fields["employee_id"].initial = self.request.user.employee_get.id
-        if self.request.GET.get("emp_id"):
-            emp_id = self.request.GET.get("emp_id")
+        if self.request.GET.get("emp_id") or self.request.GET.get("employee_id"):
+            emp_id = self.request.GET.get("emp_id") or self.request.GET.get(
+                "employee_id"
+            )
             self.form.fields["employee_id"].queryset = Employee.objects.filter(
                 id=emp_id
             )
             self.form.fields["employee_id"].initial = emp_id
+        attendance_date = self.request.GET.get("attendance_date")
+        if attendance_date:
+            self.form.fields["attendance_date"].initial = attendance_date
+            if "attendance_clock_in_date" in self.form.fields:
+                self.form.fields["attendance_clock_in_date"].initial = attendance_date
+        if self.request.GET.get("shift_id") and "shift_id" in self.form.fields:
+            self.form.fields["shift_id"].initial = self.request.GET.get("shift_id")
+        if self.request.GET.get("missing_punch") and "missing_punch" in self.form.fields:
+            self.form.fields["missing_punch"].initial = "1"
+            desc = self.request.GET.get("request_description") or _(
+                "Missing punch regularization"
+            )
+            if "request_description" in self.form.fields:
+                self.form.fields["request_description"].initial = desc
         if self.form.instance.pk:
             self.form_class.verbose_name = _("Update Attendance Request")
         return context
@@ -562,6 +578,8 @@ class UpdateAttendanceRequestFormView(HorillaFormView):
                 attendance.request_description = instance.request_description
                 # set the user level validation here
                 attendance.is_validate_request = True
+                if attendance.missing_punch_in or attendance.missing_punch_out:
+                    attendance.request_type = "missing_punch"
                 attendance.save()
             else:
                 instance.is_validate_request_approved = False

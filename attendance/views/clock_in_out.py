@@ -20,6 +20,8 @@ from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
+
+from attendance.methods.effective_shift import resolve_effective_shift
 from attendance.methods.utils import (
     activity_datetime,
     employee_exists,
@@ -478,7 +480,7 @@ def clock_in(request):
                         "attendance/components/in_out_component.html",
                         {"run": 0, "geofencing_error": geofence_error},
                     )
-            shift = work_info.shift_id
+            shift = resolve_effective_shift(employee, datetime_now)
             date_today = date.today()
             if request.__dict__.get("date"):
                 date_today = request.date
@@ -714,7 +716,7 @@ def clock_in_wfh(request):
         if request.__dict__.get("datetime"):
             datetime_now = request.datetime
         if employee and work_info is not None:
-            shift = work_info.shift_id
+            shift = resolve_effective_shift(employee, datetime_now)
             date_today = date.today()
             if request.__dict__.get("date"):
                 date_today = request.date
@@ -841,7 +843,7 @@ def clock_out(request):
                     "attendance/components/in_out_component.html",
                     {"run": 0, "geofencing_error": geofence_error},
                 )
-        shift = work_info.shift_id
+        shift = resolve_effective_shift(employee, datetime_now)
         date_today = date.today()
         if request.__dict__.get("date"):
             date_today = request.date
@@ -858,6 +860,8 @@ def clock_out(request):
                 attendance.attendance_day = EmployeeShiftDay.objects.get(day=day_name)
                 attendance.save(update_fields=["attendance_day"])
             day = attendance.attendance_day
+            if attendance.shift_id:
+                shift = attendance.shift_id
         now = datetime.now().strftime("%H:%M")
         if request.__dict__.get("time"):
             now = request.time.strftime("%H:%M")

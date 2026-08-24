@@ -2368,6 +2368,16 @@ class Reimbursement(HorillaModel):
         max_length=100, blank=True, null=True, verbose_name=_("Travel To")
     )
     travel_date = models.DateField(blank=True, null=True, verbose_name=_("Travel Date"))
+    mileage_km = models.FloatField(
+        default=0.0, blank=True, null=True, verbose_name=_("Mileage (km)")
+    )
+    mileage_rate = models.FloatField(
+        default=0.0,
+        blank=True,
+        null=True,
+        verbose_name=_("Mileage rate (₹/km)"),
+        help_text=_("If set with mileage km, amount can be computed as km × rate"),
+    )
     allowance_id = models.ForeignKey(
         Allowance, on_delete=models.SET_NULL, null=True, editable=False
     )
@@ -2397,6 +2407,31 @@ class Reimbursement(HorillaModel):
             raise ValidationError({"attachment": "This field is required"})
         if self.type == "travel" and self.attachment is None:
             raise ValidationError({"attachment": "This field is required"})
+        if self.type in ("reimbursement", "travel"):
+            settings_row = EncashmentGeneralSettings.objects.first()
+            if (
+                settings_row
+                and settings_row.max_claim_amount
+                and float(self.amount or 0) > float(settings_row.max_claim_amount)
+            ):
+                raise ValidationError(
+                    {
+                        "amount": _(
+                            "Amount exceeds the company claim limit of ₹%(limit)s."
+                        )
+                        % {"limit": settings_row.max_claim_amount}
+                    }
+                )
+            if (
+                self.type == "travel"
+                and (self.mileage_km or 0) > 0
+                and not (self.mileage_rate or 0)
+                and settings_row
+                and settings_row.default_mileage_rate
+            ):
+                self.mileage_rate = settings_row.default_mileage_rate
+            if (self.mileage_km or 0) > 0 and (self.mileage_rate or 0) > 0:
+                self.amount = round(float(self.mileage_km) * float(self.mileage_rate), 2)
         if self.type == "leave_encashment" and self.leave_type_id is None:
             raise ValidationError({"leave_type_id": "This field is required"})
         if self.type == "leave_encashment":
@@ -2417,6 +2452,12 @@ class Reimbursement(HorillaModel):
             if self.status == "approved" and self.allowance_id is None:
                 if self.type == "reimbursement":
                     proceed = True
+                elif self.type == "travel":
+                    proceed = True
+                    if (self.mileage_km or 0) > 0 and (self.mileage_rate or 0) > 0:
+                        self.amount = round(
+                            float(self.mileage_km) * float(self.mileage_rate), 2
+                        )
                 elif self.type == "bonus_encashment":
                     proceed = False
                     bonus_points = BonusPoint.objects.get(employee_id=self.employee_id)
@@ -2638,11 +2679,20 @@ class PayrollGeneralSetting(models.Model):
 
 class EncashmentGeneralSettings(models.Model):
     """
-    BonusPointGeneralSettings model
+    BonusPointGeneralSettings / expense policy defaults
     """
 
     bonus_amount = models.IntegerField(default=1)
     leave_amount = models.IntegerField(blank=True, null=True, verbose_name="Amount")
+    max_claim_amount = models.FloatField(
+        default=0,
+        verbose_name=_("Max reimbursement claim (₹)"),
+        help_text=_("0 = no limit. Applies to reimbursement and travel claims."),
+    )
+    default_mileage_rate = models.FloatField(
+        default=0,
+        verbose_name=_("Default mileage rate (₹/km)"),
+    )
     objects = models.Manager()
 
 

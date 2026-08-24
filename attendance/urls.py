@@ -433,6 +433,11 @@ urlpatterns = [
         name="dashboard-missing-punches",
     ),
     path(
+        "regularize-missing-punch/<int:record_id>/",
+        attendance_dashboard.regularize_missing_punch,
+        name="regularize-missing-punch",
+    ),
+    path(
         "department-overtime-chart/",
         attendance_dashboard.department_overtime_chart,
         name="department-overtime-chart",

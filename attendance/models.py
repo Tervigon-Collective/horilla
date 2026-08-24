@@ -238,6 +238,7 @@ class Attendance(HorillaModel):
         ("create_request", _("Create Request")),
         ("update_request", _("Update Request")),
         ("created_request", _("Created Request")),
+        ("missing_punch", _("Missing Punch")),
     ]
 
     employee_id = models.ForeignKey(
