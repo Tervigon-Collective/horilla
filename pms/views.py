@@ -301,7 +301,7 @@ def view_key_result(request):
 
 @login_required
 @hx_request_required
-# @permission_required("pms.view_keyresult")
+@permission_required("pms.view_keyresult")
 def filter_key_result(request):
     """
     Filter and retrieve a list of key results based on the provided query parameters.
@@ -993,9 +993,15 @@ def objective_detailed_view_key_result_status(request, obj_id, kr_id):
     Returns:
         All the filtered and searched object will based on userlevel.
     """
+    from pms.methods import can_mutate_employee_key_result
 
     status = request.POST.get("key_result_status")
-    employee_key_result = EmployeeKeyResult.objects.get(id=kr_id)
+    employee_key_result = EmployeeKeyResult.objects.filter(id=kr_id).first()
+    if not employee_key_result or not can_mutate_employee_key_result(
+        request, employee_key_result
+    ):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
 
     current_value = employee_key_result.current_value
     target_value = employee_key_result.target_value
@@ -1023,13 +1029,25 @@ def objective_detailed_view_current_value(request, kr_id):
     Returns:
         All the history of EmployeeObjective.
     """
+    from pms.methods import can_mutate_employee_key_result
+
     if request.method == "POST":
         current_value = request.POST.get("current_value")
-        employee_key_result = EmployeeKeyResult.objects.get(id=kr_id)
+        employee_key_result = EmployeeKeyResult.objects.filter(id=kr_id).first()
+        if not employee_key_result or not can_mutate_employee_key_result(
+            request, employee_key_result
+        ):
+            messages.error(request, _("You don't have permission."))
+            return HorillaRedirect(request)
+        try:
+            current_value_int = int(current_value)
+        except (TypeError, ValueError):
+            messages.error(request, _("Invalid current value"))
+            return HorillaRedirect(request)
         target_value = employee_key_result.target_value
         objective_id = employee_key_result.employee_objective_id.id
-        if int(current_value) < target_value:
-            employee_key_result.current_value = current_value
+        if current_value_int < target_value:
+            employee_key_result.current_value = current_value_int
             employee_key_result.save()
             messages.info(
                 request,
@@ -1038,8 +1056,8 @@ def objective_detailed_view_current_value(request, kr_id):
             )
             return redirect(objective_detailed_view_activity, objective_id)
 
-        elif int(current_value) == target_value:
-            employee_key_result.current_value = current_value
+        elif current_value_int == target_value:
+            employee_key_result.current_value = current_value_int
             employee_key_result.status = "Closed"
             employee_key_result.save()
             messages.info(
@@ -1053,7 +1071,7 @@ def objective_detailed_view_current_value(request, kr_id):
                 response.content.decode("utf-8") + "<script>location.reload();</script>"
             )
 
-        elif int(current_value) > target_value:
+        elif current_value_int > target_value:
             messages.warning(request, _("Current value is greater than target value"))
             return redirect(objective_detailed_view_activity, objective_id)
         messages.error(request, _("Error occurred during current value updation"))
@@ -1074,6 +1092,14 @@ def objective_archive(request, id):
         return HorillaRedirect(
             request, message=_("No Objective found matching the query.")
         )
+    actor = request.user.employee_get
+    if not (
+        request.user.is_superuser
+        or request.user.has_perm("pms.change_objective")
+        or (actor and actor in objective.managers.all())
+    ):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
 
     if objective.archive:
         objective.archive = False
@@ -1484,7 +1510,7 @@ def key_result_creation_htmx(request, id):
 
 @login_required
 @hx_request_required
-@manager_can_enter(perm="pms.update_employeekeyresult")
+@manager_can_enter(perm="pms.change_employeekeyresult")
 def key_result_update(request, id):
     """
     This view is used to update key result, using htmx
@@ -3334,7 +3360,18 @@ def view_single_anonymous_feedback(request, obj_id):
     Returns:
     Renders the 'anonymous/single_view.html' template with the details of the specified anonymous feedback.
     """
-    feedback = AnonymousFeedback.objects.get(id=obj_id)
+    from pms.methods import get_anonymous_feedbacks
+
+    feedback = AnonymousFeedback.objects.filter(id=obj_id).first()
+    if not feedback:
+        messages.error(request, _("Feedback not found."))
+        return HorillaRedirect(request)
+    allowed = get_anonymous_feedbacks(request.user.employee_get)
+    if request.user.has_perm("pms.view_anonymousfeedback"):
+        pass
+    elif not allowed.filter(pk=feedback.pk).exists():
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
     return render(request, "anonymous/single_view.html", {"feedback": feedback})
 
 
@@ -3587,9 +3624,12 @@ def get_keyresult_data(request):
                 f'<input type="number" name="target_value" value="{key_result.target_value}" class="oh-input w-100 form-control test test" placeholder="Target Value" id="id_target_value">'
             )
         if request.GET.get("data-update") == "end_date":
-            start_date = datetime.datetime.strptime(
-                request.GET.get("start_date"), "%Y-%m-%d"
-            )
+            start_date_raw = request.GET.get("start_date")
+            if not start_date_raw or key_result.duration is None:
+                return HttpResponse(
+                    f'<input type="date" name="end_date" value="" class="oh-input w-100 form-control" placeholder="End Date" id="id_end_date">'
+                )
+            start_date = datetime.datetime.strptime(start_date_raw, "%Y-%m-%d")
             end_date = (start_date + relativedelta(days=key_result.duration)).date()
             return HttpResponse(
                 f'<input type="date" name="end_date" value="{end_date}" class="oh-input w-100 form-control" placeholder="End Date" id="id_end_date">'
@@ -4145,7 +4185,7 @@ def bonus_setting_form_values(request):
 
 @login_required
 @hx_request_required
-@permission_required("pms.update_bonuspointsetting")
+@permission_required("pms.change_bonuspointsetting")
 def update_isactive_bonuspoint_setting(request, obj_id):
     """
     htmx function to update is active field in BonusPointSetting.

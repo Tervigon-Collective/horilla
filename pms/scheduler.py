@@ -30,6 +30,12 @@ def cyclic_feedback_creation():
             feedback_obj.start_date = feedback.cyclic_next_start_date
             feedback_obj.end_date = feedback.cyclic_next_end_date
             feedback_obj.save()
+            feedback_obj.colleague_id.set(feedback.colleague_id.all())
+            feedback_obj.subordinate_id.set(feedback.subordinate_id.all())
+            feedback_obj.others_id.set(feedback.others_id.all())
+            feedback_obj.employee_key_results_id.set(
+                feedback.employee_key_results_id.all()
+            )
 
             feedback.cyclic_feedback = False
             feedback.save()

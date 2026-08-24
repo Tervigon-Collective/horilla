@@ -1,0 +1,95 @@
+{% extends "index.html" %}
+{% load i18n static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+
+<div class="is-page">
+    <div class="is-page-head">
+        <h1 class="is-page-head__title">{% trans "Approval Inbox" %}</h1>
+        <p class="is-page-head__desc">
+            {% trans "Unified pending requests across leave, attendance, assets, shift, work type, and reimbursements." %}
+        </p>
+    </div>
+
+    <div class="is-toolbar">
+        <form method="get" class="is-toolbar__form">
+            <label class="oh-label">{% trans "Filter" %}</label>
+            <select name="type" class="oh-select oh-select-2" onchange="this.form.submit()">
+                {% for value, label in type_options %}
+                <option value="{{ value }}" {% if value == type_filter %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </form>
+        {% if not inbox.is_restricted %}
+        <div class="is-toolbar__actions">
+            <span class="oh-checkpoint-badge text-info">{{ inbox.counts.total }} {% trans "pending" %}</span>
+            <a href="{% url 'approval-inbox-export' %}?type={{ type_filter }}&format=xlsx" class="oh-btn oh-btn--light oh-btn--sm">
+                <ion-icon name="download-outline"></ion-icon> Excel
+            </a>
+            <a href="{% url 'approval-inbox-export' %}?type={{ type_filter }}&format=csv" class="oh-btn oh-btn--light oh-btn--sm">CSV</a>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="is-section">
+        <div class="is-section__body is-section__body--flush">
+            <div class="is-table-wrap">
+                <table class="is-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Type" %}</th>
+                            <th>{% trans "Employee" %}</th>
+                            <th>{% trans "Summary" %}</th>
+                            <th>{% trans "Requested" %}</th>
+                            <th class="is-actions">{% trans "Actions" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody id="approval-inbox-body">
+                        {% for item in inbox.results %}
+                        {% include "base/approval_inbox_row.html" with item=item %}
+                        {% empty %}
+                        <tr>
+                            <td colspan="5" style="text-align:center;padding:32px;" class="is-muted">{% trans "No pending items." %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.querySelectorAll('.inbox-act').forEach(btn => {
+    btn.addEventListener('click', async function () {
+        const type = this.dataset.type;
+        const id = this.dataset.id;
+        const action = this.dataset.action;
+        if (action === 'reject' && !confirm('{% trans "Reject this request?" %}')) return;
+        let payload = {};
+        if (type === 'asset' && action === 'approve') {
+            const assetId = prompt('{% trans "Enter asset ID to assign:" %}');
+            if (!assetId) return;
+            payload = { asset_id: assetId };
+        }
+        const csrf = document.querySelector('[name=csrfmiddlewaretoken]')?.value
+            || document.cookie.match(/csrftoken=([^;]+)/)?.[1];
+        const res = await fetch('{% url "approval-inbox-action" %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrf,
+            },
+            body: JSON.stringify({ type, id, action, payload }),
+        });
+        if (res.ok) {
+            document.getElementById(`inbox-row-${type}-${id}`)?.remove();
+        } else {
+            const data = await res.json().catch(() => ({}));
+            alert(data.error || '{% trans "Action failed." %}');
+        }
+    });
+});
+</script>
+{% endblock content %}

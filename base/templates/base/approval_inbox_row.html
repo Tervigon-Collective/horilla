@@ -1,0 +1,30 @@
+{% load i18n static %}
+<tr id="inbox-row-{{ item.type }}-{{ item.id }}" class="{% if not item.can_act %}opacity-75{% endif %}">
+    <td>
+        <span class="is-badge is-badge--muted">{{ item.type|cut:"_" }}</span>
+    </td>
+    <td>
+        <strong>{{ item.employee.full_name }}</strong>
+        {% if item.employee.badge_id %}
+        <div class="text-muted" style="font-size:12px;">{{ item.employee.badge_id }}</div>
+        {% endif %}
+    </td>
+    <td>{{ item.summary }}</td>
+    <td style="white-space:nowrap;">{{ item.requested_at|default:"—" }}</td>
+    <td class="is-actions">
+        {% if item.can_act %}
+        <div class="oh-btn-group">
+            <button type="button" class="oh-btn oh-btn--success oh-btn--sm inbox-act"
+                    data-type="{{ item.type }}" data-id="{{ item.id }}" data-action="approve">
+                {% trans "Approve" %}
+            </button>
+            <button type="button" class="oh-btn oh-btn--danger oh-btn--sm inbox-act"
+                    data-type="{{ item.type }}" data-id="{{ item.id }}" data-action="reject">
+                {% trans "Reject" %}
+            </button>
+        </div>
+        {% else %}
+        <span class="text-muted" style="font-size:12px;">{% trans "Awaiting approval" %}</span>
+        {% endif %}
+    </td>
+</tr>

@@ -30,6 +30,8 @@ from horilla_views.generic.cbv.views import (
 from leave.filters import AssignedLeaveFilter
 from leave.forms import AssignLeaveForm, AvailableLeaveColumnExportForm
 from leave.models import AvailableLeave
+from leave.cbv.accessibility import apply_leave_nav_filter_context
+from leave.methods import scope_available_leave
 
 
 @method_decorator(login_required, name="dispatch")
@@ -244,6 +246,10 @@ class AssignedLeaveNavView(HorillaNavView):
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
 
+    def get_context_data(self, **kwargs: Any):
+        context = super().get_context_data(**kwargs)
+        return apply_leave_nav_filter_context(self, context)
+
 
 @method_decorator(login_required, name="dispatch")
 @method_decorator(hx_request_required, name="dispatch")
@@ -259,9 +265,13 @@ class AssignedLeaveExport(TemplateView):
         """
         context to get data
         """
-        leaves = AvailableLeave.objects.all()
+        leaves = scope_available_leave(
+            self.request, AvailableLeave.objects.all()
+        )
         export_column = AvailableLeaveColumnExportForm()
-        export_filter = AssignedLeaveFilter(queryset=leaves)
+        export_filter = AssignedLeaveFilter(
+            queryset=leaves, request=self.request
+        )
         context = super().get_context_data(**kwargs)
         context["export_column"] = export_column
         context["export_filter"] = export_filter

@@ -20,6 +20,11 @@ SUBMENUS = [
         "accessibility": "leave.sidebar.dashboard_accessibility",
     },
     {
+        "menu": _("Approval Inbox"),
+        "redirect": reverse_lazy("approval-inbox"),
+        "accessibility": "leave.sidebar.approval_inbox_accessibility",
+    },
+    {
         "menu": _("My Leave Requests"),
         "redirect": reverse_lazy("user-request-view"),
     },
@@ -74,6 +79,12 @@ def dashboard_accessibility(request, submenu, user_perms, *args, **kwargs):
             reverse_lazy("leave-employee-dashboard") + "?dashboard=true"
         )
     return True
+
+
+def approval_inbox_accessibility(request, submenu, user_perms, *args, **kwargs):
+    from base.pending_approvals import get_approval_context
+
+    return get_approval_context(request.user)["can_approve"]
 
 
 def leave_request_accessibility(request, submenu, user_perms, *args, **kwargs):

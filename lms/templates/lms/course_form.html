@@ -1,0 +1,29 @@
+{% extends "index.html" %}
+{% load i18n %}
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+<div class="is-page">
+  <div class="is-page-head">
+    <h1 class="is-page-head__title">{% if course %}{% trans "Edit course" %}{% else %}{% trans "New course" %}{% endif %}</h1>
+  </div>
+  <form method="post" class="is-section">
+    {% csrf_token %}
+    <div class="is-section__body" style="display:grid;gap:12px;max-width:520px;">
+      <div>
+        <label class="is-label">{% trans "Title" %}</label>
+        <input class="oh-input" name="title" required value="{{ course.title|default:'' }}">
+      </div>
+      <div>
+        <label class="is-label">{% trans "Description" %}</label>
+        <textarea class="oh-input" name="description" rows="3">{{ course.description|default:'' }}</textarea>
+      </div>
+      <div>
+        <label class="is-label">{% trans "Duration (hours)" %}</label>
+        <input class="oh-input" type="number" step="0.5" name="duration_hours" value="{{ course.duration_hours|default:0 }}">
+      </div>
+      <label><input type="checkbox" name="is_mandatory" value="1" {% if course.is_mandatory %}checked{% endif %}> {% trans "Mandatory" %}</label>
+      <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Save" %}</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

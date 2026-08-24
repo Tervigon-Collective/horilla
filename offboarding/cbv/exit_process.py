@@ -294,6 +294,7 @@ class ExitProcessDetailView(HorillaDetailedView):
         (_("Notice Period start Date"), "notice_period_starts"),
         (_("Notice Period end Date"), "notice_period_ends"),
         (_("Stage"), "get_stage_col"),
+        (_("F&F Settlement"), "fnf_settlement_link", "custom_template"),
         (_("Tasks"), "detail_view_task_custom", "custom_template"),
     ]
     cols = {

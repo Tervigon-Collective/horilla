@@ -206,4 +206,11 @@ def process_attendance_data(attendance_dicts):
             error_list.append(attendance_data)
     if attendance_list:
         Attendance.objects.bulk_create(attendance_list)
+        for attendance in attendance_list:
+            saved = Attendance.objects.filter(
+                employee_id=attendance.employee_id,
+                attendance_date=attendance.attendance_date,
+            ).first()
+            if saved:
+                saved.save()
     return error_list

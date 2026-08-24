@@ -425,23 +425,7 @@ class StageChangeForm(forms.ModelForm):
     def clean(self):
         cleaned_data = super().clean()
         new_stage = cleaned_data.get("onboarding_stage_id")
-        old_stage = self.instance.onboarding_stage_id
-        if (
-            new_stage
-            and old_stage
-            and new_stage.sequence is not None
-            and old_stage.sequence is not None
-        ):
-            pending_tasks = self.instance.pending_required_tasks(old_stage)
-            if pending_tasks.exists():
-                task_titles = ", ".join(
-                    pending_tasks.values_list("task_title", flat=True)
-                )
-                raise forms.ValidationError(
-                    _(
-                        "Complete the following required task(s) before "
-                        "moving to the next stage: %(tasks)s"
-                    )
-                    % {"tasks": task_titles}
-                )
+        blocked = self.instance.forward_blocked_message(new_stage)
+        if blocked:
+            raise forms.ValidationError(blocked)
         return cleaned_data

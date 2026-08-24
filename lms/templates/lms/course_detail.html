@@ -1,0 +1,95 @@
+{% extends "index.html" %}
+{% load i18n %}
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+<div class="is-page">
+  <div class="is-page-head">
+    <h1 class="is-page-head__title">{{ course.title }}</h1>
+    <p class="is-page-head__desc">{{ course.description|default:"" }}</p>
+  </div>
+  <div class="is-actions-row" style="margin-bottom:16px;">
+    <a href="{% url 'lms-course-list' %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "All courses" %}</a>
+    {% if perms.lms.change_course %}
+    <a href="{% url 'lms-course-edit' pk=course.pk %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Edit" %}</a>
+    {% endif %}
+  </div>
+
+  <div class="is-section" style="margin-bottom:16px;">
+    <div class="is-section__head"><h2 class="is-section__title">{% trans "Lessons" %}</h2></div>
+    <div class="is-section__body">
+      <ol>
+        {% for lesson in lessons %}
+        <li style="margin-bottom:8px;">
+          <strong>{{ lesson.title }}</strong>
+          {% if lesson.duration_minutes %} ({{ lesson.duration_minutes }} {% trans "min" %}){% endif %}
+          {% if my_enrollment %}
+            {% with done=False %}
+            {% for p in my_enrollment.lesson_progress.all %}
+              {% if p.lesson_id_id == lesson.id and p.completed %}{% with done=True %}{% endwith %}{% endif %}
+            {% endfor %}
+            {% endwith %}
+            <form method="post" action="{% url 'lms-complete-lesson' enrollment_id=my_enrollment.pk lesson_id=lesson.pk %}" style="display:inline;">
+              {% csrf_token %}
+              <button type="submit" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Mark complete" %}</button>
+            </form>
+          {% endif %}
+          {% if lesson.content %}<div class="is-muted" style="font-size:13px;">{{ lesson.content|truncatechars:160 }}</div>{% endif %}
+        </li>
+        {% empty %}
+        <li class="is-muted">{% trans "No lessons yet." %}</li>
+        {% endfor %}
+      </ol>
+      {% if perms.lms.add_lesson %}
+      <form method="post" action="{% url 'lms-lesson-add' pk=course.pk %}" style="display:grid;gap:8px;max-width:480px;margin-top:12px;">
+        {% csrf_token %}
+        <input class="oh-input oh-input--sm" name="title" placeholder="{% trans 'Lesson title' %}" required>
+        <input class="oh-input oh-input--sm" type="number" name="duration_minutes" placeholder="{% trans 'Minutes' %}" value="30">
+        <textarea class="oh-input" name="content" rows="2" placeholder="{% trans 'Content / notes' %}"></textarea>
+        <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Add lesson" %}</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if perms.lms.add_courseenrollment %}
+  <div class="is-section" style="margin-bottom:16px;">
+    <div class="is-section__head"><h2 class="is-section__title">{% trans "Enroll employees" %}</h2></div>
+    <div class="is-section__body">
+      <form method="post" action="{% url 'lms-enroll' pk=course.pk %}">
+        {% csrf_token %}
+        <select name="employee_ids" class="oh-select" multiple size="8" style="min-width:280px;">
+          {% for emp in employees %}
+          <option value="{{ emp.pk }}">{{ emp.get_full_name }}</option>
+          {% endfor %}
+        </select>
+        <div style="margin-top:8px;">
+          <label class="is-label">{% trans "Due date" %}</label>
+          <input type="date" name="due_date" class="oh-input oh-input--sm">
+        </div>
+        <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm" style="margin-top:8px;">{% trans "Enroll selected" %}</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="is-section">
+    <div class="is-section__head"><h2 class="is-section__title">{% trans "Enrollments" %}</h2></div>
+    <div class="is-section__body is-section__body--flush">
+      <table class="is-table">
+        <thead><tr><th>{% trans "Employee" %}</th><th>{% trans "Status" %}</th><th>{% trans "Progress" %}</th></tr></thead>
+        <tbody>
+          {% for e in enrollments %}
+          <tr>
+            <td>{{ e.employee_id.get_full_name }}</td>
+            <td>{{ e.get_status_display }}</td>
+            <td>{{ e.progress_percent }}%</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="3" class="is-muted">{% trans "No enrollments." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

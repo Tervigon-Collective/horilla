@@ -1,0 +1,149 @@
+{% extends "index.html" %}
+{% load i18n horillafilters static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+
+<div class="is-page">
+{% for message in messages %}
+<div class="oh-alert-container">
+    <div class="oh-alert oh-alert--animated {{ message.tags }}">{{ message }}</div>
+</div>
+{% endfor %}
+
+<div class="is-page-head">
+    <h1 class="is-page-head__title">{% trans "Form 16" %}</h1>
+    <p class="is-page-head__desc">
+        {{ employee.get_full_name }} · FY {{ financial_year }} · {{ company.company|default:"" }}
+    </p>
+</div>
+<div class="is-actions-row" style="margin-bottom:20px;">
+    <a href="{% url 'form16-list' %}?fy={{ financial_year_start }}" class="oh-btn oh-btn--light oh-btn--sm">
+        <ion-icon name="arrow-back-outline"></ion-icon>
+        {% trans "Back to list" %}
+    </a>
+    <a href="{% url 'employee-statutory-profile' employee.id %}" class="oh-btn oh-btn--light oh-btn--sm">
+        <ion-icon name="person-outline"></ion-icon>
+        {% trans "Statutory Profile" %}
+    </a>
+    {% if payslip_count > 0 %}
+    <a class="oh-btn oh-btn--secondary oh-btn--sm" href="?fy={{ financial_year_start }}&save=1">
+        <ion-icon name="save-outline"></ion-icon>
+        {% trans "Save record" %}
+    </a>
+    <a class="oh-btn oh-btn--secondary oh-btn--sm" href="?fy={{ financial_year_start }}&format=pdf" target="_blank">
+        <ion-icon name="download-outline"></ion-icon>
+        {% trans "Download PDF" %}
+    </a>
+    {% endif %}
+</div>
+
+<div class="is-page__content">
+    {% if payslip_count == 0 %}
+    <div class="is-section">
+        <div class="is-empty">
+            <img src="{% static 'images/ui/no_records.svg' %}" alt="" style="width:100px;opacity:0.75;">
+            <h3 class="is-empty__title">{% trans "No confirmed payslips in this FY" %}</h3>
+            <p class="is-empty__desc">{% trans "Generate and confirm payslips for April–March. Enable India Statutory Payroll first." %}</p>
+            <a href="{% url 'view-payslip' %}" class="oh-btn oh-btn--secondary">
+                <ion-icon name="receipt-outline"></ion-icon>
+                {% trans "Payslips" %}
+            </a>
+        </div>
+    </div>
+    {% else %}
+
+    <div class="is-emp-header">
+        <div class="oh-profile oh-profile--md">
+            <div class="oh-profile__avatar">
+                <img src="{{ employee.get_avatar }}" class="oh-profile__image" width="72" height="72"
+                     alt="{{ employee.get_full_name }}" />
+            </div>
+        </div>
+        <div>
+            <h2 class="is-strong" style="font-size:18px;margin-bottom:4px;">{{ employee.get_full_name }}</h2>
+            <div class="is-emp-header__meta">
+                <span><span class="is-muted">{% trans "PAN" %}</span> <strong>{{ pan|default:"—" }}</strong></span>
+                <span><span class="is-muted">{% trans "UAN" %}</span> <strong>{{ uan|default:"—" }}</strong></span>
+                <span><span class="is-muted">{% trans "TDS Regime" %}</span> <strong>{{ regime|title }}</strong></span>
+                <span><span class="is-muted">{% trans "Payslips" %}</span> <strong>{{ payslip_count }}</strong></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="is-kpi-grid">
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--green">
+                <ion-icon name="trending-up-outline"></ion-icon>
+            </div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Gross Salary" %}</div>
+                <div class="is-kpi-card__value">{{ totals.gross_salary|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--amber">
+                <ion-icon name="remove-circle-outline"></ion-icon>
+            </div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "TDS Deducted" %}</div>
+                <div class="is-kpi-card__value">{{ totals.tds|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--blue">
+                <ion-icon name="wallet-outline"></ion-icon>
+            </div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "PF (Employee)" %}</div>
+                <div class="is-kpi-card__value">{{ totals.pf_employee|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--purple">
+                <ion-icon name="cash-outline"></ion-icon>
+            </div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Net Salary" %}</div>
+                <div class="is-kpi-card__value">{{ totals.net_salary|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+    </div>
+
+    {% if totals.months %}
+    <div class="is-section">
+        <div class="is-section__header">
+            <span class="is-section__icon"><ion-icon name="calendar-outline"></ion-icon></span>
+            <div>
+                <h3 class="is-section__title">{% trans "Monthly Breakdown" %}</h3>
+                <p class="is-section__desc">{% trans "Gross pay and TDS by payslip period" %}</p>
+            </div>
+        </div>
+        <div class="is-section__body is-section__body--flush">
+            <div class="is-table-wrap">
+                <table class="is-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Period" %}</th>
+                            <th>{% trans "Gross" %}</th>
+                            <th>{% trans "TDS" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for m in totals.months %}
+                        <tr>
+                            <td>{{ m.period }}</td>
+                            <td class="is-num">{{ m.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ m.tds|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
+</div>
+</div>
+{% endblock %}

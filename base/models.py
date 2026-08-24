@@ -1617,7 +1617,7 @@ class WorkTypeRequest(HorillaModel):
             approved=True,
             canceled=False,
             requested_date__exact=self.requested_date,
-        )
+        ).exclude(id=self.id)
         if approved_permanent_req:
             return True
         return False
@@ -1917,7 +1917,7 @@ class ShiftRequest(HorillaModel):
             approved=True,
             canceled=False,
             requested_date__exact=self.requested_date,
-        )
+        ).exclude(id=self.id)
         if approved_permanent_req:
             return True
         return False
@@ -2899,7 +2899,15 @@ class Holidays(HorillaModel):
         from django.db.models import Q
 
         today = today or date.today()
-        qs = Holidays.objects.filter(start_date__lte=today, end_date__gte=today)
+        qs = Holidays.objects.filter(
+            Q(start_date__lte=today, end_date__gte=today)
+            | Q(end_date__isnull=True, start_date=today)
+            | Q(
+                recurring=True,
+                start_date__month=today.month,
+                start_date__day=today.day,
+            )
+        )
         if employee is not None:
             qs = qs.filter(Q(is_specific=False) | Q(employees=employee))
         return qs

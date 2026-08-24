@@ -151,6 +151,103 @@ def is_task_manager(request, task_id):
     return False
 
 
+def can_mutate_task(request, task) -> bool:
+    """Edit / move / status-change this task (managers, members, or role perm)."""
+    if not task or not getattr(request.user, "is_authenticated", False):
+        return False
+    if request.user.is_superuser or request.user.has_perm("project.change_task"):
+        return True
+    if request.user.has_perm("project.change_project"):
+        return True
+    employee = getattr(request.user, "employee_get", None)
+    if not employee:
+        return False
+    project = getattr(task, "project", None)
+    if employee in task.task_managers.all() or employee in task.task_members.all():
+        return True
+    if project is None:
+        return False
+    return employee in project.managers.all() or employee in project.members.all()
+
+
+def can_delete_task(request, task) -> bool:
+    """Archive/delete this task — managers or delete_task, not plain members."""
+    if not task or not getattr(request.user, "is_authenticated", False):
+        return False
+    if request.user.is_superuser or request.user.has_perm("project.delete_task"):
+        return True
+    employee = getattr(request.user, "employee_get", None)
+    if not employee:
+        return False
+    if employee in task.task_managers.all():
+        return True
+    project = getattr(task, "project", None)
+    return bool(project and employee in project.managers.all())
+
+
+def can_mutate_project(request, project) -> bool:
+    """Update project status / stages (managers, members, or change_project)."""
+    if not project or not getattr(request.user, "is_authenticated", False):
+        return False
+    if request.user.is_superuser or request.user.has_perm("project.change_project"):
+        return True
+    employee = getattr(request.user, "employee_get", None)
+    if not employee:
+        return False
+    return employee in project.managers.all() or employee in project.members.all()
+
+
+def can_add_task_to_project(request, project) -> bool:
+    """Create a task on this project."""
+    if not project or not getattr(request.user, "is_authenticated", False):
+        return False
+    if request.user.is_superuser or request.user.has_perm("project.add_task"):
+        return True
+    employee = getattr(request.user, "employee_get", None)
+    if not employee:
+        return False
+    return employee in project.managers.all()
+
+
+def can_view_project(request, project) -> bool:
+    """View project details (member/manager or view_project)."""
+    if not project or not getattr(request.user, "is_authenticated", False):
+        return False
+    if request.user.is_superuser or request.user.has_perm("project.view_project"):
+        return True
+    return can_mutate_project(request, project)
+
+
+def can_view_task(request, task) -> bool:
+    """View task details / timesheets list."""
+    if not task or not getattr(request.user, "is_authenticated", False):
+        return False
+    if request.user.is_superuser or request.user.has_perm("project.view_task"):
+        return True
+    if request.user.has_perm("project.view_timesheet"):
+        return True
+    return can_mutate_task(request, task)
+
+
+def can_view_employee_timesheet(request, employee) -> bool:
+    """Self, reporting manager of that employee, or view_timesheet."""
+    if not employee or not getattr(request.user, "is_authenticated", False):
+        return False
+    if request.user.is_superuser or request.user.has_perm("project.view_timesheet"):
+        return True
+    actor = getattr(request.user, "employee_get", None)
+    if not actor:
+        return False
+    if employee == actor:
+        return True
+    try:
+        from base.methods import check_manager
+
+        return check_manager(actor, employee)
+    except Exception:
+        return False
+
+
 def time_sheet_update_permissions(request, time_sheet_id):
     timesheet = TimeSheet.find(time_sheet_id)
     if not timesheet:
@@ -171,15 +268,17 @@ def time_sheet_update_permissions(request, time_sheet_id):
 def time_sheet_delete_permissions(request, time_sheet_id):
     employee = request.user.employee_get
     timesheet = TimeSheet.objects.filter(id=time_sheet_id).first()
-    if (
-        request.user.has_perm("project.delete_timesheet")
-        or timesheet.employee_id == employee
-        or employee in timesheet.task_id.task_managers.all()
-        or employee in timesheet.task_id.project.managers.all()
-    ):
-        return True
-    else:
+    if not timesheet:
         return False
+    if request.user.has_perm("project.delete_timesheet") or timesheet.employee_id == employee:
+        return True
+    task = timesheet.task_id
+    if task is not None and employee in task.task_managers.all():
+        return True
+    project = timesheet.project_id or (task.project if task is not None else None)
+    if project is not None and employee in project.managers.all():
+        return True
+    return False
 
 
 def get_all_project_members_and_managers():

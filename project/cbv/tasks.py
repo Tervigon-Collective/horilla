@@ -395,11 +395,24 @@ class TaskCreateForm(HorillaFormView):
         return context
 
     def form_valid(self, form: TaskAllForm) -> HttpResponse:
+        from project.methods import can_add_task_to_project, can_mutate_task
+
         stage_id = self.kwargs.get("stage_id")
         if form.is_valid():
             if form.instance.pk:
+                if not can_mutate_task(self.request, form.instance):
+                    messages.error(self.request, _("You don't have permission."))
+                    return self.HttpResponse()
                 message = _(f"{self.form.instance} Updated")
             else:
+                project = form.cleaned_data.get("project") or getattr(
+                    form.instance, "project", None
+                )
+                if not can_add_task_to_project(self.request, project) and not (
+                    self.request.user.has_perm("project.add_task")
+                ):
+                    messages.error(self.request, _("You don't have permission."))
+                    return self.HttpResponse()
                 message = _("New Task created")
             form.save()
             messages.success(self.request, _(message))

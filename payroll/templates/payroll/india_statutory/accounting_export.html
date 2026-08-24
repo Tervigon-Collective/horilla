@@ -1,0 +1,99 @@
+{% extends "index.html" %}
+{% load i18n horillafilters static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+
+<div class="is-page">
+{% include "payroll/india_statutory/nav.html" with active_tab="accounting" company=company settings=settings %}
+
+<div class="is-page__content">
+    <div class="is-toolbar">
+        <form method="get" class="is-toolbar__form">
+            <label class="oh-label">{% trans "Period" %}</label>
+            <select name="month" class="oh-select oh-select-2">
+                {% for opt in month_options %}
+                <option value="{{ opt.value }}" {% if opt.value == selected_month %}selected{% endif %}>{{ opt.label }}</option>
+                {% endfor %}
+            </select>
+            <select name="year" class="oh-select oh-select-2">
+                {% for y in year_options %}
+                <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Apply" %}</button>
+        </form>
+    </div>
+
+    {% include "payroll/india_statutory/_import_export_panel.html" %}
+
+    <div class="is-kpi-grid is-kpi-grid--3">
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--blue"><ion-icon name="people-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Employees" %}</div>
+                <div class="is-kpi-card__value">{{ journal_data.employee_count }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--green"><ion-icon name="trending-up-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Gross (Dr)" %}</div>
+                <div class="is-kpi-card__value">{{ journal_data.totals.gross|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--purple"><ion-icon name="cash-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Net Pay (Cr)" %}</div>
+                <div class="is-kpi-card__value">{{ journal_data.totals.net|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="is-section">
+        <div class="is-section__header">
+            <span class="is-section__icon"><ion-icon name="book-outline"></ion-icon></span>
+            <div>
+                <h3 class="is-section__title">{% trans "Payroll journal preview" %}</h3>
+                <p class="is-section__desc">{% trans "Per-employee gross, statutory deductions, and net pay for the selected month." %}</p>
+            </div>
+        </div>
+        <div class="is-section__body is-section__body--flush">
+            <div class="is-table-wrap">
+                <table class="is-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Employee" %}</th>
+                            <th>{% trans "Badge ID" %}</th>
+                            <th>{% trans "Gross" %}</th>
+                            <th>{% trans "PF" %}</th>
+                            <th>{% trans "ESI" %}</th>
+                            <th>{% trans "TDS" %}</th>
+                            <th>{% trans "Net" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in journal_data.rows %}
+                        <tr>
+                            <td>{{ row.employee.get_full_name }}</td>
+                            <td>{{ row.badge_id|default:"—" }}</td>
+                            <td class="is-num">{{ row.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.pf|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.esi|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.tds|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.net|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="7" class="is-empty-cell is-muted">{% trans "No payslips for this period." %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+</div>
+{% endblock content %}

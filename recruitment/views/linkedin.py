@@ -15,7 +15,7 @@ from recruitment.models import LinkedInAccount
 
 
 @login_required
-@permission_required("recruitment.update_linkedinaccount")
+@permission_required("recruitment.change_linkedinaccount")
 def update_isactive_linkedin(request, obj_id):
     """
     htmx function to update is active field in LinkedInAccount.

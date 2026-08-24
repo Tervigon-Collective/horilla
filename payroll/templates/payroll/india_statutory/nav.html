@@ -1,0 +1,62 @@
+{% load i18n %}
+<div class="is-page-head">
+    <h1 class="is-page-head__title">{% trans "India Statutory Payroll" %}</h1>
+    {% if company %}
+    <p class="is-page-head__desc">
+        {{ company.company|default:company }}
+        {% if settings %}
+        · {% if settings.is_enabled %}
+        <span class="oh-checkpoint-badge text-success mb-0">{% trans "Active" %}</span>
+        {% else %}
+        <span class="oh-checkpoint-badge text-danger mb-0">{% trans "Disabled" %}</span>
+        {% endif %}
+        {% endif %}
+    </p>
+    {% endif %}
+</div>
+<nav class="is-tabs" aria-label="{% trans 'India statutory navigation' %}">
+    <a href="{% url 'india-statutory-settings' %}"
+       class="is-tabs__link {% if active_tab == 'settings' %}is-tabs__link--active{% endif %}">
+        <ion-icon name="settings-outline"></ion-icon>
+        {% trans "Settings" %}
+    </a>
+    <a href="{% url 'form16-list' %}"
+       class="is-tabs__link {% if active_tab == 'form16' %}is-tabs__link--active{% endif %}">
+        <ion-icon name="document-text-outline"></ion-icon>
+        {% trans "Form 16" %}
+    </a>
+    <a href="{% url 'challan-list' %}"
+       class="is-tabs__link {% if active_tab == 'challan' %}is-tabs__link--active{% endif %}">
+        <ion-icon name="cloud-download-outline"></ion-icon>
+        {% trans "Challans" %}
+    </a>
+    <a href="{% url 'statutory-register' %}"
+       class="is-tabs__link {% if active_tab == 'register' %}is-tabs__link--active{% endif %}">
+        <ion-icon name="list-outline"></ion-icon>
+        {% trans "Registers" %}
+    </a>
+    <a href="{% url 'form24q-list' %}"
+       class="is-tabs__link {% if active_tab == 'form24q' %}is-tabs__link--active{% endif %}">
+        <ion-icon name="reader-outline"></ion-icon>
+        {% trans "Form 24Q" %}
+    </a>
+    <a href="{% url 'accounting-export-list' %}"
+       class="is-tabs__link {% if active_tab == 'accounting' %}is-tabs__link--active{% endif %}">
+        <ion-icon name="book-outline"></ion-icon>
+        {% trans "Accounting" %}
+    </a>
+    <a href="{% url 'traces-efiling' %}"
+       class="is-tabs__link {% if active_tab == 'traces' %}is-tabs__link--active{% endif %}">
+        <ion-icon name="navigate-outline"></ion-icon>
+        {% trans "TRACES" %}
+    </a>
+    <a href="{% url 'statutory-excel-hub' %}"
+       class="is-tabs__link {% if active_tab == 'excel' %}is-tabs__link--active{% endif %}">
+        <ion-icon name="cloud-upload-outline"></ion-icon>
+        {% trans "Excel" %}
+    </a>
+    <a href="{% url 'view-payslip' %}" class="is-tabs__link">
+        <ion-icon name="receipt-outline"></ion-icon>
+        {% trans "Payslips" %}
+    </a>
+</nav>

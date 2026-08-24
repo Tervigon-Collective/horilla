@@ -1211,7 +1211,9 @@ def export_data(request, *args, **kwargs):
         )
 
         buf = BytesIO()
-        pisa.CreatePDF(html, dest=buf)
+        result = pisa.CreatePDF(html, dest=buf)
+        if result.err:
+            return HttpResponse("Error generating PDF", status=500)
 
         return HttpResponse(
             buf.getvalue(),

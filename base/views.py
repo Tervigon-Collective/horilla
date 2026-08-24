@@ -1139,7 +1139,7 @@ def home(request):
 
 
 @login_required
-@manager_can_enter("employee.view_employeeworkinformation")
+@manager_can_enter("employee.change_employeeworkinformation")
 def employee_workinfo_complete(request):
 
     employees_with_pending = []
@@ -1169,7 +1169,7 @@ def employee_workinfo_complete(request):
             employee_id__employee_first_name__icontains=search,
             employee_id__is_active=True,
         ),
-        perm="employee.view_employeeworkinformation",
+        perm="employee.change_employeeworkinformation",
     )
     for employee in employees_workinfos:
         completed_field_count = sum(
@@ -1191,7 +1191,7 @@ def employee_workinfo_complete(request):
     emps = filtersubordinatesemployeemodel(
         request,
         Employee.objects.filter(employee_work_info__isnull=True),
-        perm="employee.view_employeeworkinformation",
+        perm="employee.change_employeeworkinformation",
     )
     for emp in emps:
         employees_with_pending.insert(
@@ -3580,7 +3580,10 @@ def rotating_shift_assign_import(request):
         new_dicts = {}
         rotating_shifts = RotatingShift.objects.all()
         shifts = EmployeeShift.objects.all()
-        file = request.FILES["file"]
+        file = request.FILES.get("file")
+        if not file:
+            messages.error(request, _("Please select a file to import."))
+            return redirect(request.META.get("HTTP_REFERER", "/"))
         file_extension = file.name.split(".")[-1].lower()
         error = False
         create_rotating_shift = True
@@ -4547,6 +4550,13 @@ def work_type_request_approve(request, id):
     if not work_type_request:
         messages.error(request, _("Work type request not found."))
         return JsonResponse({"result": False}) if is_ajax else HorillaRedirect(request)
+    actor = request.user.employee_get
+    if (
+        work_type_request.employee_id == actor
+        and not request.user.is_superuser
+    ):
+        messages.error(request, _("You cannot approve your own request."))
+        return JsonResponse({"result": False}) if is_ajax else HorillaRedirect(request)
     if not (
         (
             is_reportingmanger(request, work_type_request)
@@ -4602,6 +4612,11 @@ def work_type_request_bulk_approve(request):
     result = False
     for id in ids:
         work_type_request = WorkTypeRequest.objects.get(id=id)
+        if (
+            work_type_request.employee_id == request.user.employee_get
+            and not request.user.is_superuser
+        ):
+            continue
         if (
             is_reportingmanger(request, work_type_request)
             or request.user.has_perm("base.approve_worktyperequest")
@@ -5507,6 +5522,12 @@ def shift_request_approve(request, id):
         return JsonResponse({"result": False}) if is_ajax else HorillaRedirect(request)
 
     user = request.user
+    if (
+        shift_request.employee_id == user.employee_get
+        and not user.is_superuser
+    ):
+        messages.error(request, _("You cannot approve your own request."))
+        return JsonResponse({"result": False}) if is_ajax else HorillaRedirect(request)
     if not (
         (
             is_reportingmanger(request, shift_request)
@@ -5578,6 +5599,18 @@ def shift_allocation_request_approve(request, id):
             request, message=_("No shift request found matching the query.")
         )
 
+    actor = request.user.employee_get
+    # Only the reallocation target (or a shift approver) may accept availability.
+    if not (
+        shift_request.reallocate_to == actor
+        or request.user.is_superuser
+        or request.user.has_perm("base.approve_shiftrequest")
+        or request.user.has_perm("base.change_shiftrequest")
+        or is_reportingmanger(request, shift_request)
+    ):
+        messages.error(request, _("You don't have permission"))
+        return HorillaRedirect(request)
+
     if not shift_request.is_any_request_exists():
         shift_request.reallocate_approved = True
         shift_request.reallocate_canceled = False
@@ -5615,6 +5648,11 @@ def shift_request_bulk_approve(request):
     result = False
     for id in ids:
         shift_request = ShiftRequest.objects.get(id=id)
+        if (
+            shift_request.employee_id == request.user.employee_get
+            and not request.user.is_superuser
+        ):
+            continue
         if (
             is_reportingmanger(request, shift_request)
             or request.user.has_perm("base.approve_shiftrequest")
@@ -6142,14 +6180,10 @@ def save_date_format(request):
                 return JsonResponse({"success": True})
             else:
                 # Taking the company_name of the user
-                info = EmployeeWorkInformation.objects.filter(employee_id=employee)
+                info = EmployeeWorkInformation.objects.filter(employee_id=employee).first()
                 # Employee workinformation will not exists if he/she chnged the company, So can't save the date format.
-                if info.exists():
-                    for data in info:
-                        employee_company = data.company_id
-
-                    company_name = Company.objects.filter(company=employee_company)
-                    emp_company = company_name.first()
+                if info:
+                    emp_company = info.company_id
 
                     if emp_company is None:
                         messages.warning(
@@ -6188,19 +6222,13 @@ def get_date_format(request):
         return JsonResponse({"selected_format": date_format})
 
     # Taking the company_name of the user
-    info = EmployeeWorkInformation.objects.filter(employee_id=employee)
-    if info.exists():
-        for data in info:
-            employee_company = data.company_id
-        company_name = Company.objects.filter(company=employee_company)
-        emp_company = company_name.first()
-        if emp_company:
-            # Access the date_format attribute directly
-            date_format = emp_company.date_format if emp_company else "MMM. D, YYYY"
-        else:
-            date_format = "MMM. D, YYYY"
-    else:
-        date_format = "MMM. D, YYYY"
+    info = EmployeeWorkInformation.objects.filter(employee_id=employee).first()
+    emp_company = info.company_id if info else None
+    date_format = (
+        emp_company.date_format
+        if emp_company and emp_company.date_format
+        else "MMM. D, YYYY"
+    )
     # Return the date format as JSON response
     return JsonResponse({"selected_format": date_format})
 
@@ -6235,14 +6263,10 @@ def save_time_format(request):
                 return JsonResponse({"success": True})
             else:
                 # Taking the company_name of the user
-                info = EmployeeWorkInformation.objects.filter(employee_id=employee)
+                info = EmployeeWorkInformation.objects.filter(employee_id=employee).first()
                 # Employee workinformation will not exists if he/she chnged the company, So can't save the time format.
-                if info.exists():
-                    for data in info:
-                        employee_company = data.company_id
-
-                    company_name = Company.objects.filter(company=employee_company)
-                    emp_company = company_name.first()
+                if info:
+                    emp_company = info.company_id
 
                     if emp_company is None:
                         messages.warning(
@@ -6282,19 +6306,13 @@ def get_time_format(request):
         return JsonResponse({"selected_format": time_format})
 
     # Taking the company_name of the user
-    info = EmployeeWorkInformation.objects.filter(employee_id=employee)
-    if info.exists():
-        for data in info:
-            employee_company = data.company_id
-        company_name = Company.objects.filter(company=employee_company)
-        emp_company = company_name.first()
-        if emp_company:
-            # Access the date_format attribute directly
-            time_format = emp_company.time_format
-        else:
-            time_format = "hh:mm A"
-    else:
-        time_format = "hh:mm A"
+    info = EmployeeWorkInformation.objects.filter(employee_id=employee).first()
+    emp_company = info.company_id if info else None
+    time_format = (
+        emp_company.time_format
+        if emp_company and emp_company.time_format
+        else "hh:mm A"
+    )
     # Return the date format as JSON response
     return JsonResponse({"selected_format": time_format})
 
@@ -7910,7 +7928,7 @@ def holidays_excel_template(request):
         data_frame = pd.DataFrame(columns=columns)
         response = HttpResponse(content_type="application/ms-excel")
         response["Content-Disposition"] = (
-            'attachment; filename="assign_leave_type_excel.xlsx"'
+            'attachment; filename="holidays_template.xlsx"'
         )
         data_frame.to_excel(response, index=False)
         return response
@@ -7932,66 +7950,61 @@ def csv_holiday_import(file):
     - "Recurring": Indicates whether the holiday recurs ("yes" or "no")
     """
     holiday_list, error_list = [], []
-    file_name = settings.FILE_STORAGE.save(
-        "holiday_import.csv", ContentFile(file.read())
-    )
-    holiday_file = settings.FILE_STORAGE.path(file_name)
+    import io
+    content = file.read().decode("utf-8", errors="ignore")
+    csv_file = io.StringIO(content)
+    reader = csv.reader(csv_file)
+    next(reader)
+    total_rows = 0
 
-    with open(holiday_file, errors="ignore") as csv_file:
-        save = True
-        reader = csv.reader(csv_file)
-        next(reader)
+    for total_rows, row in enumerate(reader, start=1):
+        try:
+            name, start_date, end_date, recurring = row
+            holiday_dict = {
+                "Holiday Name": name,
+                "Start Date": start_date,
+                "End Date": end_date,
+                "Recurring": recurring,
+            }
+            save = True
 
-        for total_rows, row in enumerate(reader, start=1):
             try:
-                name, start_date, end_date, recurring = row
-                holiday_dict = {
-                    "Holiday Name": name,
-                    "Start Date": start_date,
-                    "End Date": end_date,
-                    "Recurring": recurring,
-                }
-
-                try:
-                    start_date = format_date(start_date)
-                except:
-                    save = False
-                    holiday_dict["Start Date Error"] = _("Invalid start date format.")
-                    error_list.append(holiday_dict)
-
-                try:
-                    end_date = format_date(end_date)
-                except:
-                    save = False
-                    holiday_dict["End Date Error"] = _("Invalid end date format.")
-                    error_list.append(holiday_dict)
-
-                if recurring.lower() not in ["yes", "no"]:
-                    save = False
-                    holiday_dict["Recurring Field Error"] = _(
-                        "Recurring must be yes or no."
-                    )
-                    error_list.append(holiday_dict)
-
-                if save:
-                    holiday_list.append(
-                        Holidays(
-                            name=name,
-                            start_date=start_date,
-                            end_date=end_date,
-                            recurring=recurring.lower() == "yes",
-                        )
-                    )
-
-            except Exception as e:
-                holiday_dict["Other Errors"] = str(e)
+                start_date = format_date(start_date)
+            except (ValueError, TypeError):
+                save = False
+                holiday_dict["Start Date Error"] = _("Invalid start date format.")
                 error_list.append(holiday_dict)
+
+            try:
+                end_date = format_date(end_date)
+            except (ValueError, TypeError):
+                save = False
+                holiday_dict["End Date Error"] = _("Invalid end date format.")
+                error_list.append(holiday_dict)
+
+            if recurring.lower() not in ["yes", "no"]:
+                save = False
+                holiday_dict["Recurring Field Error"] = _(
+                    "Recurring must be yes or no."
+                )
+                error_list.append(holiday_dict)
+
+            if save:
+                holiday_list.append(
+                    Holidays(
+                        name=name,
+                        start_date=start_date,
+                        end_date=end_date,
+                        recurring=recurring.lower() == "yes",
+                    )
+                )
+
+        except Exception as e:
+            holiday_dict = {"Other Errors": str(e)}
+            error_list.append(holiday_dict)
 
     if holiday_list:
         Holidays.objects.bulk_create(holiday_list)
-
-    if os.path.exists(holiday_file):
-        os.remove(holiday_file)
 
     return (error_list, total_rows)
 

@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from typing import Any
 
+from django.db.models import Q
 from django.urls import reverse
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
@@ -117,9 +118,10 @@ class DashboardOnLeave(HorillaListView):
             employee_id__is_active=True,
             status="approved",
             start_date__lte=today,
-            end_date__gte=today,
-        )
-        return queryset
+        ).filter(Q(end_date__gte=today) | Q(end_date__isnull=True))
+        from leave.methods import scope_leave_requests
+
+        return scope_leave_requests(self.request, queryset)
 
 
 @method_decorator(login_required, name="dispatch")

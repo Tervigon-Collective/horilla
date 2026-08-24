@@ -1,0 +1,139 @@
+{% extends "index.html" %}
+{% load i18n horillafilters static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+
+<div class="is-page">
+{% include "payroll/india_statutory/nav.html" with active_tab="challan" company=company settings=settings %}
+
+<div class="is-page__content">
+    <div class="is-toolbar">
+        <form method="get" class="is-toolbar__form">
+            <label class="oh-label">{% trans "Period" %}</label>
+            <select name="month" id="month" class="oh-select oh-select-2">
+                {% for opt in month_options %}
+                <option value="{{ opt.value }}" {% if opt.value == selected_month %}selected{% endif %}>{{ opt.label }}</option>
+                {% endfor %}
+            </select>
+            <select name="year" class="oh-select oh-select-2">
+                {% for y in year_options %}
+                <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Apply" %}</button>
+        </form>
+    </div>
+
+    {% include "payroll/india_statutory/_import_export_panel.html" %}
+
+    {% if oltas_url %}
+    <div class="is-io-panel">
+        <div class="is-io-panel__block">
+            <div class="is-io-panel__title">
+                {% trans "OLTAS e-Filing" %}
+                <span class="is-io-panel__badge">TXT</span>
+            </div>
+            <div class="is-io-panel__actions">
+                <a href="{{ oltas_url }}" class="is-io-btn is-io-btn--download">
+                    <ion-icon name="cloud-upload-outline"></ion-icon>
+                    <span>{% trans "Download OLTAS challan text file" %}</span>
+                </a>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="is-kpi-grid">
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--blue"><ion-icon name="people-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Employees" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.employee_count }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--green"><ion-icon name="wallet-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "PF (EE + ER)" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.pf_total|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--amber"><ion-icon name="medkit-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "ESI (EE + ER)" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.esi_total|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--purple"><ion-icon name="cash-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "TDS" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.tds|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+    </div>
+
+    {% if challan_data.rows %}
+    <div class="is-section">
+        <div class="is-section__body is-section__body--flush">
+            <div class="is-table-wrap">
+                <table class="is-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Employee" %}</th>
+                            <th>{% trans "UAN" %}</th>
+                            <th>{% trans "Gross" %}</th>
+                            <th>{% trans "PF (EE)" %}</th>
+                            <th>{% trans "PF (ER)" %}</th>
+                            <th>{% trans "ESI (EE)" %}</th>
+                            <th>{% trans "ESI (ER)" %}</th>
+                            <th>{% trans "PT" %}</th>
+                            <th>{% trans "TDS" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in challan_data.rows %}
+                        <tr>
+                            <td>{{ row.employee.get_full_name }}</td>
+                            <td>{{ row.uan|default:"—" }}</td>
+                            <td class="is-num">{{ row.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.pf_employee|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.pf_employer|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.esi_employee|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.esi_employer|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.pt|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.tds|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td colspan="2">{% trans "Total" %}</td>
+                            <td class="is-num">{{ challan_data.totals.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.pf_employee|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.pf_employer|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.esi_employee|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.esi_employer|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.pt|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.tds|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="is-section">
+        <div class="is-empty">
+            <img src="{% static 'images/ui/no_records.svg' %}" alt="" style="width:120px;opacity:0.75;">
+            <h3 class="is-empty__title">{% trans "No statutory data for this period" %}</h3>
+            <p class="is-empty__desc">{% trans "Generate and confirm payslips with India Statutory enabled for this month." %}</p>
+            <a href="{% url 'view-payslip' %}" class="oh-btn oh-btn--secondary">{% trans "Payslips" %}</a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+</div>
+{% endblock %}

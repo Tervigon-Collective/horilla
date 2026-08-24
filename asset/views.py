@@ -146,17 +146,18 @@ def add_asset_report(request, asset_id=None):
         if not asset:
             return HorillaRedirect(request, message=_("Asset not found"))
         asset_report_form = AssetReportForm(initial={"asset_id": asset})
-        if not request.GET.get("asset_list"):
-            asset_assignment = AssetAssignment.objects.filter(
-                asset_id=asset_id, return_date__isnull=True
-            ).first()
-            if not (
+        asset_assignment = AssetAssignment.objects.filter(
+            asset_id=asset_id, return_date__isnull=True
+        ).first()
+        if not (
+            request.user.has_perm("asset.change_asset")
+            or (
                 asset_assignment
                 and request.user.employee_get
                 == asset_assignment.assigned_to_employee_id
-                or request.user.has_perm("asset.change_asset")
-            ):
-                return redirect(asset_request_allocation_view)
+            )
+        ):
+            return redirect(asset_request_allocation_view)
 
     if request.method == "POST":
         asset_report_form = AssetReportForm(
@@ -706,9 +707,8 @@ def asset_request_approve(request, req_id):
                 active_count = AssetAssignment.objects.filter(
                     asset_id=asset, return_date__isnull=True
                 ).count()
-                if active_count >= asset.quantity:
-                    asset.asset_status = "In use"
-                    asset.save()
+                _ = active_count
+                asset.save()
 
                 asset_request.asset_request_status = "Approved"
                 asset_request.save()
@@ -836,9 +836,8 @@ def asset_allocate_creation(request):
             active_count = AssetAssignment.objects.filter(
                 asset_id=asset, return_date__isnull=True
             ).count()
-            if active_count >= asset.quantity:
-                asset.asset_status = "In use"
-                asset.save()
+            _ = active_count
+            asset.save()
             files = request.FILES.getlist("assign_images")
             attachments = []
             if request.FILES:
@@ -917,6 +916,9 @@ def asset_allocate_return(request, asset_id):
     asset_allocation = AssetAssignment.objects.filter(
         asset_id=asset_id, return_status__isnull=True
     ).first()
+    if asset_allocation is None:
+        messages.error(request, _("No open asset allocation found for this asset."))
+        return HorillaRedirect(request)
     if request.method == "POST":
         asset_return_form = AssetReturnForm(request.POST, request.FILES)
 
@@ -929,9 +931,6 @@ def asset_allocate_return(request, asset_id):
             attachments = []
             context = {"asset_return_form": asset_return_form, "asset_id": asset_id}
             if asset_return_status == "Healthy":
-                asset_allocation = AssetAssignment.objects.filter(
-                    asset_id=asset_id, return_status__isnull=True
-                ).first()
                 asset_allocation.return_date = asset_return_date
                 asset_allocation.return_status = asset_return_status
                 asset_allocation.return_condition = asset_return_condition
@@ -944,22 +943,13 @@ def asset_allocate_return(request, asset_id):
                         attachment.save()
                         attachments.append(attachment)
                     asset_allocation.return_images.add(*attachments)
-                active_count = AssetAssignment.objects.filter(
-                    asset_id=asset, return_date__isnull=True
-                ).count()
-                if active_count < asset.quantity:
-                    asset.asset_status = "Available"
-                else:
-                    asset.asset_status = "In use"
                 asset.save()
                 messages.success(request, _("Asset Returned Successfully..."))
                 return HorillaRedirect(request)
-            asset_allocation = AssetAssignment.objects.filter(
-                asset_id=asset_id, return_status__isnull=True
-            ).first()
             asset_allocation.return_date = asset_return_date
             asset_allocation.return_status = asset_return_status
             asset_allocation.return_condition = asset_return_condition
+            asset_allocation.return_request = False
             asset_allocation.save()
             if request.FILES:
                 for file in files:
@@ -1474,19 +1464,13 @@ def asset_export_excel(request):
                     emp = user.employee_get
 
                     # Taking the company_name of the user
-                    info = EmployeeWorkInformation.objects.filter(employee_id=emp)
-                    if info.exists():
-                        for i in info:
-                            employee_company = i.company_id
-                        company_name = Company.objects.filter(company=employee_company)
-                        emp_company = company_name.first()
-
-                        # Access the date_format attribute directly
-                        date_format = (
-                            emp_company.date_format if emp_company else "MMM. D, YYYY"
-                        )
-                    else:
-                        date_format = "MMM. D, YYYY"
+                    info = EmployeeWorkInformation.objects.filter(employee_id=emp).first()
+                    emp_company = info.company_id if info else None
+                    date_format = (
+                        emp_company.date_format
+                        if emp_company and emp_company.date_format
+                        else "MMM. D, YYYY"
+                    )
 
                     # Convert the string to a datetime.date object
                     start_date = datetime.strptime(str(value), "%Y-%m-%d").date()

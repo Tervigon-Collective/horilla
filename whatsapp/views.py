@@ -334,7 +334,11 @@ def send_notification_task(request, recipient, verb, redirect, icon):
     Background task to send a notification message via WhatsApp.
     """
     try:
-        link = request.build_absolute_uri(redirect) if redirect else None
+        link = (
+            request.build_absolute_uri(redirect)
+            if request is not None and redirect
+            else None
+        )
         message = f"{verb}\nFor more details, \n{link}." if link else verb
 
         recipients = (
@@ -344,7 +348,8 @@ def send_notification_task(request, recipient, verb, redirect, icon):
         )
 
         for user in recipients:
-            phone_number = user.employee_get.phone
+            employee = getattr(user, "employee_get", None)
+            phone_number = getattr(employee, "phone", None) if employee else None
             if phone_number:
                 send_text_message(phone_number, message)
             else:

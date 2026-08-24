@@ -32,27 +32,53 @@ def _parse_period(request):
     return from_date, to_date
 
 
+def _period_end(to_date):
+    """Last day of the selected period that is not in the future."""
+    return min(to_date, date.today())
+
+
 @login_required
 @permission_required("payroll.view_payslip")
 def payroll_dashboard_view(request):
     """Render the modern payroll dashboard page."""
-    return render(request, "payroll/dashboard.html")
+    from base.models import Company
+    from payroll.models.india_statutory import IndiaStatutorySettings
+
+    selected = request.session.get("selected_company")
+    if selected and selected != "all":
+        company = Company.objects.filter(id=selected).first()
+    else:
+        company = Company.objects.filter(hq=True).first() or Company.objects.first()
+    india_settings = None
+    if company:
+        india_settings = IndiaStatutorySettings.objects.filter(
+            company_id=company, is_enabled=True
+        ).first()
+    return render(
+        request,
+        "payroll/dashboard.html",
+        {
+            "india_statutory_enabled": bool(india_settings),
+            "india_statutory_settings": india_settings,
+        },
+    )
 
 
 @login_required
 @permission_required("payroll.view_payslip")
 def payroll_kpi_data(request):
     """Return payroll KPI summary data as JSON."""
+    from payroll.cbv.accessibility import scoped_payslip_queryset
     from payroll.models.models import LoanAccount, Payslip, Reimbursement
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
     first_of_month = from_date
 
     # Current month payslips
-    current_qs = Payslip.objects.filter(
+    current_qs = scoped_payslip_queryset(request).filter(
         start_date__gte=first_of_month,
-        start_date__lte=today,
+        start_date__lte=period_end,
     )
 
     total_gross = current_qs.aggregate(
@@ -75,7 +101,7 @@ def payroll_kpi_data(request):
     # Previous month for comparison
     prev_month_end = first_of_month - timedelta(days=1)
     prev_month_start = prev_month_end.replace(day=1)
-    prev_net = Payslip.objects.filter(
+    prev_net = scoped_payslip_queryset(request).filter(
         start_date__gte=prev_month_start,
         start_date__lte=prev_month_end,
         status__in=["confirmed", "paid"],
@@ -120,7 +146,7 @@ def payroll_kpi_data(request):
             "active_loans": active_loans,
             "loan_amount": round(float(loan_amount), 2),
             "pending_reimbursements": pending_reimbursements,
-            "month": today.strftime("%B %Y"),
+            "month": period_end.strftime("%B %Y"),
         }
     )
 
@@ -129,14 +155,15 @@ def payroll_kpi_data(request):
 @permission_required("payroll.view_payslip")
 def payroll_monthly_trend(request):
     """Payroll cost trend for the last 6 months."""
+    from payroll.cbv.accessibility import scoped_payslip_queryset
     from payroll.models.models import Payslip
 
     _, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
     months = []
 
     for i in range(5, -1, -1):
-        month_date = today.replace(day=1) - timedelta(days=i * 30)
+        month_date = period_end.replace(day=1) - timedelta(days=i * 30)
         month_start = month_date.replace(day=1)
         if month_start.month == 12:
             month_end = month_start.replace(
@@ -147,7 +174,7 @@ def payroll_monthly_trend(request):
                 days=1
             )
 
-        qs = Payslip.objects.filter(
+        qs = scoped_payslip_queryset(request).filter(
             start_date__gte=month_start,
             start_date__lte=month_end,
             status__in=["confirmed", "paid"],
@@ -176,18 +203,19 @@ def payroll_monthly_trend(request):
 @permission_required("payroll.view_payslip")
 def payroll_department_cost(request):
     """Payroll cost by department for the current month."""
+    from payroll.cbv.accessibility import scoped_payslip_queryset
     from payroll.models.models import Payslip
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
     first_of_month = from_date
     departments = []
 
     try:
         data = (
-            Payslip.objects.filter(
+            scoped_payslip_queryset(request).filter(
                 start_date__gte=first_of_month,
-                start_date__lte=today,
+                start_date__lte=period_end,
                 status__in=["confirmed", "paid", "review_ongoing"],
             )
             .values(
@@ -218,20 +246,21 @@ def payroll_department_cost(request):
     except Exception:
         pass
 
-    return JsonResponse({"departments": departments, "month": today.strftime("%B %Y")})
+    return JsonResponse({"departments": departments, "month": period_end.strftime("%B %Y")})
 
 
 @login_required
 @permission_required("payroll.view_payslip")
 def payroll_status_pipeline(request):
     """Payslip status distribution for the current month."""
+    from payroll.cbv.accessibility import scoped_payslip_queryset
     from payroll.models.models import Payslip
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
     first_of_month = from_date
 
-    qs = Payslip.objects.filter(start_date__gte=first_of_month, start_date__lte=today)
+    qs = scoped_payslip_queryset(request).filter(start_date__gte=first_of_month, start_date__lte=period_end)
 
     statuses = [
         {
@@ -263,19 +292,20 @@ def payroll_status_pipeline(request):
 @permission_required("payroll.view_payslip")
 def payroll_top_earners(request):
     """Top 10 employees by net pay this month."""
+    from payroll.cbv.accessibility import scoped_payslip_queryset
     from employee.models import Employee
     from payroll.models.models import Payslip
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
     first_of_month = from_date
     earners = []
 
     try:
         data = (
-            Payslip.objects.filter(
+            scoped_payslip_queryset(request).filter(
                 start_date__gte=first_of_month,
-                start_date__lte=to_date,
+                start_date__lte=period_end,
                 status__in=["confirmed", "paid"],
             )
             .values(
@@ -310,13 +340,14 @@ def payroll_top_earners(request):
     except Exception:
         pass
 
-    return JsonResponse({"earners": earners, "month": today.strftime("%B %Y")})
+    return JsonResponse({"earners": earners, "month": period_end.strftime("%B %Y")})
 
 
 @login_required
 @permission_required("payroll.view_payslip")
 def payroll_contract_status(request):
     """Contracts ending or expired within the selected period."""
+    from payroll.cbv.accessibility import scoped_contract_queryset
     from payroll.models.models import Contract
 
     from_date, to_date = _parse_period(request)
@@ -333,7 +364,7 @@ def payroll_contract_status(request):
     try:
         # Still active and ending on or after today.
         ending_qs = (
-            Contract.objects.filter(
+            scoped_contract_queryset(request).filter(
                 contract_end_date__gte=today,
                 contract_end_date__lte=max(to_date, today + horizon),
                 contract_status="active",
@@ -357,7 +388,7 @@ def payroll_contract_status(request):
 
         # Already ended, within the same 60-day outlook looking backwards.
         expired_qs = (
-            Contract.objects.filter(
+            scoped_contract_queryset(request).filter(
                 contract_end_date__gte=min(from_date, today - horizon),
                 contract_end_date__lte=today - timedelta(days=1),
             )
@@ -406,6 +437,14 @@ def payroll_loan_summary(request):
             .select_related("employee_id")
             .order_by("-provided_date")
         )
+        selected = request.session.get("selected_company")
+        if selected and selected != "all":
+            qs = qs.filter(
+                employee_id__employee_work_info__company_id_id=selected
+            ).distinct()
+        if not request.user.has_perm("payroll.add_payslip"):
+            employee = getattr(request.user, "employee_get", None)
+            qs = qs.filter(employee_id=employee) if employee else qs.none()
 
         for loan in qs[:15]:
             emp = loan.employee_id
@@ -463,6 +502,14 @@ def payroll_reimbursement_summary(request):
             allowance_on__gte=from_date,
             allowance_on__lte=to_date,
         )
+        selected = request.session.get("selected_company")
+        if selected and selected != "all":
+            qs = qs.filter(
+                employee_id__employee_work_info__company_id_id=selected
+            ).distinct()
+        if not request.user.has_perm("payroll.add_payslip"):
+            employee = getattr(request.user, "employee_get", None)
+            qs = qs.filter(employee_id=employee) if employee else qs.none()
         summary["requested"] = qs.filter(status="requested").count()
         summary["approved"] = qs.filter(status="approved").count()
         summary["rejected"] = qs.filter(status="rejected").count()
@@ -508,13 +555,14 @@ def payroll_reimbursement_summary(request):
 @permission_required("payroll.view_payslip")
 def payroll_salary_distribution(request):
     """Salary band distribution across employees who were active during the selected period."""
+    from payroll.cbv.accessibility import scoped_employee_workinfo_queryset
     from employee.models import EmployeeWorkInformation
 
     _from, to_date = _parse_period(request)
     bands = []
     try:
         salaries = list(
-            EmployeeWorkInformation.objects.filter(
+            scoped_employee_workinfo_queryset(request).filter(
                 employee_id__is_active=True,
                 basic_salary__gt=0,
                 date_joining__lte=to_date,
@@ -555,12 +603,13 @@ def payroll_salary_distribution(request):
 @permission_required("payroll.view_payslip")
 def payroll_component_breakdown(request):
     """Top allowance and deduction components from pay_head_data."""
+    from payroll.cbv.accessibility import scoped_payslip_queryset
     from payroll.models.models import Payslip
 
     from_date, to_date = _parse_period(request)
     components = []
     try:
-        payslips = Payslip.objects.filter(
+        payslips = scoped_payslip_queryset(request).filter(
             start_date__gte=from_date,
             start_date__lte=to_date,
             status__in=["confirmed", "paid"],

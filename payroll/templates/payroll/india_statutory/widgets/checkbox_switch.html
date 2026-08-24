@@ -1,0 +1,4 @@
+<div class="oh-switch">
+    <input type="checkbox" name="{{ widget.name }}"{% if widget.value != None %} value="{{ widget.value|stringformat:'s' }}"{% endif %}{% include "django/forms/widgets/attrs.html" %}{% if widget.value %} checked{% endif %}>
+    <span class="oh-switch__slider"></span>
+</div>

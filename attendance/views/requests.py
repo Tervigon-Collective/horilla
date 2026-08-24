@@ -474,6 +474,13 @@ def approve_validate_attendance_request(request, attendance_id):
         return HorillaRedirect(
             request, message=_("No Attendance found matching the query.")
         )
+    from employee.cbv.accessibility import can_manage_employee_action
+
+    if not can_manage_employee_action(
+        request, attendance.employee_id, "attendance.change_attendance"
+    ):
+        messages.error(request, _("You don't have permission"))
+        return HorillaRedirect(request)
 
     prev_attendance_date = attendance.attendance_date
     prev_attendance_clock_in_date = attendance.attendance_clock_in_date
@@ -705,11 +712,15 @@ def bulk_approve_attendance_request(request):
     """
     This method is used to validate the attendance requests
     """
+    from employee.cbv.accessibility import can_manage_employee_action
+
     ids = json.loads(request.POST.get("ids", "[]"))
     filtered_ids = []
     for attendance_id in ids:
         attendance = Attendance.objects.get(id=attendance_id)
-        if attendance.employee_id != request.user.employee_get:
+        if attendance.employee_id != request.user.employee_get and can_manage_employee_action(
+            request, attendance.employee_id, "attendance.change_attendance"
+        ):
             filtered_ids.append(attendance_id)
     if request.user.is_superuser:
         filtered_ids = ids

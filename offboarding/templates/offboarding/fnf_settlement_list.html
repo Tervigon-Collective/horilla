@@ -1,0 +1,47 @@
+{% extends "index.html" %}
+{% load i18n horillafilters %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+<div class="is-page">
+    <div class="is-page-head">
+        <h1 class="is-page-head__title">{% trans "F&F settlements" %}</h1>
+        <p class="is-page-head__desc">{% trans "Draft, confirmed, and paid Full & Final settlements." %}</p>
+    </div>
+    <div class="is-section">
+        <div class="is-section__body is-section__body--flush">
+            <div class="is-table-wrap">
+                <table class="is-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Employee" %}</th>
+                            <th>{% trans "Last working day" %}</th>
+                            <th>{% trans "Status" %}</th>
+                            <th>{% trans "Net payable" %}</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in settlements %}
+                        <tr>
+                            <td>{{ row.employee_id.get_full_name }}</td>
+                            <td>{{ row.last_working_day|default:"—" }}</td>
+                            <td>{{ row.get_status_display }}</td>
+                            <td class="is-num">{{ row.net_payable|floatformat:0|currency_symbol_position }}</td>
+                            <td>
+                                <a href="{% url 'fnf-settlement' pk=row.offboarding_employee_id %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Open" %}</a>
+                                <a href="{% url 'fnf-settlement-pdf' pk=row.offboarding_employee_id %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "PDF" %}</a>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="5" class="is-muted">{% trans "No saved F&F settlements yet. Open an exit process and save a draft." %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

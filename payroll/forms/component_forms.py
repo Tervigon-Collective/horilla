@@ -911,9 +911,19 @@ class ReimbursementForm(ModelForm):
                 "cfd_to_encash",
                 "ad_to_encash",
                 "bonus_to_encash",
+                "travel_from",
+                "travel_to",
+                "travel_date",
             ]
         elif type == "leave_encashment" and (is_edit or self.data):
-            exclude_fields += ["attachment", "amount", "bonus_to_encash"]
+            exclude_fields += [
+                "attachment",
+                "amount",
+                "bonus_to_encash",
+                "travel_from",
+                "travel_to",
+                "travel_date",
+            ]
         elif type == "bonus_encashment" and (is_edit or self.data):
             exclude_fields += [
                 "attachment",
@@ -921,6 +931,16 @@ class ReimbursementForm(ModelForm):
                 "leave_type_id",
                 "cfd_to_encash",
                 "ad_to_encash",
+                "travel_from",
+                "travel_to",
+                "travel_date",
+            ]
+        elif type == "travel" and (is_edit or self.data):
+            exclude_fields += [
+                "leave_type_id",
+                "cfd_to_encash",
+                "ad_to_encash",
+                "bonus_to_encash",
             ]
 
     def as_p(self):

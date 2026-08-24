@@ -2,4 +2,10 @@
 {% load i18n %}
 {% block content %}
 {% include 'leave/leave_type/leave_type_form_fragment.html' %}
+{% if leave_type %}
+<div class="bg-white p-5 pe-2 pt-3 rounded-md shadow-card m-auto" style="width: 70%; padding: 2%; margin-top: 1rem;">
+  {% include "leave/leave_type/conditions_panel.html" %}
+  {% include "leave/leave_type/accrual_rules_panel.html" %}
+</div>
+{% endif %}
 {% endblock %}

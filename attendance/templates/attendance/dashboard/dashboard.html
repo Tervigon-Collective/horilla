@@ -185,6 +185,17 @@
             </div>
 
             <div class="oh-dashboard row pt-3">
+                <div class="col-12 col-sm-12 col-md-12 col-lg-4">
+                    <div class="oh-card-dashboard oh-card-dashboard--no-scale oh-card-dashboard--transparent h-100">
+                        <div class="oh-card-dashboard__header oh-card-dashboard__header--divider">
+                            <span class="oh-card-dashboard__title">{% trans "Missing Punch" %}</span>
+                        </div>
+                        <div class="oh-card-dashboard__body" style="height:400px" id="missingPunchCardBody"
+                            hx-get="{% url 'dashboard-missing-punches' %}" hx-trigger="load, reloadAttendanceView from:body, reload">
+                            <div class="animated-background h-100"></div>
+                        </div>
+                    </div>
+                </div>
                 <div class="col-12 col-sm-12 col-md-12 col-lg-8">
                     <div class="oh-card-dashboard oh-card-dashboard--no-scale oh-card-dashboard--transparent h-100">
                         <div class="oh-card-dashboard__header oh-card-dashboard__header--divider">

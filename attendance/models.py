@@ -280,6 +280,16 @@ class Attendance(HorillaModel):
     attendance_clock_out = models.TimeField(
         null=True, verbose_name=_("Check-Out"), help_text=_("Last Check-Out Time")
     )
+    missing_punch_out = models.BooleanField(
+        default=False,
+        verbose_name=_("Missing Punch Out"),
+        help_text=_("Set when employee checked in but did not punch out by end of day."),
+    )
+    missing_punch_in = models.BooleanField(
+        default=False,
+        verbose_name=_("Missing Punch In"),
+        help_text=_("Set when employee did not punch in by end of day."),
+    )
     attendance_worked_hour = models.CharField(
         null=True,
         default="00:00",
@@ -704,7 +714,8 @@ class Attendance(HorillaModel):
             out_time = activity.clock_out
             if out_time is None:
                 combined_out = datetime.combine(
-                    now, dt.time(hour=now.hour, minute=now.minute, second=now.second)
+                    now.date(),
+                    dt.time(hour=now.hour, minute=now.minute, second=now.second),
                 )
             else:
                 combined_out = datetime.combine(activity.clock_out_date, out_time)
@@ -713,6 +724,108 @@ class Attendance(HorillaModel):
             diffs = combined_out - combined_in
             at_work_seconds = at_work_seconds + diffs.total_seconds()
         return at_work_seconds
+
+    def sync_worked_hours_from_clock_times(self):
+        """
+        Derive worked hours from check-in/check-out punches.
+        Uses activity totals when punch activities exist, otherwise the
+        attendance record's own clock-in/out fields.
+        """
+        if not (
+            self.attendance_clock_in
+            and self.attendance_clock_out
+            and self.attendance_clock_in_date
+            and self.attendance_clock_out_date
+        ):
+            activities = AttendanceActivity.objects.filter(
+                attendance_date=self.attendance_date,
+                employee_id=self.employee_id,
+            )
+            if activities.exists():
+                at_work_seconds = self.get_at_work_from_activities()
+                self.attendance_worked_hour = format_time(at_work_seconds)
+            elif not self.attendance_clock_out:
+                self.attendance_worked_hour = "00:00"
+            return
+
+        activities = AttendanceActivity.objects.filter(
+            attendance_date=self.attendance_date,
+            employee_id=self.employee_id,
+        )
+        if activities.exists():
+            at_work_seconds = self.get_at_work_from_activities()
+        else:
+            clock_in = datetime.combine(
+                self.attendance_clock_in_date, self.attendance_clock_in
+            )
+            clock_out = datetime.combine(
+                self.attendance_clock_out_date, self.attendance_clock_out
+            )
+            if clock_out <= clock_in:
+                return
+            at_work_seconds = int((clock_out - clock_in).total_seconds())
+
+        if at_work_seconds > 0:
+            self.attendance_worked_hour = format_time(at_work_seconds)
+        else:
+            self.attendance_worked_hour = "00:00"
+
+    @classmethod
+    def refresh_for_employee_date(cls, employee_id, attendance_date):
+        """Re-sync attendance hours and Hours Balance after activity changes."""
+        attendance = cls.objects.filter(
+            employee_id=employee_id,
+            attendance_date=attendance_date,
+        ).first()
+        if attendance:
+            attendance.save()
+        return attendance
+
+    def _apply_hour_balance_diff(self, diff_work, diff_approved_ot, diff_pending):
+        """Apply incremental worked/pending/overtime deltas to Hours Balance."""
+        if diff_work == diff_approved_ot == diff_pending == 0:
+            return
+
+        month = self.attendance_date.strftime("%B").lower()
+        year = self.attendance_date.year
+
+        with transaction.atomic():
+            ot, _ = AttendanceOverTime.objects.get_or_create(
+                employee_id=self.employee_id,
+                month=month,
+                year=year,
+                defaults={
+                    "hour_account_second": 0,
+                    "hour_pending_second": 0,
+                    "overtime_second": 0,
+                },
+            )
+
+            AttendanceOverTime.objects.filter(pk=ot.pk).update(
+                hour_account_second=F("hour_account_second") + diff_work,
+                overtime_second=F("overtime_second") + diff_approved_ot,
+                hour_pending_second=F("hour_pending_second") + diff_pending,
+            )
+
+            ot.refresh_from_db(
+                fields=["hour_account_second", "hour_pending_second", "overtime_second"]
+            )
+            ot.hour_account_second = max(0, ot.hour_account_second or 0)
+            ot.hour_pending_second = max(0, ot.hour_pending_second or 0)
+            ot.overtime_second = max(0, ot.overtime_second or 0)
+            ot.worked_hours = format_time(ot.hour_account_second)
+            ot.pending_hours = format_time(ot.hour_pending_second)
+            ot.overtime = format_time(ot.overtime_second)
+            ot.save(
+                update_fields=[
+                    "hour_account_second",
+                    "hour_pending_second",
+                    "overtime_second",
+                    "worked_hours",
+                    "pending_hours",
+                    "overtime",
+                ]
+            )
 
     def hours_pending(self):
         """
@@ -833,11 +946,13 @@ class Attendance(HorillaModel):
                 "approved_overtime_second",
                 "minimum_hour",
                 "attendance_overtime_approve",
+                "attendance_validated",
             ).get(pk=self.pk)
 
             old_work = old.at_work_second or 0
             old_approved_ot = old.approved_overtime_second or 0
             old_approved_flag = old.attendance_overtime_approve or False
+            old_validated = old.attendance_validated or False
 
             old_min = strtime_seconds(old.minimum_hour)
             old_pending_today = max(0, old_min - old_work)
@@ -846,9 +961,16 @@ class Attendance(HorillaModel):
             old_approved_ot = 0
             old_pending_today = 0
             old_approved_flag = False
+            old_validated = False
 
-        self.update_attendance_overtime()
+        if self.attendance_clock_in:
+            self.missing_punch_in = False
+        if self.attendance_clock_out:
+            self.missing_punch_out = False
+
+        self.sync_worked_hours_from_clock_times()
         self.adjust_minimum_hour()
+        self.update_attendance_overtime()
         self.handle_overtime_conditions()
 
         if self.attendance_overtime_approve and not old_approved_flag:
@@ -870,37 +992,17 @@ class Attendance(HorillaModel):
 
         super().save(*args, **kwargs)
 
-        if diff_work == diff_approved_ot == diff_pending == 0:
-            return
-
-        month = self.attendance_date.strftime("%B").lower()
-        year = self.attendance_date.year
-
-        with transaction.atomic():
-            ot, _ = AttendanceOverTime.objects.get_or_create(
-                employee_id=self.employee_id,
-                month=month,
-                year=year,
-                defaults={
-                    "hour_account_second": 0,
-                    "hour_pending_second": 0,
-                    "overtime_second": 0,
-                },
+        if self.attendance_validated:
+            if old_validated:
+                self._apply_hour_balance_diff(diff_work, diff_approved_ot, diff_pending)
+            else:
+                self._apply_hour_balance_diff(
+                    new_work, new_approved_ot, new_pending_today
+                )
+        elif old_validated:
+            self._apply_hour_balance_diff(
+                -old_work, -old_approved_ot, -old_pending_today
             )
-
-            AttendanceOverTime.objects.filter(pk=ot.pk).update(
-                hour_account_second=F("hour_account_second") + diff_work,
-                overtime_second=F("overtime_second") + diff_approved_ot,
-                hour_pending_second=F("hour_pending_second") + diff_pending,
-            )
-
-            ot.refresh_from_db(
-                fields=["hour_account_second", "hour_pending_second", "overtime_second"]
-            )
-            ot.worked_hours = format_time(ot.hour_account_second or 0)
-            ot.pending_hours = format_time(ot.hour_pending_second or 0)
-            ot.overtime = format_time(ot.overtime_second or 0)
-            ot.save(update_fields=["worked_hours", "pending_hours", "overtime"])
 
     def serialize(self):
         """
@@ -928,22 +1030,27 @@ class Attendance(HorillaModel):
         return serialized_data
 
     def delete(self, *args, **kwargs):
-        # Custom delete logic
-        # Perform additional operations before deleting the object
+        self.sync_worked_hours_from_clock_times()
+        self.update_attendance_overtime()
+        self.adjust_minimum_hour()
+
+        work = self.at_work_second or 0
+        approved_ot = (
+            (self.approved_overtime_second or 0)
+            if self.attendance_overtime_approve
+            else 0
+        )
+        min_sec = strtime_seconds(self.minimum_hour or "00:00")
+        pending = max(0, min_sec - work)
+
         with contextlib.suppress(Exception):
             AttendanceActivity.objects.filter(
                 attendance_date=self.attendance_date, employee_id=self.employee_id
             ).delete()
-            employee_ot = self.employee_id.employee_overtime.filter(
-                month=self.attendance_date.strftime("%B").lower(),
-                year=self.attendance_date.strftime("%Y"),
-            )
-            if employee_ot.exists():
-                self.update_ot(employee_ot.first())
-        # Call the superclass delete() method to delete the object
-        super().delete(*args, **kwargs)
 
-        # Perform additional operations after deleting the object
+        if self.attendance_validated:
+            self._apply_hour_balance_diff(-work, -approved_ot, -pending)
+        super().delete(*args, **kwargs)
 
     def create_ot(self):
         """
@@ -1010,7 +1117,8 @@ class Attendance(HorillaModel):
         minimum_hour_second = 0
         for attendance in month_attendances:
             required_work_second = strtime_seconds(attendance["minimum_hour"])
-            at_work_second = min(required_work_second, attendance["at_work_second"])
+            actual_work_second = attendance["at_work_second"] or 0
+            at_work_second = min(required_work_second, actual_work_second)
             hour_balance += at_work_second
             minimum_hour_second += required_work_second
 
@@ -1054,7 +1162,9 @@ class Attendance(HorillaModel):
             )
 
         if self.attendance_clock_out_date and self.attendance_clock_out_date >= today:
-            if out_time > now:
+            if out_time > now and not getattr(
+                self, "_allow_future_checkout", False
+            ):
                 raise ValidationError(
                     {"attendance_clock_out": "Check-out time cannot be in the future"}
                 )
@@ -1256,14 +1366,13 @@ class AttendanceOverTime(HorillaModel):
         This method will return not validated hours in a month
         """
         hrs_to_vlaidate = sum(
-            list(
-                Attendance.objects.filter(
-                    attendance_date__month=MONTH_MAPPING[self.month],
-                    attendance_date__year=self.year,
-                    employee_id=self.employee_id,
-                    attendance_validated=False,
-                ).values_list("at_work_second", flat=True)
-            )
+            second or 0
+            for second in Attendance.objects.filter(
+                attendance_date__month=MONTH_MAPPING[self.month],
+                attendance_date__year=self.year,
+                employee_id=self.employee_id,
+                attendance_validated=False,
+            ).values_list("at_work_second", flat=True)
         )
         return format_time(hrs_to_vlaidate)
 
@@ -1314,6 +1423,15 @@ class AttendanceOverTime(HorillaModel):
     #     super().save(*args, **kwargs)
 
     def save(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields")
+        # Full saves come from the Hours Balance form (worked/pending/overtime strings).
+        # Partial saves with update_fields come from attendance auto-sync after seconds
+        # were already updated in the database.
+        if update_fields is None:
+            self.hour_account_second = strtime_seconds(self.worked_hours or "00:00")
+            self.hour_pending_second = strtime_seconds(self.pending_hours or "00:00")
+            self.overtime_second = strtime_seconds(self.overtime or "00:00")
+
         self.worked_hours = format_time(self.hour_account_second or 0)
         self.pending_hours = format_time(self.hour_pending_second or 0)
         self.overtime = format_time(self.overtime_second or 0)
@@ -1375,7 +1493,6 @@ class AttendanceLateComeEarlyOut(HorillaModel):
         return self.penaltyaccounts_set.count()
 
     def save(self, *args, **kwargs) -> None:
-        super().save(*args, **kwargs)
         self.employee_id = self.attendance_id.employee_id
         super().save(*args, **kwargs)
 

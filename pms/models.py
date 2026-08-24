@@ -887,7 +887,12 @@ class EmployeeKeyResult(models.Model):
         #     )
 
     def save(self, *args, **kwargs):
-        if self.start_date and not self.end_date:
+        if (
+            self.start_date
+            and not self.end_date
+            and self.key_result_id
+            and self.key_result_id.duration is not None
+        ):
             self.end_date = self.start_date + relativedelta(
                 days=self.key_result_id.duration
             )
@@ -1657,18 +1662,40 @@ class EmployeeBonusPoint(HorillaModel):
         )
 
     def save(self, *args, **kwargs):
+        previous = None
+        if self.pk:
+            previous = type(self).objects.filter(pk=self.pk).values(
+                "employee_id", "bonus_point", "bonus_point_id"
+            ).first()
         super().save(*args, **kwargs)
-        if not BonusPoint.objects.filter(employee_id=self.employee_id).exists():
-            bonus_point = BonusPoint.objects.create(
-                employee_id=self.employee_id,
-                points=self.bonus_point,
-                reason=self.based_on,
-            )
-        else:
-            bonus_point = BonusPoint.objects.get(employee_id=self.employee_id)
-        bonus_point.points += self.bonus_point
+
+        if (
+            previous
+            and previous["employee_id"]
+            and previous["employee_id"] != self.employee_id_id
+        ):
+            old_bonus_point = BonusPoint.objects.filter(
+                employee_id_id=previous["employee_id"]
+            ).first()
+            if old_bonus_point:
+                old_bonus_point.points = max(
+                    0, (old_bonus_point.points or 0) - int(previous["bonus_point"] or 0)
+                )
+                old_bonus_point.save()
+
+        delta = int(self.bonus_point or 0)
+        if previous and previous["employee_id"] == self.employee_id_id:
+            delta -= int(previous["bonus_point"] or 0)
+
+        bonus_point, _created = BonusPoint.objects.get_or_create(
+            employee_id=self.employee_id,
+            defaults={"points": 0, "reason": self.based_on},
+        )
+        bonus_point.points = (bonus_point.points or 0) + delta
         bonus_point.reason = self.based_on
         bonus_point.save()
+        if self.bonus_point_id_id != bonus_point.id:
+            type(self).objects.filter(pk=self.pk).update(bonus_point_id=bonus_point)
 
 
 class BonusPointSetting(models.Model):

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 from django.apps import apps
@@ -8,10 +8,12 @@ from django.core.paginator import Paginator
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.template.loader import render_to_string
 from django.utils.translation import gettext_lazy as _
 
+from django.views.decorators.http import require_http_methods
 from base.context_processors import intial_notice_period
-from base.methods import closest_numbers, eval_validate, paginator_qry, sortby
+from base.methods import closest_numbers, eval_validate, paginator_qry, sortby, template_pdf
 from base.models import Department, JobPosition
 from base.views import general_settings
 from employee.models import Employee
@@ -53,6 +55,7 @@ from offboarding.forms import (
 )
 from offboarding.models import (
     EmployeeTask,
+    FnFSettlement,
     Offboarding,
     OffboardingEmployee,
     OffboardingGeneralSetting,
@@ -496,6 +499,25 @@ def change_stage(request):
     stage_id = request.GET["stage_id"]
     employees = OffboardingEmployee.objects.filter(id__in=employee_ids)
     stage = OffboardingStage.objects.get(id=stage_id)
+    actor = request.user.employee_get
+    # Object-level: employees must belong to the target stage's pipeline, and
+    # the caller must manage that pipeline (unless they have the change perm).
+    employees = employees.filter(stage_id__offboarding_id=stage.offboarding_id)
+    if not employees.exists():
+        return HttpResponse(_swal_error_script(_("Invalid employees for this stage.")))
+    if not request.user.has_perm("offboarding.change_offboarding"):
+        manages = (
+            Offboarding.objects.filter(pk=stage.offboarding_id_id, managers=actor).exists()
+            or OffboardingStage.objects.filter(
+                offboarding_id=stage.offboarding_id, managers=actor
+            ).exists()
+            or OffboardingTask.objects.filter(
+                stage_id__offboarding_id=stage.offboarding_id, managers=actor
+            ).exists()
+        )
+        if not manages:
+            messages.info(request, _("You don't have permission."))
+            return render(request, "decorator_404.html")
 
     blocked_message = _blocked_required_tasks_message(employees, stage)
     if blocked_message:
@@ -574,6 +596,30 @@ def change_offboarding_stage(request):
     stage_id = request.GET["stage_id"]
     employees = OffboardingEmployee.objects.filter(id__in=employee_ids)
     stage = OffboardingStage.objects.get(id=stage_id)
+    actor = request.user.employee_get
+    employees = employees.filter(stage_id__offboarding_id=stage.offboarding_id)
+    if not employees.exists():
+        return HorillaFormView.HttpResponse(
+            script=(
+                "Swal.fire({"
+                f"icon: 'error', title: {json.dumps(str(_('Cannot Change Stage')))}, "
+                f"text: {json.dumps(str(_('Invalid employees for this stage.')))}"
+                "});"
+            )
+        )
+    if not request.user.has_perm("offboarding.change_offboarding"):
+        manages = (
+            Offboarding.objects.filter(pk=stage.offboarding_id_id, managers=actor).exists()
+            or OffboardingStage.objects.filter(
+                offboarding_id=stage.offboarding_id, managers=actor
+            ).exists()
+            or OffboardingTask.objects.filter(
+                stage_id__offboarding_id=stage.offboarding_id, managers=actor
+            ).exists()
+        )
+        if not manages:
+            messages.info(request, _("You don't have permission."))
+            return render(request, "decorator_404.html")
 
     blocked_message = _blocked_required_tasks_message(employees, stage)
     if blocked_message:
@@ -621,7 +667,6 @@ def change_offboarding_stage(request):
 
 @login_required
 @hx_request_required
-@owner_can_enter("view_offboardingnote", OffboardingNote)
 @any_manager_can_enter(
     "offboarding.view_offboardingnote", offboarding_employee_can_enter=True
 )
@@ -629,19 +674,44 @@ def view_notes(request, employee_id=None):
     """
     This method is used to render all the notes of the employee
     """
+    employee = OffboardingEmployee.objects.filter(id=employee_id).first()
+    if not employee:
+        return HorillaRedirect(request, message=_("Offboarding record not found."))
+    actor = request.user.employee_get
+    can_see = (
+        request.user.has_perm("offboarding.view_offboardingnote")
+        or employee.employee_id == actor
+        or Offboarding.objects.filter(
+            pk=employee.stage_id.offboarding_id_id, managers=actor
+        ).exists()
+        or OffboardingStage.objects.filter(
+            offboarding_id=employee.stage_id.offboarding_id, managers=actor
+        ).exists()
+    )
+    if not can_see:
+        messages.info(request, _("You don't have permission."))
+        return render(request, "decorator_404.html")
+
     if request.FILES:
+        if not (
+            request.user.has_perm("offboarding.add_offboardingnote")
+            or Offboarding.objects.filter(
+                pk=employee.stage_id.offboarding_id_id, managers=actor
+            ).exists()
+        ):
+            messages.info(request, _("You don't have permission."))
+            return render(request, "decorator_404.html")
         files = request.FILES.getlist("files")
-        note_id = request.GET["note_id"]
-        note = OffboardingNote.objects.get(id=note_id)
-        attachments = []
-        for file in files:
-            attachment = OffboardingStageMultipleFile()
-            attachment.attachment = file
-            attachment.save()
-            attachments.append(attachment)
-        note.attachments.add(*attachments)
-    offboarding_employee_id = employee_id
-    employee = OffboardingEmployee.objects.get(id=offboarding_employee_id)
+        note_id = request.GET.get("note_id")
+        note = OffboardingNote.objects.filter(id=note_id).first()
+        if note:
+            attachments = []
+            for file in files:
+                attachment = OffboardingStageMultipleFile()
+                attachment.attachment = file
+                attachment.save()
+                attachments.append(attachment)
+            note.attachments.add(*attachments)
 
     return render(
         request,
@@ -766,9 +836,25 @@ def update_task_status(request, *args, **kwargs):
     status = request.GET.get("task_status")
     if not task_id or not status or not stage_id or not employee_ids:
         return HorillaRedirect(request, message=_("Missing required parameters."))
+    actor = request.user.employee_get
     employee_task = EmployeeTask.objects.filter(
         employee_id__id__in=employee_ids, task_id__id=task_id
     )
+    # Scope: managers of this task/pipeline, or only the assignee's own task.
+    if not request.user.has_perm("offboarding.change_employeetask"):
+        manages_task = OffboardingTask.objects.filter(pk=task_id, managers=actor).exists()
+        manages_pipeline = OffboardingTask.objects.filter(
+            pk=task_id, stage_id__offboarding_id__managers=actor
+        ).exists() or OffboardingStage.objects.filter(
+            tasks__id=task_id, managers=actor
+        ).exists()
+        if manages_task or manages_pipeline:
+            pass
+        else:
+            employee_task = employee_task.filter(employee_id__employee_id=actor)
+            if not employee_task.exists():
+                messages.info(request, _("You don't have permission."))
+                return render(request, "decorator_404.html")
     employee_task.update(status=status)
     messages.success(request, _("Task status updated successfully..."))
     notify.send(
@@ -815,10 +901,17 @@ def task_assign(request):
     """
     employee_ids = request.GET.getlist("employee_ids")
     task_id = request.GET.get("task_id")
+    if not employee_ids or not task_id:
+        return HorillaRedirect(request, message=_("Missing required parameters."))
     employees = OffboardingEmployee.objects.filter(id__in=employee_ids)
     task = OffboardingTask.find(task_id)
     if not task:
         return HorillaRedirect(request, message=_("Task not found"))
+    employees = employees.filter(stage_id__offboarding_id=task.stage_id.offboarding_id)
+    if not employees.exists():
+        return HorillaRedirect(
+            request, message=_("Employees must belong to the same offboarding pipeline.")
+        )
     for employee in employees:
         try:
             assigned_task = EmployeeTask()
@@ -1537,3 +1630,252 @@ def department_job_postion_chart(request):
         )
 
     return JsonResponse({"labels": labels, "datasets": datasets})
+
+
+def _parse_money(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_or_create_fnf(ob_employee, estimate):
+    from offboarding.settlement import apply_estimate_to_settlement
+
+    record = FnFSettlement.objects.filter(offboarding_employee=ob_employee).first()
+    if record:
+        return record
+    record = FnFSettlement(
+        offboarding_employee=ob_employee,
+        employee_id=ob_employee.employee_id,
+    )
+    apply_estimate_to_settlement(record, estimate, keep_adjustments=False)
+    record.save()
+    return record
+
+
+@login_required
+@permission_required("offboarding.view_offboarding")
+def fnf_settlement_list(request):
+    qs = FnFSettlement.objects.select_related(
+        "employee_id",
+        "offboarding_employee",
+        "employee_id__employee_work_info__company_id",
+    )
+    selected = request.session.get("selected_company")
+    if selected and selected != "all":
+        qs = qs.filter(employee_id__employee_work_info__company_id=selected)
+    return render(
+        request,
+        "offboarding/fnf_settlement_list.html",
+        {"settlements": qs[:200]},
+    )
+
+
+def _can_access_fnf(request, ob_employee) -> bool:
+    """HR / offboarding managers / the exiting employee."""
+    if not ob_employee:
+        return False
+    if request.user.has_perm("offboarding.view_offboarding") or request.user.has_perm(
+        "offboarding.change_offboardingemployee"
+    ):
+        return True
+    actor = getattr(request.user, "employee_get", None)
+    if not actor:
+        return False
+    if ob_employee.employee_id == actor:
+        return True
+    offboarding = getattr(getattr(ob_employee, "stage_id", None), "offboarding_id", None)
+    if offboarding and Offboarding.objects.filter(pk=offboarding.pk, managers=actor).exists():
+        return True
+    return False
+
+
+@login_required
+def fnf_settlement_view(request, pk):
+    """Full & Final settlement workflow for an offboarding employee."""
+    from django.core.exceptions import ObjectDoesNotExist
+
+    from offboarding.settlement import apply_estimate_to_settlement, calculate_fnf_settlement
+
+    ob_employee = OffboardingEmployee.objects.filter(pk=pk).first()
+    if not ob_employee:
+        messages.error(request, _("Offboarding record not found."))
+        return redirect("offboarding-pipeline")
+    if not _can_access_fnf(request, ob_employee):
+        messages.error(request, _("You don't have permission."))
+        return redirect("offboarding-pipeline")
+
+    last_day = ob_employee.notice_period_ends or ob_employee.notice_period_starts
+    estimate = calculate_fnf_settlement(ob_employee.employee_id, last_day)
+    try:
+        record = ob_employee.fnf_settlement
+    except ObjectDoesNotExist:
+        record = None
+
+    if record and record.status == "draft":
+        apply_estimate_to_settlement(record, estimate, keep_adjustments=True)
+        record.save()
+
+    display = record or estimate
+    return render(
+        request,
+        "offboarding/fnf_settlement.html",
+        {
+            "offboarding_employee": ob_employee,
+            "settlement": estimate,
+            "record": record,
+            "display": display,
+            "locked": bool(record and record.status != "draft"),
+            "today": date.today().isoformat(),
+        },
+    )
+
+
+@login_required
+@permission_required("offboarding.change_offboardingemployee")
+@require_http_methods(["POST"])
+def fnf_settlement_save(request, pk):
+    from offboarding.settlement import apply_estimate_to_settlement, calculate_fnf_settlement
+
+    ob_employee = OffboardingEmployee.objects.filter(pk=pk).first()
+    if not ob_employee:
+        messages.error(request, _("Offboarding record not found."))
+        return redirect("offboarding-pipeline")
+
+    last_day = ob_employee.notice_period_ends or ob_employee.notice_period_starts
+    estimate = calculate_fnf_settlement(ob_employee.employee_id, last_day)
+    record = _get_or_create_fnf(ob_employee, estimate)
+    if record.status != "draft":
+        messages.error(request, _("This settlement is locked. Reopen it to edit."))
+        return redirect("fnf-settlement", pk=pk)
+
+    apply_estimate_to_settlement(record, estimate, keep_adjustments=True)
+    record.loan_recovery = max(0.0, _parse_money(request.POST.get("loan_recovery"), record.loan_recovery))
+    record.other_additions = max(0.0, _parse_money(request.POST.get("other_additions")))
+    record.other_deductions = max(0.0, _parse_money(request.POST.get("other_deductions")))
+    record.remarks = (request.POST.get("remarks") or "").strip()
+    record.save()
+    messages.success(request, _("F&F settlement saved as draft."))
+    return redirect("fnf-settlement", pk=pk)
+
+
+@login_required
+@permission_required("offboarding.change_offboardingemployee")
+@require_http_methods(["POST"])
+def fnf_settlement_action(request, pk):
+    from offboarding.settlement import apply_estimate_to_settlement, calculate_fnf_settlement
+
+    ob_employee = OffboardingEmployee.objects.filter(pk=pk).first()
+    if not ob_employee:
+        messages.error(request, _("Offboarding record not found."))
+        return redirect("offboarding-pipeline")
+
+    action = (request.POST.get("action") or "").strip().lower()
+    last_day = ob_employee.notice_period_ends or ob_employee.notice_period_starts
+    estimate = calculate_fnf_settlement(ob_employee.employee_id, last_day)
+    record = _get_or_create_fnf(ob_employee, estimate)
+    actor = getattr(request.user, "employee_get", None)
+
+    if action == "confirm":
+        if record.status != "draft":
+            messages.info(request, _("Settlement is already confirmed."))
+            return redirect("fnf-settlement", pk=pk)
+        apply_estimate_to_settlement(record, estimate, keep_adjustments=True)
+        if request.POST.get("loan_recovery") is not None:
+            record.loan_recovery = max(
+                0.0,
+                _parse_money(request.POST.get("loan_recovery"), record.loan_recovery),
+            )
+            record.other_additions = max(
+                0.0, _parse_money(request.POST.get("other_additions"))
+            )
+            record.other_deductions = max(
+                0.0, _parse_money(request.POST.get("other_deductions"))
+            )
+            record.remarks = (request.POST.get("remarks") or record.remarks or "").strip()
+        record.status = "confirmed"
+        record.confirmed_on = date.today()
+        record.confirmed_by = actor
+        record.save()
+        try:
+            from payroll.methods.ctc_wizard import hold_salary
+
+            hold_salary(
+                ob_employee.employee_id,
+                reason="F&F settlement confirmed",
+                held_by=actor,
+            )
+        except Exception:
+            pass
+        messages.success(
+            request,
+            _("F&F confirmed. Salary is on hold until the settlement is paid."),
+        )
+    elif action == "pay":
+        if record.status != "confirmed":
+            messages.error(request, _("Confirm the settlement before marking it paid."))
+            return redirect("fnf-settlement", pk=pk)
+        try:
+            paid_on = date.fromisoformat(request.POST.get("paid_on"))
+        except (TypeError, ValueError):
+            paid_on = date.today()
+        record.status = "paid"
+        record.paid_on = paid_on
+        record.paid_by = actor
+        record.save()
+        messages.success(request, _("F&F marked as paid."))
+    elif action == "reopen":
+        if record.status == "paid":
+            messages.error(request, _("Paid settlements cannot be reopened."))
+            return redirect("fnf-settlement", pk=pk)
+        record.status = "draft"
+        record.confirmed_on = None
+        record.confirmed_by = None
+        record.save()
+        messages.success(request, _("F&F reopened as draft."))
+    else:
+        messages.error(request, _("Unknown action."))
+    return redirect("fnf-settlement", pk=pk)
+
+
+@login_required
+def fnf_settlement_pdf(request, pk):
+    from django.core.exceptions import ObjectDoesNotExist
+
+    from offboarding.settlement import calculate_fnf_settlement
+
+    ob_employee = OffboardingEmployee.objects.filter(pk=pk).first()
+    if not ob_employee:
+        messages.error(request, _("Offboarding record not found."))
+        return redirect("offboarding-pipeline")
+    if not _can_access_fnf(request, ob_employee):
+        messages.error(request, _("You don't have permission."))
+        return redirect("offboarding-pipeline")
+
+    employee = ob_employee.employee_id
+    work = getattr(employee, "employee_work_info", None)
+    company = work.company_id if work else None
+    last_day = ob_employee.notice_period_ends or ob_employee.notice_period_starts
+    try:
+        record = ob_employee.fnf_settlement
+    except ObjectDoesNotExist:
+        record = None
+    estimate = calculate_fnf_settlement(employee, last_day)
+    html_content = render_to_string(
+        "offboarding/fnf_settlement_pdf.html",
+        {
+            "offboarding_employee": ob_employee,
+            "record": record,
+            "settlement": estimate,
+            "employee": employee,
+            "work": work,
+            "company": company,
+        },
+    )
+    slug = (employee.get_full_name() or "employee").replace(" ", "_")[:30]
+    return template_pdf(
+        template=html_content,
+        html=True,
+        filename=f"FnF_{slug}_{last_day or date.today()}",
+    )

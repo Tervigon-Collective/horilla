@@ -82,9 +82,12 @@ def object_delete(cls, pk):
 def individual_permssion_check(request):
     employee_id = request.GET.get("employee_id")
     employee = Employee.objects.filter(id=employee_id).first()
+    if not employee:
+        return False
     if request.user.employee_get == employee:
         return True
-    elif employee.employee_work_info.reporting_manager_id == request.user.employee_get:
+    work_info = getattr(employee, "employee_work_info", None)
+    if work_info and work_info.reporting_manager_id == request.user.employee_get:
         return True
     elif request.user.has_perm("base.view_rotatingworktypeassign"):
         return True
@@ -1264,8 +1267,9 @@ class RotatingShiftPermissionCheck(APIView):
 class WorktypeRequestApprovePermissionCheck(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        instance = Employee.objects.filter(id=request.GET.get("employee_id")).first()
+    def get(self, request, pk=None):
+        employee_id = pk or request.GET.get("employee_id")
+        instance = Employee.objects.filter(id=employee_id).first()
         if (
             _is_reportingmanger(request, instance)
             or request.user.has_perm("base.approve_worktyperequest")
@@ -1278,8 +1282,9 @@ class WorktypeRequestApprovePermissionCheck(APIView):
 class ShiftRequestApprovePermissionCheck(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        instance = Employee.objects.filter(id=request.GET.get("employee_id")).first()
+    def get(self, request, pk=None):
+        employee_id = pk or request.GET.get("employee_id")
+        instance = Employee.objects.filter(id=employee_id).first()
         if (
             _is_reportingmanger(request, instance)
             or request.user.has_perm("base.approve_shiftrequest")
@@ -1304,6 +1309,64 @@ class EmployeeTabPermissionCheck(APIView):
         ):
             return Response(status=200)
         return Response({"message": _("No permission")}, status=400)
+
+
+class PendingApprovalsAPIView(APIView):
+    """GET /api/base/pending-approvals/ — mobile parity for dashboard widget."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from base.dashboard import get_pending_approvals_counts
+
+        return Response(get_pending_approvals_counts(request))
+
+
+class PendingApprovalsInboxAPIView(APIView):
+    """GET /api/base/pending-approvals/inbox/ — unified pending list for mobile."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from base.pending_approvals import get_pending_inbox
+
+        type_filter = request.GET.get("type")
+        try:
+            page = int(request.GET.get("page", 1))
+            page_size = int(request.GET.get("page_size", 20))
+        except (TypeError, ValueError):
+            return Response({"error": _("Invalid pagination.")}, status=400)
+
+        result = get_pending_inbox(request, type_filter, page, page_size)
+        if "error" in result:
+            return Response(result, status=400)
+        return Response(result)
+
+
+class PendingApprovalsActionAPIView(APIView):
+    """POST /api/base/pending-approvals/action/ — approve/reject dispatcher."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from base.pending_approvals import execute_pending_action
+
+        item_type = request.data.get("type")
+        item_id = request.data.get("id")
+        action = request.data.get("action")
+        payload = request.data.get("payload") or {}
+
+        if not item_type or item_id is None or not action:
+            return Response(
+                {"error": _("type, id, and action are required.")},
+                status=400,
+            )
+        try:
+            item_id = int(item_id)
+        except (TypeError, ValueError):
+            return Response({"error": _("Invalid id.")}, status=400)
+
+        return execute_pending_action(request, item_type, item_id, action, payload)
 
 
 class CheckUserLevel(APIView):

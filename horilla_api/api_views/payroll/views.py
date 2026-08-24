@@ -47,8 +47,8 @@ class PayslipView(APIView):
 
     def get(self, request, id=None):
         from payroll.cbv.accessibility import (
-            can_view_all_payslips,
             can_view_payslip_record,
+            scoped_payslip_queryset,
         )
 
         if id:
@@ -56,15 +56,11 @@ class PayslipView(APIView):
             if payslip is None:
                 return Response({"detail": "Not found."}, status=404)
             if can_view_payslip_record(request, payslip):
-                serializer = PayslipSerializer(payslip)
+                serializer = PayslipSerializer(payslip, context={"request": request})
                 return Response(serializer.data, status=200)
             return Response({"detail": _("Permission denied.")}, status=403)
-        if can_view_all_payslips(request):
-            payslips = Payslip.objects.all()
-        else:
-            payslips = Payslip.objects.filter(
-                employee_id__employee_user_id=request.user
-            )
+
+        payslips = scoped_payslip_queryset(request)
 
         payslip_filter_queryset = PayslipFilter(request.GET, payslips).qs
         # groupby workflow
@@ -74,7 +70,7 @@ class PayslipView(APIView):
             return groupby_queryset(request, url, field_name, payslip_filter_queryset)
         pagination = PageNumberPagination()
         page = pagination.paginate_queryset(payslip_filter_queryset, request)
-        serializer = PayslipSerializer(page, many=True)
+        serializer = PayslipSerializer(page, many=True, context={"request": request})
         return pagination.get_paginated_response(serializer.data)
 
 
@@ -374,27 +370,38 @@ class ReimbursementView(APIView):
 class ReimbusementApproveRejectView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @method_decorator(permission_required("payroll.change_reimbursement"))
     def post(self, request, pk):
-        status = request.data.get("status", None)
-        amount = request.data.get("amount", None)
-        amount = (
-            eval_validate(request.data.get("amount"))
-            if request.data.get("amount")
-            else 0
-        )
-        amount = max(0, amount)
-        reimbursement = Reimbursement.objects.filter(id=pk)
-        if amount:
-            reimbursement.update(amount=amount)
-        reimbursement.update(status=status)
-        return Response({"status": reimbursement.first().status}, status=200)
+        from payroll.methods.reimbursement_actions import apply_reimbursement_status
+
+        status_val = request.data.get("status")
+        if status_val not in ("approved", "rejected", "requested"):
+            return Response({"error": _("Invalid status.")}, status=400)
+
+        try:
+            reimbursement = Reimbursement.objects.get(id=pk)
+        except Reimbursement.DoesNotExist:
+            return Response({"error": _("Not found.")}, status=404)
+
+        amount = request.data.get("amount")
+        amount = eval_validate(amount) if amount not in (None, "") else None
+        apply_reimbursement_status(reimbursement, status_val, amount=amount)
+        return Response({"status": reimbursement.status}, status=200)
 
 
 class TaxBracketView(APIView):
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, pk=None):
+        if not request.user.has_perm("payroll.view_taxbracket"):
+            return Response(
+                {"error": _("You do not have permission to view tax brackets.")},
+                status=403,
+            )
         if pk:
             tax_bracket = TaxBracket.find(pk)
+            if not tax_bracket:
+                return Response({"error": _("Tax bracket not found.")}, status=404)
             serializer = TaxBracketSerializer(tax_bracket)
             return Response(serializer.data, status=200)
         tax_brackets = TaxBracket.objects.all()
@@ -402,26 +409,45 @@ class TaxBracketView(APIView):
         return Response(serializer.data, status=200)
 
     def post(self, request):
+        if not request.user.has_perm("payroll.add_taxbracket"):
+            return Response(
+                {"error": _("You do not have permission to add tax brackets.")},
+                status=403,
+            )
         serializer = TaxBracketSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=201)
+        return Response(serializer.errors, status=400)
+
+    def put(self, request, pk):
+        if not request.user.has_perm("payroll.change_taxbracket"):
+            return Response(
+                {"error": _("You do not have permission to change tax brackets.")},
+                status=403,
+            )
+        tax_bracket = TaxBracket.find(pk)
+        if not tax_bracket:
+            return Response({"error": _("Tax bracket not found.")}, status=404)
+        serializer = TaxBracketSerializer(
+            instance=tax_bracket, data=request.data, partial=True
+        )
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=200)
         return Response(serializer.errors, status=400)
 
-    def put(self, request, pk):
-        tax_bracket = TaxBracket.objects.get(id=pk)
-        serializer = TaxBracketSerializer(
-            instance=tax_bracket, data=request.data, partial=True
-        )
-        if serializer.save():
-            serializer.save()
-            return Response(serializer.data, status=200)
-        return Response(serializer.errors, status=400)
-
     def delete(self, request, pk):
-        tax_bracket = TaxBracket.objects.get(id=pk)
+        if not request.user.has_perm("payroll.delete_taxbracket"):
+            return Response(
+                {"error": _("You do not have permission to delete tax brackets.")},
+                status=403,
+            )
+        tax_bracket = TaxBracket.find(pk)
+        if not tax_bracket:
+            return Response({"error": _("Tax bracket not found.")}, status=404)
         tax_bracket.delete()
-        return Response(status=200)
+        return Response(status=204)
 
 
 from datetime import datetime
@@ -478,18 +504,13 @@ class PayslipPDFAPIView(APIView):
 
         # employee & company date format resolution
         employee = request.user.employee_get  # keep same accessor you used
-        info = EmployeeWorkInformation.objects.filter(employee_id=employee)
-        if info.exists():
-            # take the last one (mirrors your loop behavior)
-            employee_company = info.last().company_id
-            emp_company = Company.objects.filter(company=employee_company).first()
-            date_format = (
-                emp_company.date_format
-                if emp_company and emp_company.date_format
-                else "MMM. D, YYYY"
-            )
-        else:
-            date_format = "MMM. D, YYYY"
+        info = EmployeeWorkInformation.objects.filter(employee_id=employee).last()
+        emp_company = info.company_id if info else None
+        date_format = (
+            emp_company.date_format
+            if emp_company and emp_company.date_format
+            else "MMM. D, YYYY"
+        )
 
         # compose data from payslip (same as original)
         data = (
@@ -555,6 +576,7 @@ class PayslipPDFAPIView(APIView):
         data["host"] = request.get_host()
         data["protocol"] = "https" if request.is_secure() else "http"
         data["company"] = Company.objects.filter(hq=True).first()
+        data["payslip_logo_url"] = "/media/base/company/tervigon-payslip-logo.png"
 
         # render HTML string using template
         html = render_to_string(

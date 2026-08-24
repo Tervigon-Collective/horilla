@@ -43,6 +43,14 @@
     </button>
     </div>
     <div class="oh-modal__dialog-body oh-modal__dialog-relative">
+        <div class="mb-2">
+            <a href="{% url 'contract-ctc-wizard' contract_id=contract.id %}" class="oh-btn oh-btn--secondary oh-btn--sm">
+                <ion-icon name="calculator-outline"></ion-icon> {% trans "CTC Wizard" %}
+            </a>
+            <a href="{% url 'salary-revision-list' %}" class="oh-btn oh-btn--light oh-btn--sm">
+                <ion-icon name="document-text-outline"></ion-icon> {% trans "Increment letters" %}
+            </a>
+        </div>
         <a class="oh-timeoff-modal__profile-content"
         style="text-decoration: none"
         href="{% url 'employee-view-individual' contract.employee_id.id %}"

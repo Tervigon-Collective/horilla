@@ -9,9 +9,23 @@ from employee.models import Employee
 from horilla.methods import get_horilla_model_class
 
 
+def overlapping_date_q(start_date, end_date):
+    """Match leave rows that overlap [start_date, end_date]. Null end_date is open-ended."""
+    if start_date is None:
+        return Q(pk__in=[])
+    end = end_date or start_date
+    return Q(start_date__lte=end) & (
+        Q(end_date__gte=start_date) | Q(end_date__isnull=True)
+    )
+
+
 def calculate_requested_days(
     start_date, end_date, start_date_breakdown, end_date_breakdown
 ):
+    if start_date is None:
+        return 0
+    if end_date is None:
+        end_date = start_date
     if start_date == end_date:
         return (
             1
@@ -29,14 +43,45 @@ def calculate_requested_days(
     return middle_days + start_day_value + end_day_value
 
 
-def holiday_dates_list(holidays):
+def holiday_dates_list(holidays, range_start=None, range_end=None):
     """
     :return: This function returns a list of all holiday dates.
+    Recurring holidays expand to the month/day within ``range_start``–``range_end``
+    (or the holiday's own year plus the current year when no range is given).
     """
+    if range_start is not None and hasattr(range_start, "date"):
+        range_start = range_start.date()
+    if range_end is not None and hasattr(range_end, "date"):
+        range_end = range_end.date()
     holiday_dates = []
     for holiday in holidays:
         holiday_start_date = holiday.start_date
+        if not holiday_start_date:
+            continue
         holiday_end_date = holiday.end_date or holiday_start_date
+        if getattr(holiday, "recurring", False):
+            years = set()
+            if range_start and range_end:
+                years.update(range(range_start.year, range_end.year + 1))
+            else:
+                years.update(
+                    {
+                        holiday_start_date.year,
+                        date.today().year,
+                        date.today().year + 1,
+                    }
+                )
+            for year in years:
+                try:
+                    occ = date(
+                        year, holiday_start_date.month, holiday_start_date.day
+                    )
+                except ValueError:
+                    continue
+                if range_start and range_end and not (range_start <= occ <= range_end):
+                    continue
+                holiday_dates.append(occ)
+            continue
         holiday_dates.extend(
             holiday_start_date + timedelta(i)
             for i in range((holiday_end_date - holiday_start_date).days + 1)
@@ -198,3 +243,25 @@ def parse_excel_date(value):
 
     # If nothing matches, return None (caller should handle error)
     return None
+
+
+def scope_leave_requests(request, queryset):
+    """Own + direct/indirect reports, unless user has org-wide leave view."""
+    from base.methods import filtersubordinates
+
+    return filtersubordinates(request, queryset, "leave.view_leaverequest")
+
+
+def scope_available_leave(request, queryset):
+    """Own + team leave balances unless user has org-wide available-leave view."""
+    from base.methods import filtersubordinates
+
+    return filtersubordinates(request, queryset, "leave.view_availableleave")
+
+
+def scope_leave_allocation_requests(request, queryset):
+    from base.methods import filtersubordinates
+
+    return filtersubordinates(
+        request, queryset, "leave.view_leaveallocationrequest"
+    )

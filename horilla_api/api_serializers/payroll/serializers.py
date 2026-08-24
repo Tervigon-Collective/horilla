@@ -47,6 +47,24 @@ class PayslipSerializer(serializers.ModelSerializer):
         except Exception:
             return None
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        from payroll.cbv.accessibility import can_view_all_payslips
+
+        request = self.context.get("request")
+        employee = getattr(instance, "employee_id", None)
+        own = bool(
+            request
+            and getattr(request, "user", None)
+            and request.user.is_authenticated
+            and employee
+            and getattr(employee, "employee_user_id", None) == request.user
+        )
+        payroll_admin = bool(request) and can_view_all_payslips(request)
+        if not (own or payroll_admin):
+            data.pop("bank_account_check_number", None)
+        return data
+
 
 class ContractSerializer(serializers.ModelSerializer):
     employee_first_name = serializers.CharField(

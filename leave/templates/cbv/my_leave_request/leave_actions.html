@@ -2,7 +2,7 @@
 {% load i18n %}
 <div class=" {% if instance.status == 'rejected' %} diff-cell{% endif %}" onclick="event.stopPropagation()">
     <div class="flex items-center justify-center gap-1">
-        {% if instance.status == 'approved' and instance.end_date >= current_date %}
+        {% if instance.status == 'approved' and instance.effective_end_date >= current_date %}
             <a data-toggle="oh-modal-toggle"
                 data-target="#cancelModal"
                 hx-get="{% url 'user-request-cancel' instance.id %}"

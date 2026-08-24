@@ -109,6 +109,12 @@ def outlook_mail_accessibility(request, submenu, user_perms, *args, **kwargs):
     ) and apps.is_installed("outlook_auth")
 
 
+def _outlook_mail_url():
+    if apps.is_installed("outlook_auth"):
+        return reverse_lazy("outlook_view_records")
+    return reverse_lazy("mail-server-conf")
+
+
 def department_accessibility(request, submenu, user_perms, *args, **kwargs):
     return request.user.has_perm("base.view_department")
 
@@ -150,7 +156,7 @@ def linkedin_accessibility(request, submenu, user_perms, *args, **kwargs):
 def ldap_accessibility(request, submenu, user_perms, *args, **kwargs):
     return apps.is_installed("horilla_ldap") and any(
         request.user.has_perm(p)
-        for p in ["horilla_ldap.add_ldapsettings", "horilla_ldap.update_ldapsettings"]
+        for p in ["horilla_ldap.add_ldapsettings", "horilla_ldap.change_ldapsettings"]
     )
 
 
@@ -324,7 +330,7 @@ class GeneralSettings:
         },
         {
             "label": _("Outlook Mail"),
-            "url": reverse_lazy("outlook_view_records"),
+            "url": _outlook_mail_url(),
             "accessibility": outlook_mail_accessibility,
             "search_entries": [
                 {

@@ -11,16 +11,48 @@ from payroll import dashboard as pay_dashboard
 from payroll.cbv import contracts, dashboard, payslip_automation, settings_tabs
 from payroll.models.models import Contract, Payslip
 from payroll.views import views
+from payroll.views import ctc_views
 
 urlpatterns = [
     path("", include("payroll.urls.component_urls")),
     path("", include("payroll.urls.tax_urls")),
+    path("", include("payroll.urls.india_statutory_urls")),
     path("contract-create/", views.contract_create, name="contract-create"),
     path(
         "update-contract/<int:contract_id>/",
         views.contract_update,
         name="update-contract",
         kwargs={"model": Contract},
+    ),
+    path(
+        "contract/<int:contract_id>/ctc-wizard/",
+        ctc_views.ctc_wizard,
+        name="contract-ctc-wizard",
+    ),
+    path(
+        "salary-revisions/",
+        ctc_views.salary_revision_list,
+        name="salary-revision-list",
+    ),
+    path(
+        "salary-revisions/<int:revision_id>/",
+        ctc_views.salary_revision_letter,
+        name="salary-revision-letter",
+    ),
+    path(
+        "salary-revisions/<int:revision_id>/pay-arrears/",
+        ctc_views.pay_salary_arrears,
+        name="pay-salary-arrears",
+    ),
+    path(
+        "salary-holds/",
+        ctc_views.salary_hold_list,
+        name="salary-hold-list",
+    ),
+    path(
+        "salary-holds/toggle/",
+        ctc_views.salary_hold_toggle,
+        name="salary-hold-toggle",
     ),
     path(
         "update-contract-status/<int:contract_id>/",

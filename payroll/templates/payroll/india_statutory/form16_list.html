@@ -1,0 +1,151 @@
+{% extends "index.html" %}
+{% load i18n horillafilters static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+
+<div class="is-page">
+{% include "payroll/india_statutory/nav.html" with active_tab="form16" company=company settings=settings %}
+
+<div class="is-page__content">
+    <div class="is-kpi-grid">
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--blue">
+                <ion-icon name="people-outline"></ion-icon>
+            </div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Employees" %}</div>
+                <div class="is-kpi-card__value">{{ total_employees }}</div>
+                <div class="is-kpi-card__sub">FY {{ financial_year }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--green">
+                <ion-icon name="trending-up-outline"></ion-icon>
+            </div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Total Gross" %}</div>
+                <div class="is-kpi-card__value">{{ summary_gross|floatformat:0|currency_symbol_position }}</div>
+                <div class="is-kpi-card__sub">{% trans "All employees" %}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--amber">
+                <ion-icon name="remove-circle-outline"></ion-icon>
+            </div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Total TDS" %}</div>
+                <div class="is-kpi-card__value">{{ summary_tds|floatformat:0|currency_symbol_position }}</div>
+                <div class="is-kpi-card__sub">{% trans "Tax deducted" %}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--purple">
+                <ion-icon name="bookmark-outline"></ion-icon>
+            </div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Saved Records" %}</div>
+                <div class="is-kpi-card__value">{{ saved_count }}</div>
+                <div class="is-kpi-card__sub">{% trans "Form 16 archived" %}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="is-toolbar">
+        <form method="get" class="is-toolbar__form">
+            <label class="oh-label" for="fy">{% trans "Financial Year" %}</label>
+            <select name="fy" id="fy" class="oh-select oh-select-2" onchange="this.form.submit()">
+                {% for fy in fy_options %}
+                <option value="{{ fy }}" {% if fy == financial_year_start %}selected{% endif %}>FY {{ fy }}-{{ fy|add:1 }}</option>
+                {% endfor %}
+            </select>
+        </form>
+    </div>
+
+    {% include "payroll/india_statutory/_import_export_panel.html" %}
+
+    {% if rows %}
+    <div class="is-section">
+        <div class="is-section__body is-section__body--flush">
+            <div class="is-table-wrap">
+                <table class="is-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Employee" %}</th>
+                            <th>{% trans "Payslips" %}</th>
+                            <th>{% trans "Gross Salary" %}</th>
+                            <th>{% trans "PF (Employee)" %}</th>
+                            <th>{% trans "TDS Deducted" %}</th>
+                            <th>{% trans "Status" %}</th>
+                            <th class="is-actions">{% trans "Actions" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in rows %}
+                        <tr>
+                            <td>
+                                <div class="oh-profile oh-profile--md">
+                                    <div class="oh-profile__avatar mr-1">
+                                        <img src="{{ row.employee.get_avatar }}" class="oh-profile__image"
+                                             width="32" height="32" alt="{{ row.employee.get_full_name }}" />
+                                    </div>
+                                    <div>
+                                        <span class="oh-profile__name oh-text--dark d-block">{{ row.employee.get_full_name }}</span>
+                                        <span class="is-muted" style="font-size:11px;">{{ row.employee.badge_id|default:"" }}</span>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="is-num">{{ row.payslip_count }}</td>
+                            <td class="is-num">{{ row.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.pf|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.tds|floatformat:2|currency_symbol_position }}</td>
+                            <td>
+                                {% if row.saved %}
+                                <span class="oh-checkpoint-badge text-success mb-0">{% trans "Saved" %}</span>
+                                {% else %}
+                                <span class="oh-checkpoint-badge text-info mb-0">{% trans "From payslips" %}</span>
+                                {% endif %}
+                            </td>
+                            <td class="is-actions">
+                                <div class="oh-btn-group justify-content-center">
+                                    <a href="{% url 'form16-view' row.employee.id %}?fy={{ financial_year_start }}"
+                                       class="oh-btn oh-btn--light-bkg oh-btn--sm" title="{% trans 'View' %}">
+                                        <ion-icon name="eye-outline"></ion-icon>
+                                    </a>
+                                    <a href="{% url 'form16-view' row.employee.id %}?fy={{ financial_year_start }}&format=pdf"
+                                       class="oh-btn oh-btn--light-bkg oh-btn--sm" title="{% trans 'Download PDF' %}" target="_blank">
+                                        <ion-icon name="download-outline"></ion-icon>
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="is-section">
+        <div class="is-empty">
+            <img src="{% static 'images/ui/no_records.svg' %}" alt="" style="width:120px;opacity:0.75;">
+            <h3 class="is-empty__title">{% trans "No Form 16 data for this financial year" %}</h3>
+            <p class="is-empty__desc">
+                {% trans "Confirm payslips with Indian statutory enabled. Existing payslips must be regenerated after enabling statutory payroll." %}
+            </p>
+            <div class="is-empty__actions">
+                <a href="{% url 'india-statutory-settings' %}" class="oh-btn oh-btn--secondary">
+                    <ion-icon name="settings-outline"></ion-icon>
+                    {% trans "Statutory Settings" %}
+                </a>
+                <a href="{% url 'view-payslip' %}" class="oh-btn oh-btn--light">
+                    <ion-icon name="receipt-outline"></ion-icon>
+                    {% trans "Payslips" %}
+                </a>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+</div>
+{% endblock %}

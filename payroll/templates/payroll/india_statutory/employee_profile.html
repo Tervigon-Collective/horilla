@@ -1,0 +1,138 @@
+{% extends "index.html" %}
+{% load i18n horillafilters static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+
+<div class="is-page">
+{% for message in messages %}
+<div class="oh-alert-container">
+    <div class="oh-alert oh-alert--animated {{ message.tags }}">{{ message }}</div>
+</div>
+{% endfor %}
+
+<div class="is-page-head">
+    <h1 class="is-page-head__title">{% trans "Statutory Profile" %}</h1>
+    <p class="is-page-head__desc">
+        {{ employee.get_full_name }} · {% trans "PAN, UAN, PF/ESI/TDS overrides" %}
+    </p>
+</div>
+<div class="is-actions-row" style="margin-bottom:20px;">
+    <a href="{% url 'form16-view' emp_id=employee.id %}" class="oh-btn oh-btn--light oh-btn--sm">
+        <ion-icon name="document-text-outline"></ion-icon>
+        {% trans "Form 16" %}
+    </a>
+    <a href="{% url 'india-statutory-settings' %}" class="oh-btn oh-btn--light oh-btn--sm">
+        <ion-icon name="settings-outline"></ion-icon>
+        {% trans "Company Settings" %}
+    </a>
+</div>
+
+<div class="is-page__content">
+    <div class="is-emp-header">
+        <div class="oh-profile oh-profile--md">
+            <div class="oh-profile__avatar">
+                <img src="{{ employee.get_avatar }}" class="oh-profile__image" width="72" height="72"
+                     alt="{{ employee.get_full_name }}" />
+            </div>
+        </div>
+        <div>
+            <h2 class="is-strong" style="font-size:18px;margin-bottom:4px;">{{ employee.get_full_name }}</h2>
+            <p class="is-page-head__desc">{% trans "Employee-level statutory overrides" %}</p>
+        </div>
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="is-section">
+            <div class="is-section__header">
+                <span class="is-section__icon"><ion-icon name="checkmark-done-outline"></ion-icon></span>
+                <div>
+                    <h3 class="is-section__title">{% trans "Applicability" %}</h3>
+                    <p class="is-section__desc">{% trans "Override company defaults for this employee" %}</p>
+                </div>
+            </div>
+            <div class="is-section__body">
+                <div class="is-switch-grid">
+                    <div>
+                        <div class="is-switch-row">
+                            <label class="oh-label" for="{{ form.pf_applicable.id_for_label }}">{{ form.pf_applicable.label }}</label>
+                            {{ form.pf_applicable }}
+                        </div>
+                        <div class="is-switch-row">
+                            <label class="oh-label" for="{{ form.esi_applicable.id_for_label }}">{{ form.esi_applicable.label }}</label>
+                            {{ form.esi_applicable }}
+                        </div>
+                    </div>
+                    <div>
+                        <div class="is-switch-row">
+                            <label class="oh-label" for="{{ form.pt_applicable.id_for_label }}">{{ form.pt_applicable.label }}</label>
+                            {{ form.pt_applicable }}
+                        </div>
+                        <div class="is-switch-row">
+                            <label class="oh-label" for="{{ form.tds_applicable.id_for_label }}">{{ form.tds_applicable.label }}</label>
+                            {{ form.tds_applicable }}
+                        </div>
+                        <div class="is-switch-row">
+                            <label class="oh-label" for="{{ form.lwf_applicable.id_for_label }}">{{ form.lwf_applicable.label }}</label>
+                            {{ form.lwf_applicable }}
+                        </div>
+                        <div class="is-switch-row">
+                            <label class="oh-label" for="{{ form.bonus_applicable.id_for_label }}">{{ form.bonus_applicable.label }}</label>
+                            {{ form.bonus_applicable }}
+                        </div>
+                        <div class="is-switch-row">
+                            <label class="oh-label" for="{{ form.gratuity_applicable.id_for_label }}">{{ form.gratuity_applicable.label }}</label>
+                            {{ form.gratuity_applicable }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="is-section">
+            <div class="is-section__header">
+                <span class="is-section__icon"><ion-icon name="calculator-outline"></ion-icon></span>
+                <div>
+                    <h3 class="is-section__title">{% trans "Tax & Deductions" %}</h3>
+                    <p class="is-section__desc">{% trans "TDS regime, VPF and Chapter VI-A declarations" %}</p>
+                </div>
+            </div>
+            <div class="is-section__body">
+                <div class="is-form-grid is-form-grid--auto">
+                    <div class="is-field">
+                        <label class="oh-label" for="{{ form.tds_regime.id_for_label }}">{{ form.tds_regime.label }}</label>
+                        {{ form.tds_regime }}
+                    </div>
+                    <div class="is-field">
+                        <label class="oh-label" for="{{ form.vpf_rate.id_for_label }}">{{ form.vpf_rate.label }}</label>
+                        {{ form.vpf_rate }}
+                    </div>
+                    <div class="is-field">
+                        <label class="oh-label" for="{{ form.section_80c_annual.id_for_label }}">{{ form.section_80c_annual.label }}</label>
+                        {{ form.section_80c_annual }}
+                    </div>
+                    <div class="is-field">
+                        <label class="oh-label" for="{{ form.section_80d_annual.id_for_label }}">{{ form.section_80d_annual.label }}</label>
+                        {{ form.section_80d_annual }}
+                    </div>
+                    <div class="is-field">
+                        <label class="oh-label" for="{{ form.other_chapter_vi_a.id_for_label }}">{{ form.other_chapter_vi_a.label }}</label>
+                        {{ form.other_chapter_vi_a }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="is-save-bar">
+            <span class="is-field__hint">{% trans "Changes apply on the next payslip generation." %}</span>
+            <button type="submit" class="oh-btn oh-btn--secondary">
+                <ion-icon name="save-outline"></ion-icon>
+                {% trans "Save Profile" %}
+            </button>
+        </div>
+    </form>
+</div>
+</div>
+{% endblock %}

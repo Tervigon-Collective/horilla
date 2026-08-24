@@ -8,6 +8,7 @@ import json
 from datetime import date, datetime
 
 from django.apps import apps
+from django.db.models import Q
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.utils.translation import gettext_lazy as _
@@ -55,17 +56,28 @@ def find_on_time(request, today, week_day, department=None):
     return on_time
 
 
-def find_expected_attendances(week_day):
+def find_expected_attendances(week_day, today=None):
     """
     This method is used to find count of expected attendances for the week day
     """
+    today = datetime.today() if today is None else today
     employees = Employee.objects.filter(is_active=True)
     if apps.is_installed("leave"):
         LeaveRequest = get_horilla_model_class(app_label="leave", model="leaverequest")
-        on_leave = LeaveRequest.objects.filter(status="Approved")
+        on_leave_day = today.date() if hasattr(today, "date") else today
+        on_leave = (
+            LeaveRequest.objects.filter(
+                status="approved",
+                start_date__lte=on_leave_day,
+            )
+            .filter(Q(end_date__gte=on_leave_day) | Q(end_date__isnull=True))
+            .values("employee_id")
+            .distinct()
+            .count()
+        )
     else:
-        on_leave = []
-    expected_attendances = len(employees) - len(on_leave)
+        on_leave = 0
+    expected_attendances = max(0, employees.count() - on_leave)
     return expected_attendances
 
 
@@ -84,7 +96,7 @@ def dashboard(request):
 
     marked_attendances = late_come_obj + on_time
 
-    expected_attendances = find_expected_attendances(week_day=week_day)
+    expected_attendances = find_expected_attendances(week_day=week_day, today=today)
     on_time_ratio = 0
     late_come_ratio = 0
     marked_attendances_ratio = 0
@@ -198,7 +210,7 @@ def dashboard_validate_attendances(request):
 
     validate_attendances = filtersubordinates(
         request=request,
-        perm="attendance.change_overtime",
+        perm="attendance.view_attendance",
         queryset=validate_attendances,
     )
 
@@ -212,6 +224,35 @@ def dashboard_validate_attendances(request):
         "main_dashboard": main_dashboard,
     }
     return render(request, "attendance/dashboard/to_validate_table.html", context)
+
+
+@login_required
+@hx_request_required
+def dashboard_missing_punches(request):
+    """
+    Dashboard widget listing employees with missing punch in/out (last 30 days).
+    """
+    from attendance.methods.missing_punch import missing_punch_work_records
+
+    main_dashboard = None
+    referer = request.META.get("HTTP_REFERER", "/")
+    referer = "/" + "/".join(referer.split("/")[3:])
+    if referer == "/":
+        main_dashboard = True
+
+    page_number = request.GET.get("page")
+    missing_records = missing_punch_work_records(request, days=30)
+    missing_id_list = list(missing_records.values_list("id", flat=True))
+    missing_records_ids = json.dumps(missing_id_list)
+    missing_records = paginator_qry(missing_records, page_number)
+    context = {
+        "missing_records": missing_records,
+        "missing_records_ids": missing_records_ids,
+        "main_dashboard": main_dashboard,
+    }
+    return render(
+        request, "attendance/dashboard/missing_punch_table.html", context
+    )
 
 
 def total_attendance(start_date, department, end_date=None):
@@ -343,17 +384,29 @@ def dashboard_attendance(request):
     ]
     # initializing values
     data_set = []
-    start_date = date.today()
-    end_date = start_date
-    type = "date"
+    today = date.today()
+    start_date = today
+    end_date = today
+    type = "day"
 
-    # if there is values in request update the values
-    if request.GET.get("date"):
-        start_date = request.GET.get("date")
-    if request.GET.get("type"):
-        type = request.GET.get("type")
-    if request.GET.get("end_date"):
-        end_date = request.GET.get("end_date")
+    # Prefer dashboard period picker (from_date / to_date)
+    from_str = request.GET.get("from_date")
+    to_str = request.GET.get("to_date")
+    if from_str and to_str:
+        try:
+            start_date = date.fromisoformat(from_str)
+            end_date = min(date.fromisoformat(to_str), today)
+            type = "date_range"
+        except (ValueError, TypeError):
+            pass
+    else:
+        # Legacy params used by older attendance dashboard widgets
+        if request.GET.get("date"):
+            start_date = request.GET.get("date")
+        if request.GET.get("type"):
+            type = request.GET.get("type")
+        if request.GET.get("end_date"):
+            end_date = request.GET.get("end_date")
 
     # get all departments for filtration
     departments = Department.objects.all()
@@ -389,11 +442,24 @@ def department_overtime_chart(request):
     ):
         return JsonResponse({"no_permission": True})
 
-    start_date = request.GET.get("date") if request.GET.get("date") else date.today()
-    chart_type = request.GET.get("type") if request.GET.get("type") else "day"
-    end_date = (
-        request.GET.get("end_date") if request.GET.get("end_date") else start_date
-    )
+    today = date.today()
+    from_str = request.GET.get("from_date")
+    to_str = request.GET.get("to_date")
+    if from_str and to_str:
+        try:
+            start_date = date.fromisoformat(from_str)
+            end_date = min(date.fromisoformat(to_str), today)
+            chart_type = "date_range"
+        except (ValueError, TypeError):
+            start_date = today
+            end_date = today
+            chart_type = "day"
+    else:
+        start_date = request.GET.get("date") if request.GET.get("date") else today
+        chart_type = request.GET.get("type") if request.GET.get("type") else "day"
+        end_date = (
+            request.GET.get("end_date") if request.GET.get("end_date") else start_date
+        )
 
     if chart_type == "day":
         start_date = start_date

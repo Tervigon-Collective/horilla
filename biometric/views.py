@@ -1825,6 +1825,7 @@ def add_biometric_user(request, device_id):
 @login_required
 @install_required
 @hx_request_required
+@permission_required("biometric.change_biometricemployees")
 def map_biometric_users(request, device_id):
     """
     Maps an horilla employee to a biometric user on a specified biometric device.
@@ -1864,6 +1865,7 @@ def map_biometric_users(request, device_id):
 @login_required
 @install_required
 @hx_request_required
+@permission_required("biometric.add_biometricemployees")
 def add_dahua_biometric_user(request, device_id):
     """
     Adds a new employee to a Dahua biometric device.
@@ -1946,6 +1948,7 @@ def find_employee_badge_id(request):
 @login_required
 @hx_request_required
 @install_required
+@permission_required("biometric.delete_biometricemployees")
 def delete_dahua_user(request, obj_id=None):
     """
     Deletes a Dahua biometric user or multiple users from a device.

@@ -32,6 +32,7 @@ def generate_payslip(date, companies, all):
     """Generate payslip for previous month"""
 
     from employee.models import Employee
+    from payroll.methods.ctc_wizard import is_salary_on_hold
 
     date = date
     employees = Employee.objects.none()
@@ -67,6 +68,8 @@ def generate_payslip(date, companies, all):
             employee_id=employee, contract_status="active"
         ).first()
         if period_end < contract.contract_start_date:
+            continue
+        if is_salary_on_hold(employee):
             continue
         # A contract starting mid-period shortens only that employee's payslip,
         # so the adjusted start must stay local to this iteration.

@@ -121,6 +121,10 @@ $(document).ready(function () {
             stage: stageId,
           },
           success: function (response) {
+            if (response && response.type === "danger") {
+              location.reload();
+              return;
+            }
             var alertContainer = $('<div class="oh-alert-container">');
             var alertDiv = $(
               `<div class="oh-alert oh-alert--animated oh-alert--${response.type}">`

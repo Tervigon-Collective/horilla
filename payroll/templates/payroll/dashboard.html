@@ -229,6 +229,45 @@
 
         <!-- Right sidebar -->
         <div class="pd-sidebar">
+            {% if india_statutory_enabled %}
+            <div class="pd-info-panel">
+                <div class="pd-info-panel__header">
+                    <div class="pd-info-panel__title">{% trans "India Statutory" %}</div>
+                    <span class="pd-badge pd-badge--green">{% trans "Active" %}</span>
+                </div>
+                <div class="pd-info-panel__body">
+                    <div class="pd-list-item">
+                        <div class="pd-list-item__info">
+                            <div class="pd-list-item__name">{% trans "Professional Tax" %}</div>
+                            <div class="pd-list-item__detail">{{ india_statutory_settings.get_pt_state_display|default:"—" }}</div>
+                        </div>
+                    </div>
+                    <div class="pd-list-item">
+                        <div class="pd-list-item__info">
+                            <div class="pd-list-item__name">{% trans "Components" %}</div>
+                            <div class="pd-list-item__detail">
+                                {% if india_statutory_settings.enable_pf %}PF{% endif %}
+                                {% if india_statutory_settings.enable_esi %}{% if india_statutory_settings.enable_pf %} · {% endif %}ESI{% endif %}
+                                {% if india_statutory_settings.enable_tds %}{% if india_statutory_settings.enable_pf or india_statutory_settings.enable_esi %} · {% endif %}TDS{% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    <a href="{% url 'india-statutory-settings' %}" class="pd-list-item">
+                        <div class="pd-list-item__info">
+                            <div class="pd-list-item__name">{% trans "Statutory settings" %}</div>
+                            <div class="pd-list-item__detail">{% trans "PF, ESI, PT, TDS" %}</div>
+                        </div>
+                    </a>
+                    <a href="{% url 'form16-list' %}" class="pd-list-item">
+                        <div class="pd-list-item__info">
+                            <div class="pd-list-item__name">{% trans "Form 16 records" %}</div>
+                            <div class="pd-list-item__detail">{% trans "Annual tax certificates" %}</div>
+                        </div>
+                    </a>
+                    <p style="font-size:11px;opacity:0.55;margin:8px 0 0;">{% trans "Regenerate payslips after enabling statutory to see PF/ESI/TDS lines." %}</p>
+                </div>
+            </div>
+            {% endif %}
             <div class="pd-info-panel">
                 <div class="pd-info-panel__header">
                     <div class="pd-info-panel__title">{% trans "Top Earners" %}</div>

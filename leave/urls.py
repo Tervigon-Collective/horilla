@@ -141,6 +141,16 @@ urlpatterns = [
         views.leave_type_condition_delete,
         name="leave-type-condition-delete",
     ),
+    path(
+        "leave-type/<int:leave_type_id>/accrual/create/",
+        views.leave_type_accrual_create,
+        name="leave-type-accrual-create",
+    ),
+    path(
+        "leave-type/<int:leave_type_id>/accrual/<int:rule_id>/delete/",
+        views.leave_type_accrual_delete,
+        name="leave-type-accrual-delete",
+    ),
     # path("type-view/", views.leave_type_view, name="type-view"),
     path(
         "leave-type-individual-view/<int:id>/",

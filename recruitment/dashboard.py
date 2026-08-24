@@ -45,14 +45,20 @@ def _parse_period(request):
     return from_date, to_date
 
 
+def _period_end(to_date):
+    """Last day of the selected period that is not in the future."""
+    return min(to_date, date.today())
+
+
 def _candidates_in_period(request):
     """Return Candidate queryset filtered to the requested period (by created_at)."""
     from recruitment.models import Candidate
 
     from_date, to_date = _parse_period(request)
+    period_end = _period_end(to_date)
     return Candidate.objects.filter(
         created_at__date__gte=from_date,
-        created_at__date__lte=to_date,
+        created_at__date__lte=period_end,
     )
 
 

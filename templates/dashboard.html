@@ -2125,12 +2125,13 @@
                 fetchP("{% url 'dashboard-kpi-data' %}")
                     .then(r => r.json())
                     .then(data => {
+                        const periodBadge = data.period_label || '{% trans "this period" %}';
                         const empSvg   = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
                         const attSvg   = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>';
                         const leaveSvg = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>';
                         const recruSvg = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>';
                         document.getElementById('md-kpi-grid').innerHTML =
-                            kpiCard("{% url 'employee-view' %}",   PERM.employee,    'md-kpi-card__icon--indigo', empSvg,   '{% trans "Total Employees" %}',   data.total_employees,   data.new_joiners > 0 ? '<span class="md-badge md-badge--green">+' + data.new_joiners + ' {% trans "this month" %}</span>' : '<span style="opacity:0.5">{% trans "No new joiners" %}</span>') +
+                            kpiCard("{% url 'employee-view' %}",   PERM.employee,    'md-kpi-card__icon--indigo', empSvg,   '{% trans "Total Employees" %}',   data.total_employees,   data.new_joiners > 0 ? '<span class="md-badge md-badge--green">+' + data.new_joiners + ' ' + periodBadge + '</span>' : '<span style="opacity:0.5">{% trans "No new joiners" %}</span>') +
                             kpiCard("{% url 'attendance-view' %}",  PERM.attendance,  'md-kpi-card__icon--green',  attSvg,   '{% trans "Present Today" %}',     data.present_today,     '<span class="md-badge ' + (data.attendance_rate >= 80 ? 'md-badge--green' : 'md-badge--amber') + '">' + data.attendance_rate + '% {% trans "rate" %}</span>') +
                             kpiCard(`{% url 'request-view' %}?from_date=${getToday()}&to_date=${getToday()}&status=approved`,     PERM.leave,       'md-kpi-card__icon--amber',  leaveSvg, '{% trans "On Leave" %}',           data.on_leave,          data.pending_leaves > 0 ? '<span class="md-badge md-badge--amber">' + data.pending_leaves + ' {% trans "pending" %}</span>' : '<span style="opacity:0.5">{% trans "No pending" %}</span>') +
                             (PERM.recruitment ? kpiCard("{% url 'recruitment-view' %}", true, 'md-kpi-card__icon--purple', recruSvg, '{% trans "Open Recruitments" %}', data.open_recruitments, '<span style="opacity:0.5">{% trans "Active hiring" %}</span>') : '');
@@ -2364,7 +2365,7 @@
 
             // ─── EMPLOYEE STATUS ───
             function loadEmployeeStatus() {
-                fetch("/employee/dashboard-employee")
+                fetch("{% url 'dashboard-employee' %}")
                 .then(r => r.json())
                 .then(data => {
                     if (!data.dataSet || !data.dataSet.length) { document.querySelector("#chart-employee-status").innerHTML = emptyHtml('{% trans "No data" %}'); return; }
@@ -2401,7 +2402,7 @@
             {% if perms.attendance.view_attendance or request.user.is_superuser %}
             // ─── ATTENDANCE OVERVIEW ───
             function loadAttendanceOverview() {
-                fetch("{% url 'dashboard-attendance' %}")
+                fetchP("{% url 'dashboard-attendance' %}")
                 .then(r => r.json())
                 .then(data => {
                     if (data.no_permission) { hideCard('attendance_overview'); return; }
@@ -2437,7 +2438,7 @@
 
             // ─── DEPARTMENT OVERTIME ───
             function loadDepartmentOvertime() {
-                fetch("{% url 'department-overtime-chart' %}")
+                fetchP("{% url 'department-overtime-chart' %}")
                 .then(r => r.json())
                 .then(data => {
                     if (data.no_permission) { hideCard('department_overtime'); return; }
@@ -2465,7 +2466,7 @@
             {% if perms.leave.view_leaverequest or request.user.is_superuser %}
             // ─── LEAVE OVER PERIOD ───
             function loadLeaveOverPeriod() {
-                fetch("{% url 'leave-over-period' %}")
+                fetchP("{% url 'leave-over-period' %}")
                 .then(r => r.json())
                 .then(data => {
                     if (data.no_permission) { hideCard('leave_trends'); return; }
@@ -2539,7 +2540,7 @@
 
             // ─── HIRING TIMELINE ───
             function loadHiringTimeline() {
-                fetch("{% url 'dashboard-hiring' %}")
+                fetchP("{% url 'dashboard-hiring' %}")
                 .then(r => {
                     const ct = r.headers.get('content-type') || '';
                     if (!r.ok || !ct.includes('application/json')) {
@@ -2587,7 +2588,7 @@
             {% if perms.leave.view_leaverequest or request.user.is_superuser %}
             // ─── LEAVE BY DEPARTMENT ───
             function loadLeaveByDepartment() {
-                fetch("{% url 'overall-leave' %}")
+                fetchP("{% url 'overall-leave' %}")
                 .then(r => r.json())
                 .then(data => {
                     if (data.no_permission) { hideCard('leave_by_department'); return; }
@@ -2619,7 +2620,7 @@
 
             // ─── DEPARTMENT LEAVE DAYS ───
             function loadDepartmentLeaveDays() {
-                fetch("{% url 'department-leave-chart' %}")
+                fetchP("{% url 'department-leave-chart' %}")
                 .then(r => r.json())
                 .then(data => {
                     if (data.no_permission) { hideCard('department_leave_days'); return; }
@@ -2644,7 +2645,7 @@
 
             // ─── UPCOMING HOLIDAYS ───
             function loadUpcomingHolidays() {
-                fetch("{% url 'dashboard-upcoming-holidays' %}")
+                fetchP("{% url 'dashboard-upcoming-holidays' %}")
                 .then(r => r.json())
                 .then(data => {
                     const el = document.getElementById('md-birthdays');
@@ -2654,7 +2655,7 @@
                     const viewAllLink = document.getElementById('md-holidays-viewall');
                     if (viewAllLink) viewAllLink.href = `{% url 'holiday-view' %}`;
 
-                    if (!data.holidays.length) { el.innerHTML = '<div class="md-info-panel__empty">{% trans "No holidays in the next 7 days" %}</div>'; return; }
+                    if (!data.holidays.length) { el.innerHTML = '<div class="md-info-panel__empty">{% trans "No upcoming holidays" %}</div>'; return; }
                     el.innerHTML = data.holidays.map(h => {
                         const badge = h.days_away === 0
                             ? '<span class="md-bday-item__badge md-bday-item__badge--today">{% trans "Today" %}</span>'
@@ -2670,13 +2671,13 @@
                         ${badge}
                     </div>`;
                     }).join('');
-                }).catch(() => { document.getElementById('md-birthdays').innerHTML = '<div class="md-info-panel__empty">{% trans "No holidays this week" %}</div>'; });
+                }).catch(() => { document.getElementById('md-birthdays').innerHTML = '<div class="md-info-panel__empty">{% trans "No upcoming holidays" %}</div>'; });
             }
             loadUpcomingHolidays();
 
             // ─── PENDING APPROVALS ───
             function loadPendingApprovals() {
-                fetchP("{% url 'dashboard-pending-approvals' %}")
+                fetch("{% url 'dashboard-pending-approvals' %}")
                 .then(r => r.json())
                 .then(data => {
                     const p = data.pending;
@@ -2691,6 +2692,11 @@
 
                     // Admins / managers: render clickable approval cards
                     document.getElementById('md-pending-approvals').innerHTML = `
+                <div class="mb-2">
+                    <a href="{% url 'approval-inbox' %}" class="oh-btn oh-btn--secondary oh-btn--sm d-inline-flex align-items-center gap-1">
+                        <ion-icon name="mail-open-outline"></ion-icon> {% trans "Open approval inbox" %}
+                    </a>
+                </div>
                 <div class="md-pending-grid">
                     <a href="{% url 'request-view' %}?status=requested" class="md-pending-card md-pending-card--amber">
                         <div class="md-pending-card__count">${p.leave_requests}</div>

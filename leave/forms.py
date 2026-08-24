@@ -30,6 +30,7 @@ from horilla_widgets.widgets.select_widgets import HorillaMultiSelectWidget
 from leave.methods import get_leave_day_attendance
 from leave.models import (
     AvailableLeave,
+    LeaveAccrualRule,
     LeaveAllocationRequest,
     LeaveallocationrequestComment,
     LeaveRequest,
@@ -99,6 +100,42 @@ class LeaveTypeConditionForm(forms.ModelForm):
                 _("A value is required for the selected condition type."),
             )
         return cleaned_data
+
+
+class LeaveAccrualRuleForm(forms.ModelForm):
+    """Form for grade / position based annual leave entitlement rules."""
+
+    class Meta:
+        model = LeaveAccrualRule
+        fields = ["job_grade", "job_position_id", "annual_days"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            widget = field.widget
+            if isinstance(widget, forms.Select):
+                field.widget.attrs["style"] = (
+                    "width:100%; height:50px;"
+                    "border: 1px solid hsl(213deg,22%,84%);"
+                    "border-radius: 0rem;"
+                    "padding: 0.8rem 1.25rem;"
+                )
+            elif isinstance(
+                widget, (forms.NumberInput, forms.EmailInput, forms.TextInput)
+            ):
+                field.widget.attrs.update(
+                    {"class": "oh-input w-100", "placeholder": field.label or ""}
+                )
+
+    def clean(self):
+        cleaned = super().clean()
+        if not cleaned.get("job_grade") and not cleaned.get("job_position_id"):
+            raise ValidationError(
+                _("Set a job grade and/or job position for this accrual rule.")
+            )
+        if cleaned.get("annual_days") is not None and float(cleaned["annual_days"]) <= 0:
+            self.add_error("annual_days", _("Annual days must be greater than zero."))
+        return cleaned
 
 
 class ConditionForm(forms.ModelForm):
@@ -232,7 +269,14 @@ class UpdateLeaveTypeForm(ConditionForm):
         self.fields["payment_percentage"].required = False
 
         # Fields that must always be visible regardless of current value
-        js_managed = {"payment_type", "payment_percentage", "icon", "name"}
+        js_managed = {
+            "payment_type",
+            "payment_percentage",
+            "icon",
+            "name",
+            "monthly_accrual",
+            "sandwich_policy",
+        }
 
         for field_name, field in self.fields.items():
             if field_name in js_managed:
@@ -831,11 +875,6 @@ class LeaveAllocationBulkForm(BaseModelForm):
         cleaned_data = super().clean()
         employee_ids = self.data.getlist("employee_id")
         self.errors.pop("employee_id", None)
-
-    def save(self, commit=True):
-        if not employee_ids:
-            raise ValidationError({"employee_id": _("Employee not chosen")})
-        return cleaned_data
 
     def save(self, commit=True):
         employee_ids = self.data.getlist("employee_id")

@@ -444,6 +444,28 @@
                         </div>
                         {{ form.is_encashable.errors }}
                     </div>
+
+                    {% if form.monthly_accrual %}
+                    <div class="flex items-center justify-between mb-2 resetContainer form-input-items">
+                        <div class="flex items-center gap-1 pb-2 overflow-visible relative" style="display: ruby">
+                            <label class="text-xs font-medium" for="id_monthly_accrual">{{ form.monthly_accrual.label }}</label>
+                            <span class="oh-info" title="{% trans 'Accrue leave monthly using grade/position rules when configured, otherwise total days ÷ 12.' %}"></span>
+                        </div>
+                        <div class="oh-switch">{{ form.monthly_accrual }}</div>
+                        {{ form.monthly_accrual.errors }}
+                    </div>
+                    {% endif %}
+
+                    {% if form.sandwich_policy %}
+                    <div class="flex items-center justify-between mb-2 resetContainer form-input-items">
+                        <div class="flex items-center gap-1 pb-2 overflow-visible relative" style="display: ruby">
+                            <label class="text-xs font-medium" for="id_sandwich_policy">{{ form.sandwich_policy.label }}</label>
+                            <span class="oh-info" title="{% trans 'Count weekends/holidays between adjacent leave days as leave.' %}"></span>
+                        </div>
+                        <div class="oh-switch">{{ form.sandwich_policy }}</div>
+                        {{ form.sandwich_policy.errors }}
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>

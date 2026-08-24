@@ -43,7 +43,7 @@ class GeoFencingSetupGetPostAPIView(APIView):
             company = request.user.employee_get.get_company()
             if company:
                 data["company_id"] = company.id
-        serializer = GeoFencingSetupSerializer(data=request.data)
+        serializer = GeoFencingSetupSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)

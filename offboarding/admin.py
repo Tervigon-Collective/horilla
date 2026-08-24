@@ -2,6 +2,7 @@ from django.contrib import admin
 
 from offboarding.models import (
     EmployeeTask,
+    FnFSettlement,
     OffboardingEmployee,
     OffboardingNote,
     OffboardingStage,
@@ -21,5 +22,6 @@ admin.site.register(
         EmployeeTask,
         OffboardingEmployee,
         OffboardingStage,
+        FnFSettlement,
     ]
 )

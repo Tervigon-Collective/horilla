@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import date, datetime
 from operator import itemgetter
 from urllib.parse import parse_qs
 
@@ -594,6 +594,7 @@ def ticket_archive(request, ticket_id):
     if (
         request.user.has_perm("helpdesk.change_ticket")
         or ticket.employee_id == request.user.employee_get
+        or request.user.employee_get in ticket.assigned_to.all()
         or is_department_manager(request, ticket)
     ):
 
@@ -620,9 +621,15 @@ def ticket_status_change(request, ticket_id):
         return HttpResponse("error")
     ticket = Ticket.objects.get(id=ticket_id)
     status = request.POST.get("status")
+    valid_statuses = {choice[0] for choice in TICKET_STATUS}
+    if status not in valid_statuses:
+        messages.error(request, _("Invalid status."))
+        return HttpResponse("error")
     ticket.status = status
     if ticket.status == "resolved":
-        ticket.resolved_date = datetime.today()
+        ticket.resolved_date = date.today()
+    else:
+        ticket.resolved_date = None
     ticket.save()
 
     employees = ticket.assigned_to.all()
@@ -677,16 +684,24 @@ def change_ticket_status(request, ticket_id):
 
     pre_status = ticket.get_status_display()
     status = request.POST.get("status")
+    valid_statuses = {choice[0] for choice in TICKET_STATUS}
+    if status not in valid_statuses:
+        return JsonResponse(
+            {"type": "danger", "message": _("Invalid status.")},
+        )
     user = request.user.employee_get
     if (
         user == ticket.employee_id
         or user in ticket.assigned_to.all()
         or request.user.has_perm("helpdesk.change_ticket")
+        or is_department_manager(request, ticket)
     ):
         if ticket.status != status:
             ticket.status = status
             if ticket.status == "resolved":
-                ticket.resolved_date = datetime.today()
+                ticket.resolved_date = date.today()
+            else:
+                ticket.resolved_date = None
             ticket.save()
             time = datetime.now()
             time = time.strftime("%b. %d, %Y, %I:%M %p")
@@ -1050,8 +1065,9 @@ def ticket_update_tag(request):
         )
 
     if (
-        request.user.has_perm("helpdesk.view_ticket")
+        request.user.has_perm("helpdesk.change_ticket")
         or request.user.employee_get == ticket.employee_id
+        or request.user.employee_get in ticket.assigned_to.all()
         or is_department_manager(request, ticket)
     ):
         tagids = data.getlist("selectedValues[]")
@@ -1073,8 +1089,8 @@ def ticket_update_tag(request):
 def ticket_change_raised_on(request, ticket_id):
     ticket = Ticket.objects.get(id=ticket_id)
     if (
-        request.user.has_perm("helpdesk.view_ticket")
-        or request.user.employee_get == ticket.employee_id
+        request.user.has_perm("helpdesk.change_ticket")
+        or is_department_manager(request, ticket)
     ):
         form = TicketRaisedOnForm(instance=ticket)
         if request.method == "POST":
@@ -1143,6 +1159,7 @@ def ticket_change_assignees(request, ticket_id):
 
 @login_required
 @require_http_methods(["POST"])
+@permission_required("base.add_tags")
 def create_tag(request):
     """
     This is an ajax method to return json response to create tag in the change tag form.
@@ -1176,6 +1193,13 @@ def remove_tag(request):
     tag_id = data.get("tag_id")
     try:
         ticket = Ticket.objects.get(id=ticket_id)
+        if not (
+            request.user.has_perm("helpdesk.change_ticket")
+            or request.user.employee_get == ticket.employee_id
+            or request.user.employee_get in ticket.assigned_to.all()
+            or is_department_manager(request, ticket)
+        ):
+            return handle_no_permission(request)
         tag = Tags.objects.get(id=tag_id)
         ticket.tags.remove(tag)
         # message = messages.success(request,_("Success"))
@@ -1445,16 +1469,23 @@ def claim_ticket(request, id):
         return HorillaRedirect(
             request, message=_("No Ticket found matching the query.")
         )
+    # Claimers cannot claim their own ticket or already-assigned tickets blindly.
+    actor = request.user.employee_get
+    if ticket.employee_id == actor:
+        messages.error(request, _("You cannot claim your own ticket."))
+        return HorillaRedirect(request)
+    if actor in ticket.assigned_to.all():
+        messages.info(request, _("You are already assigned to this ticket."))
+        return HorillaRedirect(request)
 
     if not ClaimRequest.objects.filter(
-        employee_id=request.user.employee_get, ticket_id=ticket
+        employee_id=actor, ticket_id=ticket
     ).exists():
-        ClaimRequest(employee_id=request.user.employee_get, ticket_id=ticket).save()
+        ClaimRequest(employee_id=actor, ticket_id=ticket).save()
     return HorillaRedirect(request)
 
 
 @login_required
-@ticket_owner_can_enter(perm="helpdesk.change_ticket", model=Ticket)
 def approve_claim_request(request, req_id):
     """
     Function for approve claim request and send notifications to the responsibles.
@@ -1463,18 +1494,21 @@ def approve_claim_request(request, req_id):
     if not claim_request:
         return HttpResponse("Invalid claim request", status=404)
 
+    ticket = claim_request.ticket_id
+    if not ticket:
+        return HttpResponse("Invalid claim request", status=404)
+
     if not (
         request.user.has_perm("helpdesk.change_claimrequest")
         or request.user.has_perm("helpdesk.change_ticket")
         or is_department_manager(request, ticket)
     ):
-        handle_no_permission(request)
+        return handle_no_permission(request)
 
     approve = strtobool(
         request.GET.get("approve", "False")
     )  # Safely convert to boolean
 
-    ticket = claim_request.ticket_id
     employee = claim_request.employee_id
     refresh = False
     if approve:
@@ -1917,6 +1951,7 @@ def get_department_employees(request):
 
 @login_required
 @hx_request_required
+@permission_required("helpdesk.add_faq")
 def load_faqs(request):
     base_dir = settings.BASE_DIR
     faq_file = os.path.join(base_dir, "load_data", "faq.json")

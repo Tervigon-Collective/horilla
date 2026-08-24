@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from django import template
 from django.conf import settings
 from django.core.mail import EmailMessage
-from django.db.models import Case, CharField, F, Value, When
+from django.db.models import Case, CharField, F, Q, Value, When
 from django.http import QueryDict
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
@@ -89,6 +89,61 @@ def employee_is_clocked_in(employee):
     return last_activity.clock_out is None
 
 
+def _format_work_duration(employee):
+    work_seconds = employee.get_forecasted_at_work()["forecasted_at_work_seconds"]
+    hours = int(work_seconds) // 3600
+    minutes = (int(work_seconds) % 3600) // 60
+    seconds = int(work_seconds) % 60
+    return f"{hours:02}:{minutes:02}:{seconds:02}"
+
+
+def _clock_in_display(employee):
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    activity = (
+        AttendanceActivity.objects.filter(
+            employee_id=employee,
+            attendance_date__in=[yesterday, today],
+            clock_out__isnull=True,
+        )
+        .order_by("-in_datetime")
+        .first()
+    )
+    if activity and activity.clock_in:
+        return activity.clock_in.strftime("%I:%M %p")
+    activity = (
+        AttendanceActivity.objects.filter(
+            employee_id=employee,
+            attendance_date__in=[yesterday, today],
+        )
+        .order_by("in_datetime")
+        .first()
+    )
+    if activity and activity.clock_in:
+        return activity.clock_in.strftime("%I:%M %p")
+    return None
+
+
+def checking_in_payload(employee):
+    """Stable JSON for the official app's /api/attendance/checking-in endpoint."""
+    clocked_in = employee_is_clocked_in(employee)
+    clock_in_time = _clock_in_display(employee) if clocked_in else None
+    duration = _format_work_duration(employee)
+    return {
+        "status": clocked_in,
+        "duration": duration,
+        "clock_in": clock_in_time,
+        "clock_in_time": clock_in_time,
+    }
+
+
+def api_message_response(message, status_code=200, **extra):
+    payload = {"message": message, **extra}
+    if "error" in payload and "message" not in payload:
+        payload["message"] = payload["error"]
+    return Response(payload, status=status_code)
+
+
 class ClockInAPIView(APIView):
     """
     Allows authenticated employees to clock in, determining the correct shift and attendance date, including handling night shifts.
@@ -111,21 +166,27 @@ class ClockInAPIView(APIView):
                     response = location_api_view.post(request)
                     if response.status_code != 200:
                         return response
-            except:
-                pass
+            except Exception as exc:
+                return api_message_response(
+                    _("Unable to verify location. Please try again."),
+                    status_code=400,
+                    error=str(exc),
+                )
             employee, work_info = employee_exists(request)
-            datetime_now = datetime.now()
+            from django.utils import timezone as dj_timezone
+
+            datetime_now = dj_timezone.localtime()
             if request.__dict__.get("datetime"):
                 datetime_now = request.datetime
             if employee and work_info is not None:
                 shift = work_info.shift_id
-                date_today = date.today()
+                date_today = dj_timezone.localdate()
                 if request.__dict__.get("date"):
                     date_today = request.date
                 attendance_date = date_today
                 day = date_today.strftime("%A").lower()
                 day = EmployeeShiftDay.objects.get(day=day)
-                now = datetime.now().strftime("%H:%M")
+                now = datetime_now.strftime("%H:%M")
                 if request.__dict__.get("time"):
                     now = request.time.strftime("%H:%M")
                 now_sec = strtime_seconds(now)
@@ -163,15 +224,21 @@ class ClockInAPIView(APIView):
                     in_datetime=datetime_now,
                     request=request,
                 )
-                return Response({"message": "Clocked-In"}, status=200)
-            return Response(
-                {
-                    "error": _(
-                        "You Don't have work information filled or your employee detail neither entered "
-                    )
-                }
+                employee.refresh_from_db()
+                return api_message_response(
+                    "Clocked-In",
+                    **checking_in_payload(employee),
+                )
+            return api_message_response(
+                _(
+                    "You Don't have work information filled or your employee detail neither entered "
+                ),
+                status_code=400,
+                error=_(
+                    "You Don't have work information filled or your employee detail neither entered "
+                ),
             )
-        return Response({"message": "Already clocked-in"}, status=400)
+        return api_message_response("Already clocked-in", status_code=400)
 
 
 class ClockOutAPIView(APIView):
@@ -189,7 +256,7 @@ class ClockOutAPIView(APIView):
         employee = request.user.employee_get
 
         if not employee_is_clocked_in(employee):
-            return Response({"message": "Already clocked-out"}, status=400)
+            return api_message_response("Already clocked-out", status_code=400)
 
         try:
             if employee.get_company().geo_fencing.start:
@@ -206,13 +273,14 @@ class ClockOutAPIView(APIView):
 
         employee_obj, work_info = employee_exists(request)
         if employee_obj is None or work_info is None:
-            return Response(
-                {
-                    "error": _(
-                        "You Don't have work information filled or your employee detail neither entered "
-                    )
-                },
-                status=400,
+            return api_message_response(
+                _(
+                    "You Don't have work information filled or your employee detail neither entered "
+                ),
+                status_code=400,
+                error=_(
+                    "You Don't have work information filled or your employee detail neither entered "
+                ),
             )
 
         datetime_now = dj_timezone.localtime()
@@ -226,11 +294,16 @@ class ClockOutAPIView(APIView):
             request=request,
         )
         if not attendance:
-            return Response(
-                {"error": _("No open check-in found to clock out.")},
-                status=400,
+            return api_message_response(
+                _("No open check-in found to clock out."),
+                status_code=400,
+                error=_("No open check-in found to clock out."),
             )
-        return Response({"message": "Clocked-Out"}, status=200)
+        employee_obj.refresh_from_db()
+        return api_message_response(
+            "Clocked-Out",
+            **checking_in_payload(employee_obj),
+        )
 
 
 class AttendanceView(APIView):
@@ -368,33 +441,11 @@ class AttendanceView(APIView):
     @method_decorator(permission_required("attendance.delete_attendance"))
     def delete(self, request, pk):
         attendance = Attendance.objects.get(id=pk)
-        month = attendance.attendance_date
-        month = month.strftime("%B").lower()
-        overtime = attendance.employee_id.employee_overtime.filter(month=month).last()
-        if overtime is not None:
-            if attendance.attendance_overtime_approve:
-                # Subtract overtime of this attendance
-                total_overtime = strtime_seconds(overtime.overtime)
-                attendance_overtime_seconds = strtime_seconds(
-                    attendance.attendance_overtime
-                )
-                if total_overtime > attendance_overtime_seconds:
-                    total_overtime = total_overtime - attendance_overtime_seconds
-                else:
-                    total_overtime = attendance_overtime_seconds - total_overtime
-                overtime.overtime = format_time(total_overtime)
-                overtime.save()
-            try:
-                attendance.delete()
-                return Response({"status", "deleted"}, status=200)
-            except Exception as error:
-                return Response({"error:", f"{error}"}, status=400)
-        else:
-            try:
-                attendance.delete()
-                return Response({"status", "deleted"}, status=200)
-            except Exception as error:
-                return Response({"error:", f"{error}"}, status=400)
+        try:
+            attendance.delete()
+            return Response({"status": "deleted"}, status=200)
+        except Exception as error:
+            return Response({"error:", f"{error}"}, status=400)
 
 
 class ValidateAttendanceView(APIView):
@@ -407,9 +458,20 @@ class ValidateAttendanceView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @method_decorator(manager_permission_required("attendance.change_attendance"))
     def put(self, request, pk):
-        attendance = Attendance.objects.filter(id=pk).update(attendance_validated=True)
+        from employee.cbv.accessibility import can_manage_employee_action
+
         attendance = Attendance.objects.filter(id=pk).first()
+        if not attendance:
+            return Response(status=404)
+        if not can_manage_employee_action(
+            request, attendance.employee_id, "attendance.change_attendance"
+        ):
+            return Response({"detail": "Permission denied"}, status=403)
+        attendance.attendance_validated = True
+        attendance.sync_worked_hours_from_clock_times()
+        attendance.save()
         try:
             notify.send(
                 request.user.employee_get,
@@ -438,15 +500,23 @@ class OvertimeApproveView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @method_decorator(manager_permission_required("attendance.change_attendance"))
     def put(self, request, pk):
+        from employee.cbv.accessibility import can_manage_employee_action
+
         try:
-            attendance = Attendance.objects.filter(id=pk).update(
-                attendance_overtime_approve=True
-            )
+            attendance = Attendance.objects.filter(id=pk).first()
+            if not attendance:
+                return Response(status=404)
+            if not can_manage_employee_action(
+                request, attendance.employee_id, "attendance.change_attendance"
+            ):
+                return Response({"detail": "Permission denied"}, status=403)
+            attendance.attendance_overtime_approve = True
+            attendance.save()
         except Exception as E:
             return Response({"error": str(E)}, status=400)
 
-        attendance = Attendance.objects.filter(id=pk).first()
         try:
             notify.send(
                 request.user.employee_get,
@@ -660,6 +730,7 @@ class AttendanceRequestCancelView(APIView):
                 or is_reportingmanager(request)
                 or request.user.has_perm("attendance.change_attendance")
             ):
+                request_type = attendance.request_type
                 attendance.is_validate_request_approved = False
                 attendance.is_validate_request = False
                 attendance.request_description = None
@@ -667,7 +738,7 @@ class AttendanceRequestCancelView(APIView):
                 attendance.request_type = None
 
                 attendance.save()
-                if attendance.request_type == "create_request":
+                if request_type == "create_request":
                     attendance.delete()
         except Exception as E:
             return Response({"error": str(E)}, status=400)
@@ -764,7 +835,16 @@ class LateComeEarlyOutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk=None):
-        data = LateComeEarlyOutFilter(request.GET)
+        queryset = AttendanceLateComeEarlyOut.objects.all()
+        queryset = filtersubordinates(
+            request, queryset, "attendance.view_attendance"
+        )
+        queryset = queryset | AttendanceLateComeEarlyOut.objects.filter(
+            employee_id__employee_user_id=request.user
+        )
+        if pk:
+            queryset = queryset.filter(pk=pk)
+        data = LateComeEarlyOutFilter(request.GET, queryset=queryset.distinct())
         serializer = AttendanceLateComeEarlyOutSerializer(data.qs, many=True)
         return Response(serializer.data, status=200)
 
@@ -785,8 +865,16 @@ class AttendanceActivityView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk=None):
-        data = AttendanceActivity.objects.all()
-        serializer = AttendanceActivitySerializer(data, many=True)
+        queryset = AttendanceActivity.objects.all()
+        queryset = filtersubordinates(
+            request, queryset, "attendance.view_attendance"
+        )
+        queryset = queryset | AttendanceActivity.objects.filter(
+            employee_id__employee_user_id=request.user
+        )
+        if pk:
+            queryset = queryset.filter(pk=pk)
+        serializer = AttendanceActivitySerializer(queryset.distinct(), many=True)
         return Response(serializer.data, status=200)
 
 
@@ -914,20 +1002,29 @@ class OfflineEmployeesListView(APIView):
             leave_status=Case(
                 # Define different cases based on leave requests and attendance
                 When(
-                    leaverequest__start_date__lte=today,
-                    leaverequest__end_date__gte=today,
-                    leaverequest__status="approved",
+                    Q(leaverequest__start_date__lte=today)
+                    & (
+                        Q(leaverequest__end_date__gte=today)
+                        | Q(leaverequest__end_date__isnull=True)
+                    )
+                    & Q(leaverequest__status="approved"),
                     then=Value("On Leave"),
                 ),
                 When(
-                    leaverequest__start_date__lte=today,
-                    leaverequest__end_date__gte=today,
-                    leaverequest__status="requested",
+                    Q(leaverequest__start_date__lte=today)
+                    & (
+                        Q(leaverequest__end_date__gte=today)
+                        | Q(leaverequest__end_date__isnull=True)
+                    )
+                    & Q(leaverequest__status="requested"),
                     then=Value("Waiting Approval"),
                 ),
                 When(
-                    leaverequest__start_date__lte=today,
-                    leaverequest__end_date__gte=today,
+                    Q(leaverequest__start_date__lte=today)
+                    & (
+                        Q(leaverequest__end_date__gte=today)
+                        | Q(leaverequest__end_date__isnull=True)
+                    ),
                     then=Value("Canceled / Rejected"),
                 ),
                 When(
@@ -984,43 +1081,7 @@ class CheckingStatus(APIView):
 
     def get(self, request):
         employee = request.user.employee_get
-        work_seconds = employee.get_forecasted_at_work()[
-            "forecasted_at_work_seconds"
-        ]
-        duration = CheckingStatus._format_seconds(int(work_seconds))
-        clocked_in = employee_is_clocked_in(employee)
-        clock_in_time = None
-
-        if clocked_in:
-            today = date.today()
-            yesterday = today - timedelta(days=1)
-            attendance_activity_first = (
-                AttendanceActivity.objects.filter(
-                    employee_id=employee,
-                    clock_in_date__in=[yesterday, today],
-                )
-                .order_by("in_datetime")
-                .first()
-            )
-            if attendance_activity_first:
-                clock_in_time = attendance_activity_first.clock_in.strftime("%I:%M %p")
-            return Response(
-                {
-                    "status": True,
-                    "duration": duration,
-                    "clock_in": clock_in_time,
-                },
-                status=200,
-            )
-
-        return Response(
-            {
-                "status": False,
-                "duration": duration,
-                "clock_in_time": clock_in_time,
-            },
-            status=200,
-        )
+        return Response(checking_in_payload(employee), status=200)
 
 
 class MailTemplateView(APIView):
@@ -1182,4 +1243,71 @@ class UserAttendanceDetailedView(APIView):
             return Response(serializer.data, status=200)
         return Response(
             {"error": _("Permission denied")}, status=status.HTTP_403_FORBIDDEN
+        )
+
+
+class AttendanceMonthlySummaryAPIView(APIView):
+    """Mobile/API access to monthly attendance summary (mirrors web monthly summary)."""
+
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(manager_permission_required("attendance.view_attendance"))
+    def get(self, request):
+        import calendar
+        import datetime
+
+        from attendance.views.summary import build_monthly_summary
+        from base.methods import filtersubordinatesemployeemodel
+        from employee.models import Employee
+
+        today = datetime.date.today()
+        from_str = request.GET.get("from_date")
+        to_str = request.GET.get("to_date")
+        try:
+            from_date = (
+                datetime.date.fromisoformat(from_str)
+                if from_str
+                else today.replace(day=1)
+            )
+        except (TypeError, ValueError):
+            from_date = today.replace(day=1)
+        try:
+            to_date = (
+                datetime.date.fromisoformat(to_str)
+                if to_str
+                else today.replace(
+                    day=calendar.monthrange(today.year, today.month)[1]
+                )
+            )
+        except (TypeError, ValueError):
+            to_date = today.replace(
+                day=calendar.monthrange(today.year, today.month)[1]
+            )
+
+        if from_date > to_date:
+            from_date, to_date = to_date, from_date
+
+        employee_filter = EmployeeFilter(request.GET)
+        employee_qs = filtersubordinatesemployeemodel(
+            request, employee_filter.qs, "attendance.view_attendance"
+        )
+        selected = request.session.get("selected_company")
+        if selected and selected != "all":
+            employee_qs = employee_qs.filter(
+                employee_work_info__company_id_id=selected
+            ).distinct()
+
+        rows, total_working, summary_totals = build_monthly_summary(
+            from_date, to_date, employee_qs
+        )
+
+        return Response(
+            {
+                "from_date": from_date.isoformat(),
+                "to_date": to_date.isoformat(),
+                "total_working_days": total_working,
+                "summary_totals": summary_totals,
+                "rows": rows,
+            },
+            status=200,
         )

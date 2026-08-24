@@ -97,7 +97,7 @@ def get_leaves(employee, start_date, end_date):
             else:
                 unpaid_leave_dates += dates_in_range
 
-    half_day_data = find_half_day_leaves()
+    half_day_data = find_half_day_leaves(employee, start_date, end_date)
 
     unpaid_half = half_day_data["half_unpaid_leaves"]
     paid_half = half_day_data["half_paid_leaves"]
@@ -160,14 +160,13 @@ if apps.is_installed("attendance"):
         present_on = [
             attendance.attendance_date for attendance in attendances_on_period
         ]
+        present_dates = set(present_on)
         working_days_between_range = get_working_days(start_date, end_date, employee)[
             "working_days_on"
         ]
         leave_dates = get_leaves(employee, start_date, end_date)["leave_dates"]
         conflict_dates = list(
-            set(working_days_between_range)
-            - set(attendances_on_period)
-            - set(leave_dates)
+            set(working_days_between_range) - present_dates - set(leave_dates)
         )
         conflict_dates = conflict_dates + [
             date
@@ -187,6 +186,69 @@ if apps.is_installed("attendance"):
             "present_on": present_on,
             "conflict_dates": conflict_dates,
         }
+
+    def get_attendance_lop_data(employee, start_date, end_date):
+        """
+        Working days in the period with no validated attendance and no approved leave.
+        Used for attendance-linked LOP (greytHR/Keka-style absent day deduction).
+        """
+        attendance_data = get_attendance(employee, start_date, end_date)
+        working_days = set(
+            get_working_days(start_date, end_date, employee)["working_days_on"]
+        )
+        work_info = getattr(employee, "employee_work_info", None)
+        if work_info and work_info.date_joining:
+            working_days = {
+                day for day in working_days if day >= work_info.date_joining
+            }
+
+        leave_dates = set(get_leaves(employee, start_date, end_date)["leave_dates"])
+        present_dates = set(attendance_data["present_on"])
+        absence_dates = sorted(working_days - present_dates - leave_dates)
+        return {
+            "absence_days": float(len(absence_dates)),
+            "absence_dates": absence_dates,
+        }
+
+else:
+
+    def get_attendance_lop_data(employee, start_date, end_date):
+        return {"absence_days": 0.0, "absence_dates": []}
+
+
+def _attendance_lop_amount(contract, absence_days, per_day_rate):
+    if absence_days <= 0:
+        return 0.0
+    if contract.calculate_daily_leave_amount:
+        return absence_days * per_day_rate
+    return absence_days * (contract.deduction_for_one_leave_amount or 0)
+
+
+def merge_attendance_lop(
+    contract, employee, start_date, end_date, unpaid_leave_days, loss_of_pay, per_day_rate
+):
+    """
+    Add attendance absence days and amount to leave-based LOP totals when enabled
+    on the employee contract.
+    """
+    if not apps.is_installed("attendance"):
+        return unpaid_leave_days, loss_of_pay, 0.0, []
+
+    if not getattr(contract, "deduct_attendance_absence_from_pay", True):
+        return unpaid_leave_days, loss_of_pay, 0.0, []
+
+    lop_data = get_attendance_lop_data(employee, start_date, end_date)
+    absence_days = lop_data["absence_days"]
+    if absence_days <= 0:
+        return unpaid_leave_days, loss_of_pay, 0.0, []
+
+    amount = _attendance_lop_amount(contract, absence_days, per_day_rate)
+    return (
+        unpaid_leave_days + absence_days,
+        loss_of_pay + amount,
+        absence_days,
+        lop_data["absence_dates"],
+    )
 
 
 def hourly_computation(employee, wage, start_date, end_date):
@@ -225,28 +287,60 @@ def hourly_computation(employee, wage, start_date, end_date):
     }
 
 
-def find_half_day_leaves():
+def find_half_day_leaves(employee, start_date, end_date):
     """
-    This method is used to return the half day leave details
+    Return half-day leave fractions for paid and unpaid leaves in a period.
 
-    Args:
-        employee (obj): Employee model instance
-        start_date (obj): start date of the period
-        end_date (obj): end date of the period
+    Each half-day boundary (start/end date with first_half or second_half) counts
+    as 0.5 day when adjusting full-day leave date lists in get_leaves().
     """
-    paid_queryset = []
-    unpaid_queryset = []
+    empty = {
+        "half_day_query_set": [],
+        "half_day_leaves": 0,
+        "half_paid_leaves": 0,
+        "half_unpaid_leaves": 0,
+    }
+    if not apps.is_installed("leave"):
+        return empty
 
-    paid_leaves = list(filter(None, list(set(paid_queryset))))
-    unpaid_leaves = list(filter(None, list(set(unpaid_queryset))))
+    date_range = set(get_date_range(start_date, end_date))
+    paid_half_count = 0
+    unpaid_half_count = 0
+    half_day_dates = []
 
-    paid_half = len(paid_leaves) * 0.5
-    unpaid_half = len(unpaid_leaves) * 0.5
-    queryset = paid_leaves + unpaid_leaves
-    total_leaves = len(queryset) * 0.50
+    for instance in employee.leaverequest_set.filter(status="approved"):
+        leave_type = instance.leave_type_id
+        ptype = leave_type.payment_type or leave_type.payment or "unpaid"
+        if ptype == "custom":
+            continue
+
+        if (
+            instance.start_date in date_range
+            and instance.start_date_breakdown != "full_day"
+        ):
+            half_day_dates.append(instance.start_date)
+            if ptype == "paid":
+                paid_half_count += 1
+            else:
+                unpaid_half_count += 1
+
+        if (
+            instance.end_date
+            and instance.end_date != instance.start_date
+            and instance.end_date in date_range
+            and instance.end_date_breakdown != "full_day"
+        ):
+            half_day_dates.append(instance.end_date)
+            if ptype == "paid":
+                paid_half_count += 1
+            else:
+                unpaid_half_count += 1
+
+    paid_half = paid_half_count * 0.5
+    unpaid_half = unpaid_half_count * 0.5
     return {
-        "half_day_query_set": queryset,
-        "half_day_leaves": total_leaves,
+        "half_day_query_set": half_day_dates,
+        "half_day_leaves": paid_half + unpaid_half,
         "half_paid_leaves": paid_half,
         "half_unpaid_leaves": unpaid_half,
     }
@@ -306,11 +400,25 @@ def daily_computation(employee, wage, start_date, end_date):
     ).first()
 
     unpaid_leaves = leave_data["unpaid_leaves"] - unpaid_half_leaves
+    leave_lop_days = unpaid_leaves
     if contract.calculate_daily_leave_amount:
         loss_of_pay = unpaid_leaves * wage
     else:
         fixed_penalty = contract.deduction_for_one_leave_amount
         loss_of_pay = unpaid_leaves * fixed_penalty
+
+    per_day_rate = wage
+    unpaid_leaves, loss_of_pay, attendance_lop_days, attendance_lop_dates = (
+        merge_attendance_lop(
+            contract,
+            employee,
+            start_date,
+            end_date,
+            unpaid_leaves,
+            loss_of_pay,
+            per_day_rate,
+        )
+    )
 
     # Partial deduction for custom payment_type leaves (tracked separately for payslip display)
     custom_leave_dates = leave_data.get("custom_leave_dates", [])
@@ -341,13 +449,17 @@ def daily_computation(employee, wage, start_date, end_date):
     if contract.deduct_leave_from_basic_pay:
         basic_pay = basic_pay - loss_of_pay
 
+    paid_days = total_working_days - unpaid_leaves
     return {
         "basic_pay": basic_pay,
         "loss_of_pay": loss_of_pay,
         "custom_leave_deduction": custom_leave_deduction,
         "custom_leave_breakdown": custom_leave_breakdown,
-        "paid_days": total_working_days,
+        "paid_days": paid_days,
         "unpaid_days": unpaid_leaves,
+        "leave_lop_days": leave_lop_days,
+        "attendance_lop_days": attendance_lop_days,
+        "attendance_lop_dates": attendance_lop_dates,
         "partial_pay_days": leave_data.get("partial_pay_days", 0),
     }
 
@@ -542,8 +654,8 @@ def monthly_computation(employee, wage, start_date, end_date, *args, **kwargs):
         is_active=True, contract_status="active"
     ).first()
     unpaid_leaves = abs(leave_data["unpaid_leaves"] - unpaid_half_leaves)
+    leave_lop_days = unpaid_leaves
     total_working_days = sum(d["working_days_on_period"] for d in month_data)
-    paid_days = total_working_days - unpaid_leaves
     daily_computed_salary = get_daily_salary(wage=wage, wage_date=start_date)[
         "day_wage"
     ]
@@ -552,6 +664,19 @@ def monthly_computation(employee, wage, start_date, end_date, *args, **kwargs):
     else:
         fixed_penalty = contract.deduction_for_one_leave_amount
         loss_of_pay = unpaid_leaves * fixed_penalty
+
+    unpaid_leaves, loss_of_pay, attendance_lop_days, attendance_lop_dates = (
+        merge_attendance_lop(
+            contract,
+            employee,
+            start_date,
+            end_date,
+            unpaid_leaves,
+            loss_of_pay,
+            daily_computed_salary,
+        )
+    )
+    paid_days = total_working_days - unpaid_leaves
 
     # Partial deduction for custom payment_type leaves (tracked separately for payslip display)
     custom_leave_dates = leave_data.get("custom_leave_dates", [])
@@ -589,6 +714,9 @@ def monthly_computation(employee, wage, start_date, end_date, *args, **kwargs):
         "month_data": month_data,
         "unpaid_days": unpaid_leaves,
         "paid_days": paid_days,
+        "leave_lop_days": leave_lop_days,
+        "attendance_lop_days": attendance_lop_days,
+        "attendance_lop_dates": attendance_lop_dates,
         "partial_pay_days": leave_data.get("partial_pay_days", 0),
         "contract": contract,
     }

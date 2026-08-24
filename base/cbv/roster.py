@@ -10,6 +10,7 @@ from datetime import date, timedelta
 
 import openpyxl
 from django.contrib import messages
+from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse, reverse_lazy
@@ -537,12 +538,20 @@ class RosterTemplateDownloadView(View):
         off_dates = {}
 
         holidays = Holidays.objects.filter(
-            start_date__lte=end_date, end_date__gte=start_date
+            Q(start_date__lte=end_date)
+            & (Q(end_date__gte=start_date) | Q(end_date__isnull=True))
+            | Q(recurring=True)
         )
         for h in holidays.filter(is_specific=False):
             h_end = h.end_date or h.start_date
             for d in date_range:
-                if h.start_date <= d <= h_end:
+                if h.recurring and h.start_date:
+                    if (
+                        h.start_date.month == d.month
+                        and h.start_date.day == d.day
+                    ):
+                        off_dates.setdefault(d, h.name)
+                elif h.start_date and h.start_date <= d <= h_end:
                     off_dates.setdefault(d, h.name)
 
         # Pre-build {employee_pk: {date: holiday_name}} for specific holidays — avoids per-row DB queries

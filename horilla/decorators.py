@@ -333,7 +333,7 @@ def owner_can_enter(
                 else False
             )
         )
-        if can_enter or not employee:
+        if can_enter:
             return function(request, *args, **kwargs)
         return render(request, "no_perm.html")
 

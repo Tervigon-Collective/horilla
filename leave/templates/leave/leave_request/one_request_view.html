@@ -220,7 +220,7 @@
                     </button>
                 {% endif %}
                 {% if request.user|is_reportingmanager or perms.leave.change_leaverequest or request.user|is_leave_approval_manager %}
-                    {% if leave_request.status != 'rejected' and leave_request.status != 'cancelled' and leave_request.end_date >= current_date %}
+                    {% if leave_request.status != 'rejected' and leave_request.status != 'cancelled' and leave_request.effective_end_date >= current_date %}
                         <a
                             type="submit"
                             data-toggle="oh-modal-toggle"

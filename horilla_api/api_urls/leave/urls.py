@@ -15,9 +15,15 @@ urlpatterns = [
     path("user-request/<int:pk>", EmployeeLeaveRequestUpdateDeleteAPIView.as_view()),
     path("leave-type/", LeaveTypeGetCreateAPIView.as_view()),
     path("leave-type/<int:pk>/", LeaveTypeGetUpdateDeleteAPIView.as_view()),
+    path("leave-type/<int:pk>", LeaveTypeGetUpdateDeleteAPIView.as_view()),
     path("allocation-request/", LeaveAllocationRequestGetCreateAPIView.as_view()),
+    path("allocation-request", LeaveAllocationRequestGetCreateAPIView.as_view()),
     path(
         "allocation-request/<int:pk>/",
+        LeaveAllocationRequestGetUpdateDeleteAPIView.as_view(),
+    ),
+    path(
+        "allocation-request/<int:pk>",
         LeaveAllocationRequestGetUpdateDeleteAPIView.as_view(),
     ),
     path("assign-leave/", AssignLeaveGetCreateAPIView.as_view()),
@@ -37,8 +43,13 @@ urlpatterns = [
     path("allocation-reject/<int:pk>/", LeaveAllocationRequestRejectAPIView.as_view()),
     path("request-bulk-action/", LeaveRequestBulkApproveDeleteAPIview.as_view()),
     path("user-allocation-request/", EmployeeLeaveAllocationGetCreateAPIView.as_view()),
+    path("user-allocation-request", EmployeeLeaveAllocationGetCreateAPIView.as_view()),
     path(
         "user-allocation-request/<int:pk>/",
+        EmployeeLeaveAllocationUpdateDeleteAPIView.as_view(),
+    ),
+    path(
+        "user-allocation-request/<int:pk>",
         EmployeeLeaveAllocationUpdateDeleteAPIView.as_view(),
     ),
     path("status/", LeaveRequestedApprovedCountAPIView.as_view()),

@@ -33,6 +33,11 @@ SUBMENUS = [
         "menu": _("Exit Process"),
         "redirect": reverse("offboarding-pipeline"),
     },
+    {
+        "menu": _("F&F Settlements"),
+        "redirect": reverse("fnf-settlement-list"),
+        "accessibility": "offboarding.sidebar.dashboard_accessibility",
+    },
 ]
 
 

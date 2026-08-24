@@ -20,6 +20,38 @@ def can_view_all_payslips(request) -> bool:
     return is_payroll_admin(request)
 
 
+def scoped_payslip_queryset(request, queryset=None):
+    from payroll.models.models import Payslip
+
+    qs = Payslip.objects.all() if queryset is None else queryset
+    if not can_view_all_payslips(request):
+        qs = qs.filter(employee_id__employee_user_id=request.user)
+    selected = request.session.get("selected_company")
+    if selected and selected != "all":
+        qs = qs.filter(employee_id__employee_work_info__company_id_id=selected)
+    return qs.distinct()
+
+
+def scoped_contract_queryset(request, queryset=None):
+    from payroll.models.models import Contract
+
+    qs = Contract.objects.all() if queryset is None else queryset
+    if not can_view_all_payslips(request):
+        employee = getattr(request.user, "employee_get", None)
+        qs = qs.filter(employee_id=employee) if employee else qs.none()
+    return qs
+
+
+def scoped_employee_workinfo_queryset(request, queryset=None):
+    from employee.models import EmployeeWorkInformation
+
+    qs = EmployeeWorkInformation.objects.all() if queryset is None else queryset
+    if not can_view_all_payslips(request):
+        employee = getattr(request.user, "employee_get", None)
+        qs = qs.filter(employee_id=employee) if employee else qs.none()
+    return qs
+
+
 def can_view_payslip_record(request, payslip) -> bool:
     if not payslip:
         return False

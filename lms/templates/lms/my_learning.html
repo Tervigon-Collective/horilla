@@ -1,0 +1,39 @@
+{% extends "index.html" %}
+{% load i18n %}
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+<div class="is-page">
+  <div class="is-page-head">
+    <h1 class="is-page-head__title">{% trans "My Learning" %}</h1>
+    <p class="is-page-head__desc">{% trans "Courses assigned to you." %}</p>
+  </div>
+  <div class="is-section">
+    <div class="is-section__body is-section__body--flush">
+      <table class="is-table">
+        <thead>
+          <tr>
+            <th>{% trans "Course" %}</th>
+            <th>{% trans "Status" %}</th>
+            <th>{% trans "Progress" %}</th>
+            <th>{% trans "Due" %}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in enrollments %}
+          <tr>
+            <td>{{ e.course_id.title }}</td>
+            <td>{{ e.get_status_display }}</td>
+            <td>{{ e.progress_percent }}%</td>
+            <td>{{ e.due_date|default:"—" }}</td>
+            <td><a href="{% url 'lms-course-detail' pk=e.course_id_id %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Open" %}</a></td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5" class="is-muted">{% trans "You are not enrolled in any courses." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -142,7 +142,6 @@ class Command(BaseCommand):
             user.username = email
             user.set_password(ldap_password)  # Hash and store password securely
             user.save()
-            action = "Updated"
         except HorillaUser.DoesNotExist:
             self.stdout.write(
                 self.style.WARNING(
@@ -150,6 +149,14 @@ class Command(BaseCommand):
                 )
             )
             return
+
+        if employee.employee_user_id_id != user.id:
+            employee.employee_user_id = user
+            employee.save(update_fields=["employee_user_id"])
+
+        from employee.methods.user_bootstrap import bootstrap_employee_access
+
+        bootstrap_employee_access(employee, skip_if_assigned=True)
 
         action = "Created" if created else "Updated"
         self.stdout.write(

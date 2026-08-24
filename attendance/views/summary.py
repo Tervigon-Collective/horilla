@@ -15,6 +15,7 @@ from itertools import chain
 
 import pandas as pd
 from django.conf import settings
+from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.utils.translation import gettext_lazy as _
@@ -26,6 +27,7 @@ from base.methods import (
     get_company_leave_dates,
     get_holiday_dates,
     get_working_days,
+    is_holiday,
     paginator_qry,
 )
 from base.models import (
@@ -38,6 +40,7 @@ from base.models import (
 )
 from employee.filters import EmployeeFilter
 from employee.models import Employee
+from employee.cbv.accessibility import can_access_employee_record
 from horilla.decorators import hx_request_required, login_required, manager_can_enter
 
 # ---------------------------------------------------------------------------
@@ -53,10 +56,148 @@ def _iter_dates(start, end):
         current += datetime.timedelta(days=1)
 
 
+def _holiday_names_in_range(from_date, to_date):
+    """Map date → holiday name, including recurring and single-day (null end) holidays."""
+    info = {}
+    for h in Holidays.objects.all():
+        if not h.start_date:
+            continue
+        if h.recurring:
+            for year in range(from_date.year, to_date.year + 1):
+                try:
+                    occ = datetime.date(year, h.start_date.month, h.start_date.day)
+                except ValueError:
+                    continue
+                if from_date <= occ <= to_date:
+                    info[occ] = h.name
+        start = h.start_date
+        end = h.end_date or h.start_date
+        span_start = max(start, from_date)
+        span_end = min(end, to_date)
+        if span_start <= span_end:
+            for d in _iter_dates(span_start, span_end):
+                info[d] = h.name
+    return info
+
+
 def _secs_to_label(secs):
     """Format a duration in seconds as 'Hh MMm'."""
     secs = int(secs or 0)
     return f"{secs // 3600}h {(secs % 3600) // 60:02d}m"
+
+
+def _summary_count_end_date(to_date):
+    """Do not treat future dates as absent when the selected range extends beyond today."""
+    return min(to_date, datetime.date.today())
+
+
+def _present_day_value(worked_secs, min_secs, grace_secs, has_clock_in, open_punch):
+    """
+    Classify one employee-day as present fraction (0.0, 0.5, or 1.0).
+
+    Any recorded check-in counts as at least a half day so mobile/API punches
+    with short hours or a missing clock-out are not silently marked absent.
+    """
+    if not has_clock_in:
+        return 0.0
+    worked_secs = int(worked_secs or 0)
+    if min_secs > 0:
+        effective_min = max(0, min_secs - grace_secs)
+        if worked_secs >= effective_min:
+            return 1.0
+        if worked_secs >= min_secs / 2:
+            return 0.5
+        if worked_secs > 0 or open_punch:
+            return 0.5
+        return 0.0
+    return 1.0 if worked_secs > 0 or open_punch else 0.5
+
+
+def _aggregate_attendance_days(att_records, strtime_seconds_fn, grace_secs):
+    """
+    Merge multiple attendance rows for the same employee/day and compute
+    present fractions from total worked seconds.
+    """
+    day_agg = defaultdict(
+        lambda: {
+            "worked": 0,
+            "ot": 0,
+            "min_secs": 0,
+            "has_in": False,
+            "open_punch": False,
+            "ot_approved": False,
+        }
+    )
+    for record in att_records:
+        pk = record["employee_id_id"]
+        day = record["attendance_date"]
+        bucket = day_agg[(pk, day)]
+        bucket["worked"] += record["at_work_second"] or 0
+        bucket["ot"] += record["overtime_second"] or 0
+        if record.get("minimum_hour"):
+            bucket["min_secs"] = max(
+                bucket["min_secs"],
+                strtime_seconds_fn(record["minimum_hour"]),
+            )
+        if record.get("attendance_clock_in"):
+            bucket["has_in"] = True
+        if not record.get("attendance_clock_out"):
+            bucket["open_punch"] = True
+        bucket["ot_approved"] = bucket["ot_approved"] or bool(
+            record.get("attendance_overtime_approve")
+        )
+
+    att_dates_map = defaultdict(set)
+    att_date_value_map = defaultdict(dict)
+    att_date_secs_map = defaultdict(dict)
+    att_date_ot_secs_map = defaultdict(dict)
+    att_date_ot_approved_map = defaultdict(dict)
+
+    for (pk, day), agg in day_agg.items():
+        val = _present_day_value(
+            agg["worked"],
+            agg["min_secs"],
+            grace_secs,
+            agg["has_in"],
+            agg["open_punch"],
+        )
+        att_dates_map[pk].add(day)
+        att_date_value_map[pk][day] = val
+        att_date_secs_map[pk][day] = agg["worked"]
+        att_date_ot_secs_map[pk][day] = agg["ot"]
+        att_date_ot_approved_map[pk][day] = agg["ot_approved"]
+
+    return (
+        att_dates_map,
+        att_date_value_map,
+        att_date_secs_map,
+        att_date_ot_secs_map,
+        att_date_ot_approved_map,
+    )
+
+
+def _present_detail_day_type(record, grace_secs):
+    """Human-readable present-day classification for the detail popover."""
+    from attendance.methods.utils import strtime_seconds
+
+    worked = record["at_work_second"] or 0
+    min_secs = (
+        strtime_seconds(record["minimum_hour"]) if record.get("minimum_hour") else 0
+    )
+    has_in = bool(record.get("attendance_clock_in"))
+    open_punch = not record.get("attendance_clock_out")
+    if not has_in:
+        return "mi"
+    val = _present_day_value(worked, min_secs, grace_secs, has_in, open_punch)
+    if val >= 1.0:
+        return "full"
+    if val >= 0.5:
+        return "half"
+    if open_punch:
+        return "mo"
+    if record.get("attendance_clock_out"):
+        return "short"
+    return "mo"
 
 
 def _count_leave_days_in_range(leave_qs, from_date, to_date, off_dates):
@@ -110,14 +251,18 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     """
     from leave.models import LeaveRequest  # local import to avoid circular
 
+    count_end_date = _summary_count_end_date(to_date)
+
     # -- 1. Working days (respects CompanyLeaves + public Holidays) ----------
-    working_data = get_working_days(from_date, to_date)
+    working_data = get_working_days(from_date, count_end_date)
     total_working = working_data["total_working_days"]
     off_dates = working_data["company_leave_dates"]  # combined, used for leave counting
 
     # -- 1b. Public holidays (separate column) --------------------------------
     holiday_dates_set = set(
-        d for d in get_holiday_dates(from_date, to_date) if from_date <= d <= to_date
+        d
+        for d in get_holiday_dates(from_date, count_end_date)
+        if from_date <= d <= count_end_date
     )
     total_holidays = len(holiday_dates_set)
 
@@ -128,7 +273,9 @@ def build_monthly_summary(from_date, to_date, employee_qs):
             + get_company_leave_dates(to_date.year)
         )
     )
-    total_company_leaves = len([d for d in raw_cl if from_date <= d <= to_date])
+    total_company_leaves = len(
+        [d for d in raw_cl if from_date <= d <= count_end_date]
+    )
 
     # -- 2. Attendance per employee (single DB hit, hour-based) ---------------
     # Fetch worked seconds + minimum per record; classify as full (1.0),
@@ -148,50 +295,25 @@ def build_monthly_summary(from_date, to_date, employee_qs):
 
     att_records = Attendance.objects.filter(
         employee_id__in=emp_pks,
-        attendance_date__range=(from_date, to_date),
+        attendance_date__range=(from_date, count_end_date),
     ).values(
         "employee_id_id",
         "at_work_second",
         "overtime_second",
         "minimum_hour",
         "attendance_date",
+        "attendance_clock_in",
+        "attendance_clock_out",
         "attendance_overtime_approve",
     )
 
-    att_dates_map = defaultdict(set)  # {emp_pk: set(dates)} — conflict detection
-    att_date_value_map = defaultdict(dict)  # {emp_pk: {date: 0.5|1.0}} — per-date value
-    att_date_secs_map = defaultdict(
-        dict
-    )  # {emp_pk: {date: at_work_second}} — raw seconds
-    # {emp_pk: {date: overtime_second}} — already computed per-record as
-    # max(0, at_work_second - minimum_hour), with minimum_hour forced to
-    # "00:00" on days with no shift schedule (holiday/company leave) — so
-    # unscheduled days are entirely overtime.
-    att_date_ot_secs_map = defaultdict(dict)
-    # {emp_pk: {date: bool}} — whether overtime on that date is approved;
-    # used to stop flagging holiday/week-off attendance as a conflict once
-    # its overtime has been approved (nothing left to action).
-    att_date_ot_approved_map = defaultdict(dict)
-    for _r in att_records:
-        _pk = _r["employee_id_id"]
-        _date = _r["attendance_date"]
-        _worked = _r["at_work_second"] or 0
-        _min_secs = _strtime_secs(_r["minimum_hour"]) if _r.get("minimum_hour") else 0
-        if _min_secs > 0:
-            _eff_min = max(0, _min_secs - grace_secs)
-            if _worked >= _eff_min:
-                _val = 1.0
-            elif _worked >= _min_secs / 2:
-                _val = 0.5
-            else:
-                _val = 0.0  # hours too low — attendance exists but doesn't count
-        else:
-            _val = 1.0
-        att_dates_map[_pk].add(_date)
-        att_date_value_map[_pk][_date] = _val
-        att_date_secs_map[_pk][_date] = _worked
-        att_date_ot_secs_map[_pk][_date] = _r["overtime_second"] or 0
-        att_date_ot_approved_map[_pk][_date] = bool(_r["attendance_overtime_approve"])
+    (
+        att_dates_map,
+        att_date_value_map,
+        att_date_secs_map,
+        att_date_ot_secs_map,
+        att_date_ot_approved_map,
+    ) = _aggregate_attendance_days(att_records, _strtime_secs, grace_secs)
 
     # -- 2b. Batch-load shift schedules for hours computation -----------------
     from base.models import EmployeeShiftSchedule
@@ -244,7 +366,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     daily_manual_map = defaultdict(dict)  # {emp_pk: {date: hours_second}}
     for _dh in AttendanceDailyHours.objects.filter(
         employee_id__in=emp_pks,
-        date__range=(from_date, to_date),
+        date__range=(from_date, count_end_date),
         is_manually_edited=True,
     ).values("employee_id_id", "date", "hours_second"):
         daily_manual_map[_dh["employee_id_id"]][_dh["date"]] = _dh["hours_second"]
@@ -254,25 +376,12 @@ def build_monthly_summary(from_date, to_date, employee_qs):
         LeaveRequest.objects.filter(
             employee_id__in=emp_pks,
             status="approved",
-            start_date__lte=to_date,
+            start_date__lte=count_end_date,
         )
-        .filter(
-            # end_date null means single-day leave starting at start_date
-            end_date__isnull=False,
-            end_date__gte=from_date,
-        )
+        .filter(Q(end_date__gte=from_date) | Q(end_date__isnull=True))
         .select_related("leave_type_id")
     )
-    # Also include single-day leaves (end_date is null) within range
-    single_day_qs = LeaveRequest.objects.filter(
-        employee_id__in=emp_pks,
-        status="approved",
-        start_date__range=(from_date, to_date),
-        end_date__isnull=True,
-    ).select_related("leave_type_id")
-    from itertools import chain
-
-    all_leaves = list(chain(leave_qs, single_day_qs))
+    all_leaves = list(leave_qs)
 
     # Per-employee per-date leave tracking (paid / unpaid, for conflict detection)
     leave_dates_per_emp = defaultdict(set)
@@ -280,7 +389,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     unpaid_day_dates_per_emp = defaultdict(set)  # {emp_pk: set(unpaid-leave dates)}
     for _lr in all_leaves:
         _s = max(_lr.start_date, from_date)
-        _e = min(_lr.end_date or _lr.start_date, to_date)
+        _e = min(_lr.end_date or count_end_date, count_end_date)
         for _d in _iter_dates(_s, _e):
             leave_dates_per_emp[_lr.employee_id_id].add(_d)
             if _lr.leave_type_id.payment == "paid":
@@ -291,7 +400,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     # -- 4. Roster-based week-off per employee (single DB hit) ---------------
     roster_qs = Roster.objects.filter(
         employee_id__in=emp_pks,
-        date__range=(from_date, to_date),
+        date__range=(from_date, count_end_date),
     ).values("employee_id", "is_off", "date")
     roster_has = set()
     roster_off_dates = defaultdict(set)  # {emp_pk: set(week_off_dates)}
@@ -306,7 +415,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
 
     resolutions_per_emp = defaultdict(dict)  # {emp_pk: {date: resolution_str}}
     for r in AttendanceConflictResolution.objects.filter(
-        date__range=(from_date, to_date),
+        date__range=(from_date, count_end_date),
     ).values("employee_id_id", "date", "resolution"):
         resolutions_per_emp[r["employee_id_id"]][r["date"]] = r["resolution"]
     # Flat date-set form kept for conflict-resolution count logic
@@ -322,8 +431,8 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     total_conflicts = 0
 
     off_set = frozenset(off_dates)  # company leaves + public holidays
-    company_off_dates = {d for d in raw_cl if from_date <= d <= to_date}
-    all_dates_in_range = list(_iter_dates(from_date, to_date))
+    company_off_dates = {d for d in raw_cl if from_date <= d <= count_end_date}
+    all_dates_in_range = list(_iter_dates(from_date, count_end_date))
 
     # Resolution → (bucket, value) for direct overrides
     _RES_BUCKET = {
@@ -905,6 +1014,12 @@ def attendance_monthly_summary_detail(request):
             "<p style='padding:12px;color:#6c757d;font-size:.8rem;'>Employee not found.</p>"
         )
 
+    if not can_access_employee_record(request, emp):
+        return HttpResponse(
+            "<p style='padding:12px;color:#6c757d;font-size:.8rem;'>Access denied.</p>",
+            status=403,
+        )
+
     context = {"metric": metric}
 
     # Fetch all manual overrides for this employee/period so each metric branch
@@ -926,12 +1041,13 @@ def attendance_monthly_summary_detail(request):
         if _dg:
             _grace = _dg.allowed_time_in_secs or 0
 
+        detail_end = _summary_count_end_date(to_date)
         raw = list(
             Attendance.objects.filter(
                 employee_id=emp,
-                attendance_date__range=(from_date, to_date),
+                attendance_date__range=(from_date, detail_end),
             )
-            .order_by("attendance_date")
+            .order_by("attendance_date", "id")
             .values(
                 "attendance_date",
                 "attendance_clock_in",
@@ -942,25 +1058,40 @@ def attendance_monthly_summary_detail(request):
                 "attendance_overtime_approve",
             )
         )
+        grouped = defaultdict(
+            lambda: {
+                "attendance_date": None,
+                "attendance_clock_in": None,
+                "attendance_clock_out": None,
+                "at_work_second": 0,
+                "minimum_hour": None,
+                "overtime_second": 0,
+                "attendance_overtime_approve": False,
+            }
+        )
         for _r in raw:
+            key = _r["attendance_date"]
+            bucket = grouped[key]
+            bucket["attendance_date"] = key
+            if not bucket["attendance_clock_in"] and _r.get("attendance_clock_in"):
+                bucket["attendance_clock_in"] = _r["attendance_clock_in"]
+            if _r.get("attendance_clock_out"):
+                bucket["attendance_clock_out"] = _r["attendance_clock_out"]
+            else:
+                bucket["attendance_clock_out"] = None
+            bucket["at_work_second"] += _r["at_work_second"] or 0
+            bucket["overtime_second"] += _r["overtime_second"] or 0
+            if _r.get("minimum_hour"):
+                bucket["minimum_hour"] = _r["minimum_hour"]
+            bucket["attendance_overtime_approve"] = (
+                bucket["attendance_overtime_approve"]
+                or bool(_r.get("attendance_overtime_approve"))
+            )
+        raw = list(grouped.values())
+        for _r in raw:
+            _r["day_type"] = _present_detail_day_type(_r, _grace)
             _worked = _r["at_work_second"] or 0
             _min_secs = _ss(_r["minimum_hour"]) if _r.get("minimum_hour") else 0
-            if _min_secs > 0:
-                _eff = max(0, _min_secs - _grace)
-                if _worked >= _eff:
-                    _r["day_type"] = "full"
-                elif _worked >= _min_secs / 2:
-                    _r["day_type"] = "half"
-                else:
-                    # Distinguish: no clock-out → genuinely missing out
-                    #              has clock-out → worked short hours
-                    if _r["attendance_clock_out"]:
-                        _r["day_type"] = "short"
-                    else:
-                        _r["day_type"] = "mo"
-            else:
-                _r["day_type"] = "full"
-            # human-readable worked / required / OT labels
             _wh, _wm = _worked // 3600, (_worked % 3600) // 60
             _r["at_work_label"] = f"{_wh}h {_wm:02d}m" if _worked > 0 else ""
             if _min_secs > 0:
@@ -1049,6 +1180,7 @@ def attendance_monthly_summary_detail(request):
             Attendance.objects.filter(
                 employee_id=emp,
                 attendance_date__range=(from_date, to_date),
+                attendance_clock_in__isnull=False,
             ).values_list("attendance_date", flat=True)
         )
         leave_dates = set()
@@ -1129,36 +1261,20 @@ def attendance_monthly_summary_detail(request):
             employee_id=emp,
             status="approved",
             start_date__lte=to_date,
-            end_date__isnull=False,
-            end_date__gte=from_date,
-        ).select_related("leave_type_id"):
+        ).filter(Q(end_date__gte=from_date) | Q(end_date__isnull=True)).select_related(
+            "leave_type_id"
+        ):
             for _d in _iter_dates(
-                max(_lr.start_date, from_date), min(_lr.end_date, to_date)
+                max(_lr.start_date, from_date),
+                min(_lr.end_date or to_date, to_date),
             ):
                 leave_date_info[_d] = (
                     _lr.leave_type_id.name,
                     _lr.leave_type_id.payment,
                 )
-        for _lr in _LR.objects.filter(
-            employee_id=emp,
-            status="approved",
-            start_date__range=(from_date, to_date),
-            end_date__isnull=True,
-        ).select_related("leave_type_id"):
-            leave_date_info[_lr.start_date] = (
-                _lr.leave_type_id.name,
-                _lr.leave_type_id.payment,
-            )
 
         # Holiday date → name
-        holiday_info = {}
-        for _h in Holidays.objects.filter(
-            start_date__lte=to_date, end_date__gte=from_date
-        ):
-            for _d in _iter_dates(
-                max(_h.start_date, from_date), min(_h.end_date, to_date)
-            ):
-                holiday_info[_d] = _h.name
+        holiday_info = _holiday_names_in_range(from_date, to_date)
 
         # Week-off dates
         _roster = list(
@@ -1190,7 +1306,10 @@ def attendance_monthly_summary_detail(request):
                 elif _worked >= _min_secs / 2:
                     day_type = "half"
                 else:
-                    day_type = "short" if r["attendance_clock_out"] else "mo"
+                    if not r["attendance_clock_in"]:
+                        day_type = "mi"
+                    else:
+                        day_type = "short" if r["attendance_clock_out"] else "mo"
             else:
                 day_type = "full"
 
@@ -1226,7 +1345,7 @@ def attendance_monthly_summary_detail(request):
 
         # Pre-compute summary counts for the template (no Counter in templates)
         _ct = {"paid_leave": 0, "unpaid_leave": 0, "holiday": 0, "week_off": 0}
-        _at = {"full": 0, "half": 0, "short": 0, "mo": 0}
+        _at = {"full": 0, "half": 0, "short": 0, "mo": 0, "mi": 0}
         for _cr in conflict_records:
             _ct[_cr["conflict_type"]] = _ct.get(_cr["conflict_type"], 0) + 1
             _at[_cr["day_type"]] = _at.get(_cr["day_type"], 0) + 1
@@ -1240,6 +1359,7 @@ def attendance_monthly_summary_detail(request):
             "half": _at["half"],
             "short": _at["short"],
             "mo": _at["mo"],
+            "mi": _at["mi"],
         }
 
     elif metric == "week_off":
@@ -1274,19 +1394,30 @@ def attendance_monthly_summary_detail(request):
         ]
 
     elif metric == "holiday":
-        holiday_objs = list(
-            Holidays.objects.filter(
-                start_date__lte=to_date,
-                end_date__gte=from_date,
-            ).order_by("start_date")
-        )
-        # Annotate each holiday with is_regularized if any date in its range was overridden.
-        for h in holiday_objs:
-            h_start = max(h.start_date, from_date)
-            h_end = min(h.end_date, to_date)
-            h.is_regularized = any(
-                d in resolution_map for d in _iter_dates(h_start, h_end)
-            )
+        holiday_objs = []
+        for h in Holidays.objects.all().order_by("start_date"):
+            dates_in_range = []
+            if not h.start_date:
+                continue
+            if h.recurring:
+                for year in range(from_date.year, to_date.year + 1):
+                    try:
+                        occ = datetime.date(
+                            year, h.start_date.month, h.start_date.day
+                        )
+                    except ValueError:
+                        continue
+                    if from_date <= occ <= to_date:
+                        dates_in_range.append(occ)
+            h_end = h.end_date or h.start_date
+            span_start = max(h.start_date, from_date)
+            span_end = min(h_end, to_date)
+            if span_start <= span_end:
+                dates_in_range.extend(_iter_dates(span_start, span_end))
+            if not dates_in_range:
+                continue
+            h.is_regularized = any(d in resolution_map for d in dates_in_range)
+            holiday_objs.append(h)
         context["records"] = holiday_objs
 
     return render(request, "attendance/monthly_summary/detail_popover.html", context)
@@ -1333,18 +1464,12 @@ def _build_calendar_context(emp, from_date, to_date):
         employee_id=emp,
         status="approved",
         start_date__lte=to_date,
-        end_date__isnull=False,
-        end_date__gte=from_date,
-    ).select_related("leave_type_id")
-    qs_single = LeaveRequest.objects.filter(
-        employee_id=emp,
-        status="approved",
-        start_date__range=(from_date, to_date),
-        end_date__isnull=True,
-    ).select_related("leave_type_id")
-    for lr in chain(qs_range, qs_single):
+    ).filter(Q(end_date__gte=from_date) | Q(end_date__isnull=True)).select_related(
+        "leave_type_id"
+    )
+    for lr in qs_range:
         s = max(lr.start_date, from_date)
-        e = min(lr.end_date or lr.start_date, to_date)
+        e = min(lr.end_date or to_date, to_date)
         name = lr.leave_type_id.name
         for d in _iter_dates(s, e):
             if lr.leave_type_id.payment == "paid":
@@ -1353,10 +1478,7 @@ def _build_calendar_context(emp, from_date, to_date):
                 unpaid_map[d] = name
 
     # -- Holiday dates --------------------------------------------------------
-    holiday_map = {}
-    for h in Holidays.objects.filter(start_date__lte=to_date, end_date__gte=from_date):
-        for d in _iter_dates(max(h.start_date, from_date), min(h.end_date, to_date)):
-            holiday_map[d] = h.name
+    holiday_map = _holiday_names_in_range(from_date, to_date)
 
     # -- Week-off dates -------------------------------------------------------
     roster_entries = list(
@@ -1693,6 +1815,12 @@ def attendance_monthly_summary_calendar(request):
     except Employee.DoesNotExist:
         return HttpResponse("<p style='padding:20px;'>Employee not found.</p>")
 
+    if not can_access_employee_record(request, emp):
+        return HttpResponse(
+            "<p style='padding:20px;color:#6c757d;'>Access denied.</p>",
+            status=403,
+        )
+
     context = _build_calendar_context(emp, from_date, to_date)
     return render(request, "attendance/monthly_summary/calendar_modal.html", context)
 
@@ -1811,7 +1939,10 @@ def attendance_monthly_summary_conflict_resolve(request):
             elif _worked >= _min_secs / 2:
                 day_type = "half"
             else:
-                day_type = "short" if att_row["attendance_clock_out"] else "mo"
+                if not att_row["attendance_clock_in"]:
+                    day_type = "mi"
+                else:
+                    day_type = "short" if att_row["attendance_clock_out"] else "mo"
         else:
             day_type = "full"
         worked_h = _worked // 3600
@@ -1832,28 +1963,16 @@ def attendance_monthly_summary_conflict_resolve(request):
         employee_id=emp,
         status="approved",
         start_date__lte=date,
-        end_date__isnull=False,
-        end_date__gte=date,
-    ).select_related("leave_type_id"):
+    ).filter(Q(end_date__gte=date) | Q(end_date__isnull=True)).select_related(
+        "leave_type_id"
+    ):
         conflict_type = (
             "paid_leave" if _lr.leave_type_id.payment == "paid" else "unpaid_leave"
         )
         conflict_label = _lr.leave_type_id.name
         break
     if not conflict_type:
-        for _lr in LeaveRequest.objects.filter(
-            employee_id=emp,
-            status="approved",
-            start_date=date,
-            end_date__isnull=True,
-        ).select_related("leave_type_id"):
-            conflict_type = (
-                "paid_leave" if _lr.leave_type_id.payment == "paid" else "unpaid_leave"
-            )
-            conflict_label = _lr.leave_type_id.name
-            break
-    if not conflict_type:
-        _h = Holidays.objects.filter(start_date__lte=date, end_date__gte=date).first()
+        _h = is_holiday(date)
         if _h:
             # attendance on holiday = OT; no attendance = just a holiday
             conflict_type = "holiday_ot" if att_row else "holiday"
@@ -1891,6 +2010,7 @@ def attendance_monthly_summary_conflict_resolve(request):
         "half_present": _("Half Day"),
         "short": _("Short Hours"),
         "mo": _("Missing Clock-out"),
+        "mi": _("Missing Clock-in"),
         "paid_leave": _("Paid Leave"),
         "unpaid_leave": _("Unpaid Leave"),
         "holiday": _("Holiday"),
@@ -1910,6 +2030,7 @@ def attendance_monthly_summary_conflict_resolve(request):
         "half_present": ("#fef9c3", "#854d0e"),
         "short": ("#ede9fe", "#3730a3"),
         "mo": ("#fee2e2", "#991b1b"),
+        "mi": ("#fee2e2", "#991b1b"),
         "absent": ("#fee2e2", "#991b1b"),
         "paid_leave": ("#dbeafe", "#1e40af"),
         "unpaid_leave": ("#ffedd5", "#9a3412"),

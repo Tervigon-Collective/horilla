@@ -10,7 +10,7 @@ import uuid
 
 import django_filters
 from django import forms
-from django.db.models import Value
+from django.db.models import Q, Value
 from django.db.models.functions import Coalesce, Concat
 from django.forms import DateTimeInput
 from django.utils.translation import gettext_lazy as _
@@ -416,6 +416,14 @@ class AttendanceFilters(HorillaFilterSet):
         field_name="employee_id__employee_work_info__department_id__department",
         lookup_expr="icontains",
     )
+    missing_punch = django_filters.BooleanFilter(method="filter_missing_punch")
+
+    def filter_missing_punch(self, queryset, name, value):
+        if value:
+            return queryset.filter(
+                Q(missing_punch_in=True) | Q(missing_punch_out=True)
+            )
+        return queryset
 
     @property
     def form(self):
@@ -488,6 +496,9 @@ class AttendanceFilters(HorillaFilterSet):
             "month",
             "year",
             "batch_attendance_id",
+            "missing_punch_in",
+            "missing_punch_out",
+            "missing_punch",
         ]
 
         widgets = {

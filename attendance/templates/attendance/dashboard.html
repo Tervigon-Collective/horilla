@@ -70,7 +70,7 @@
         /* ── KPI ── */
         .am-kpi-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(5, 1fr);
             margin-bottom: 20px;
             gap: 14px;
         }
@@ -820,6 +820,7 @@
             <div class="am-skeleton am-skeleton--kpi"></div>
             <div class="am-skeleton am-skeleton--kpi"></div>
             <div class="am-skeleton am-skeleton--kpi"></div>
+            <div class="am-skeleton am-skeleton--kpi"></div>
         </div>
 
         <!-- Main layout with sidebar -->
@@ -1436,6 +1437,12 @@
                     <div class="am-kpi-card__sub">${data.pending_overtime > 0
                                 ? '<span class="am-badge am-badge--amber">' + data.pending_overtime + ' {% trans "OT pending" %}</span>'
                                 : '{% trans "To validate" %}'}</div>
+                </a>
+                <a href="{% url 'work-records' %}" class="am-kpi-card">
+                    <div class="am-kpi-card__icon am-kpi-card__icon--red"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+                    <div class="am-kpi-card__label">{% trans "Missing Punch" %}</div>
+                    <div class="am-kpi-card__value">${data.missing_punches || 0}</div>
+                    <div class="am-kpi-card__sub">{% trans "Last 30 days" %} · <span style="opacity:0.7">{% trans "Daily Work Status" %}</span></div>
                 </a>`;
                 }).catch(() => { document.getElementById('am-kpi-grid').innerHTML = emptyHtml('{% trans "Unable to load KPIs" %}'); });
             }

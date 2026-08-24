@@ -1,0 +1,254 @@
+{% extends "index.html" %}
+{% load i18n horillafilters static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+
+<div class="is-page">
+{% include "payroll/india_statutory/nav.html" with active_tab="register" company=company settings=settings %}
+
+<div class="is-page__content">
+    <div class="is-toolbar">
+        <form method="get" class="is-toolbar__form">
+            <label class="oh-label">{% trans "Register" %}</label>
+            <select name="type" class="oh-select oh-select-2" onchange="this.form.submit()">
+                <option value="pf" {% if register_type == "pf" %}selected{% endif %}>{% trans "PF (EPF / EPS / EDLI)" %}</option>
+                <option value="esi" {% if register_type == "esi" %}selected{% endif %}>{% trans "ESI" %}</option>
+                <option value="pt" {% if register_type == "pt" %}selected{% endif %}>{% trans "Professional Tax" %}</option>
+                <option value="lwf" {% if register_type == "lwf" %}selected{% endif %}>{% trans "Labour Welfare Fund" %}</option>
+                <option value="bonus" {% if register_type == "bonus" %}selected{% endif %}>{% trans "Bonus Act provision" %}</option>
+                <option value="gratuity" {% if register_type == "gratuity" %}selected{% endif %}>{% trans "Gratuity liability" %}</option>
+            </select>
+            <label class="oh-label">{% trans "Period" %}</label>
+            <select name="month" class="oh-select oh-select-2">
+                {% for opt in month_options %}
+                <option value="{{ opt.value }}" {% if opt.value == selected_month %}selected{% endif %}>{{ opt.label }}</option>
+                {% endfor %}
+            </select>
+            <select name="year" class="oh-select oh-select-2">
+                {% for y in year_options %}
+                <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Apply" %}</button>
+        </form>
+        <div class="is-toolbar__actions">
+            <a href="{{ export_csv_url }}" class="oh-btn oh-btn--secondary oh-btn--sm">
+                <ion-icon name="download-outline"></ion-icon> CSV
+            </a>
+        </div>
+    </div>
+
+    <p class="is-muted" style="margin-bottom:16px;font-size:13px;">
+        {% trans "Internal statutory register. LWF/Bonus come from confirmed payslips (enable on Settings). Gratuity is a live liability estimate (Payment of Gratuity Act)." %}
+    </p>
+
+    <div class="is-kpi-grid">
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--blue"><ion-icon name="people-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Employees" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.employee_count }}</div>
+            </div>
+        </div>
+        {% if register_type == "pf" %}
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--green"><ion-icon name="wallet-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "EPS" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.eps|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--amber"><ion-icon name="briefcase-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "EPF (Employer)" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.epf_employer|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--purple"><ion-icon name="shield-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "EDLI" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.edli|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        {% elif register_type == "esi" %}
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--amber"><ion-icon name="medkit-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "ESI (EE + ER)" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.esi_total|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        {% elif register_type == "lwf" %}
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--green"><ion-icon name="people-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "LWF (EE + ER)" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.lwf_total|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        {% elif register_type == "bonus" %}
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--amber"><ion-icon name="gift-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Bonus provision" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.bonus_provision|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        {% elif register_type == "gratuity" %}
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--green"><ion-icon name="hourglass-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Eligible (5+ years)" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.eligible_count|default:0 }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--purple"><ion-icon name="wallet-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Gratuity liability" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.gratuity|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        {% else %}
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--purple"><ion-icon name="cash-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Professional Tax" %}</div>
+                <div class="is-kpi-card__value">{{ challan_data.totals.pt|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if challan_data.rows %}
+    <div class="is-section">
+        <div class="is-section__body is-section__body--flush">
+            <div class="is-table-wrap">
+                <table class="is-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Employee" %}</th>
+                            {% if register_type == "pf" %}
+                            <th>{% trans "UAN" %}</th>
+                            <th>{% trans "PF Wages" %}</th>
+                            <th>{% trans "PF (EE)" %}</th>
+                            <th>{% trans "EPS" %}</th>
+                            <th>{% trans "EPF (ER)" %}</th>
+                            <th>{% trans "EDLI" %}</th>
+                            {% elif register_type == "esi" %}
+                            <th>{% trans "UAN" %}</th>
+                            <th>{% trans "Gross" %}</th>
+                            <th>{% trans "ESI (EE)" %}</th>
+                            <th>{% trans "ESI (ER)" %}</th>
+                            {% elif register_type == "lwf" %}
+                            <th>{% trans "Gross" %}</th>
+                            <th>{% trans "LWF (EE)" %}</th>
+                            <th>{% trans "LWF (ER)" %}</th>
+                            {% elif register_type == "bonus" %}
+                            <th>{% trans "Gross" %}</th>
+                            <th>{% trans "Bonus provision" %}</th>
+                            {% elif register_type == "gratuity" %}
+                            <th>{% trans "Join date" %}</th>
+                            <th>{% trans "Years" %}</th>
+                            <th>{% trans "Basic" %}</th>
+                            <th>{% trans "Eligible" %}</th>
+                            <th>{% trans "Gratuity" %}</th>
+                            {% else %}
+                            <th>{% trans "PAN" %}</th>
+                            <th>{% trans "Gross" %}</th>
+                            <th>{% trans "PT" %}</th>
+                            {% endif %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in challan_data.rows %}
+                        <tr>
+                            <td>{{ row.employee.get_full_name }}</td>
+                            {% if register_type == "pf" %}
+                            <td>{{ row.uan|default:"—" }}</td>
+                            <td class="is-num">{{ row.pf_wages|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.pf_employee|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.eps|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.epf_employer|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.edli|floatformat:2|currency_symbol_position }}</td>
+                            {% elif register_type == "esi" %}
+                            <td>{{ row.uan|default:"—" }}</td>
+                            <td class="is-num">{{ row.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.esi_employee|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.esi_employer|floatformat:2|currency_symbol_position }}</td>
+                            {% elif register_type == "lwf" %}
+                            <td class="is-num">{{ row.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.lwf_employee|default:0|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.lwf_employer|default:0|floatformat:2|currency_symbol_position }}</td>
+                            {% elif register_type == "bonus" %}
+                            <td class="is-num">{{ row.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.bonus_provision|default:0|floatformat:2|currency_symbol_position }}</td>
+                            {% elif register_type == "gratuity" %}
+                            <td>{{ row.join_date|default:"—" }}</td>
+                            <td class="is-num">{{ row.years }}</td>
+                            <td class="is-num">{{ row.basic_pay|floatformat:2|currency_symbol_position }}</td>
+                            <td>{% if row.eligible %}{% trans "Yes" %}{% else %}{% trans "No" %}{% endif %}</td>
+                            <td class="is-num">{{ row.gratuity|floatformat:2|currency_symbol_position }}</td>
+                            {% else %}
+                            <td>{{ row.pan|default:"—" }}</td>
+                            <td class="is-num">{{ row.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ row.pt|floatformat:2|currency_symbol_position }}</td>
+                            {% endif %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td>{% trans "Total" %}</td>
+                            {% if register_type == "pf" %}
+                            <td></td>
+                            <td class="is-num">{{ challan_data.totals.pf_wages|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.pf_employee|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.eps|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.epf_employer|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.edli|floatformat:2|currency_symbol_position }}</td>
+                            {% elif register_type == "esi" %}
+                            <td></td>
+                            <td class="is-num">{{ challan_data.totals.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.esi_employee|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.esi_employer|floatformat:2|currency_symbol_position }}</td>
+                            {% elif register_type == "lwf" %}
+                            <td class="is-num">{{ challan_data.totals.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.lwf_employee|default:0|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.lwf_employer|default:0|floatformat:2|currency_symbol_position }}</td>
+                            {% elif register_type == "bonus" %}
+                            <td class="is-num">{{ challan_data.totals.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.bonus_provision|default:0|floatformat:2|currency_symbol_position }}</td>
+                            {% elif register_type == "gratuity" %}
+                            <td></td>
+                            <td></td>
+                            <td></td>
+                            <td>{{ challan_data.totals.eligible_count|default:0 }}</td>
+                            <td class="is-num">{{ challan_data.totals.gratuity|floatformat:2|currency_symbol_position }}</td>
+                            {% else %}
+                            <td></td>
+                            <td class="is-num">{{ challan_data.totals.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ challan_data.totals.pt|floatformat:2|currency_symbol_position }}</td>
+                            {% endif %}
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="is-section">
+        <div class="is-empty">
+            <img src="{% static 'images/ui/no_records.svg' %}" alt="" style="width:120px;opacity:0.75;">
+            <h3 class="is-empty__title">{% trans "No register data for this period" %}</h3>
+            <p class="is-empty__desc">{% trans "Confirm payslips with India Statutory enabled, then regenerate older slips so EPS/EDLI split is stored." %}</p>
+            <a href="{% url 'view-payslip' %}" class="oh-btn oh-btn--secondary">{% trans "Payslips" %}</a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+</div>
+{% endblock %}

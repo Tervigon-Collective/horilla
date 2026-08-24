@@ -1,7 +1,7 @@
 {% load i18n %}
 {% load taskfilters %}
 <div onclick="event.stopPropagation();">
-    {% if request.user|task_crud_perm:instance or perms.project.view_task %}
+    {% if request.user|task_crud_perm:instance or perms.project.change_task or perms.project.delete_task %}
         <div class="flex items-center justify-center gap-1">
             <a hx-get="{% url 'update-task-all' instance.id %}?instance_ids={{instance.ordered_ids}}"
                 hx-target='#genericModalBody' data-toggle='oh-modal-toggle' data-target="#genericModal" hx-swap='innerHTML'

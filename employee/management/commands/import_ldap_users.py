@@ -59,13 +59,20 @@ class Command(BaseCommand):
                         ldap_password
                     )  # Hash and set the password securely
                     user.save()  # Save the changes to the HorillaUser instance
-                    action = "Updated"
                 except HorillaUser.DoesNotExist:
                     # If the user does not exist, handle it accordingly (e.g., log a message or create a new user)
                     self.stdout.write(
                         self.style.WARNING(f"User for employee {name} does not exist.")
                     )
                     continue
+
+                if employee.employee_user_id_id != user.id:
+                    employee.employee_user_id = user
+                    employee.save(update_fields=["employee_user_id"])
+
+                from employee.methods.user_bootstrap import bootstrap_employee_access
+
+                bootstrap_employee_access(employee, skip_if_assigned=True)
 
                 action = "Created" if created else "Updated"
                 self.stdout.write(

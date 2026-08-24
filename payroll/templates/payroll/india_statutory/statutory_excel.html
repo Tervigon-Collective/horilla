@@ -1,0 +1,213 @@
+{% extends "index.html" %}
+{% load i18n static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+
+    <div class="is-page">
+    {% include "payroll/india_statutory/nav.html" with active_tab="excel" company=company settings=settings %}
+
+    <div class="is-page__content">
+        {% for message in messages %}
+        <div class="oh-alert-container">
+            <div class="oh-alert oh-alert--animated {{ message.tags }}">{{ message }}</div>
+        </div>
+        {% endfor %}
+
+        <div class="is-section">
+            <div class="is-section__header">
+                <span class="is-section__icon"><ion-icon name="cloud-upload-outline"></ion-icon></span>
+                <div>
+                    <h3 class="is-section__title">{% trans "Bulk import & export" %}</h3>
+                    <p class="is-section__desc">
+                        {% trans "Download CSV templates and data. Upload CSV, Excel (XLSX/XLS), or TSV files." %}
+                    </p>
+                </div>
+            </div>
+            <div class="is-section__body is-section__body--flush">
+                <div class="is-table-wrap">
+                    <table class="is-table">
+                        <thead>
+                            <tr>
+                                <th>{% trans "Feature" %}</th>
+                                <th>{% trans "Description" %}</th>
+                                <th class="is-actions">{% trans "Template (CSV)" %}</th>
+                                <th class="is-actions">{% trans "Download (CSV)" %}</th>
+                                <th class="is-actions">{% trans "Bulk upload" %}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>{% trans "Employee statutory profiles" %}</td>
+                                <td class="is-muted">{% trans "PAN, UAN, PF/ESI, TDS flags, Chapter VI-A" %}</td>
+                                <td class="is-actions">
+                                    <a href="{% url 'statutory-profiles-template' %}?format=csv" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Template" %}</a>
+                                </td>
+                                <td class="is-actions">
+                                    <a href="{% url 'statutory-profiles-export' %}?format=csv" class="oh-btn oh-btn--light oh-btn--sm">CSV</a>
+                                </td>
+                                <td class="is-actions">
+                                    <form method="post" action="{% url 'statutory-profiles-import' %}" enctype="multipart/form-data" class="is-inline-upload">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="redirect_to" value="statutory-excel-hub">
+                                        <input type="file" name="statutory_excel_file" accept=".csv,.tsv,.xlsx,.xls" required class="oh-input oh-input--sm">
+                                        <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Upload" %}</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>{% trans "CTC / salary structure" %}</td>
+                                <td class="is-muted">{% trans "Split monthly CTC into Basic, HRA, Special allowance" %}</td>
+                                <td class="is-actions">
+                                    <a href="{% url 'ctc-structure-template' %}?format=csv" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Template" %}</a>
+                                </td>
+                                <td class="is-actions">
+                                    <a href="{% url 'ctc-structure-export' %}?format=csv" class="oh-btn oh-btn--light oh-btn--sm">CSV</a>
+                                </td>
+                                <td class="is-actions">
+                                    <form method="post" action="{% url 'ctc-structure-import' %}" enctype="multipart/form-data" class="is-inline-upload">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="redirect_to" value="statutory-excel-hub">
+                                        <input type="file" name="ctc_excel_file" accept=".csv,.tsv,.xlsx,.xls" required class="oh-input oh-input--sm">
+                                        <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Upload" %}</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>{% trans "Form 16 bulk save" %}</td>
+                                <td class="is-muted">{% trans "Archive Form 16 from payslip totals for listed employees" %}</td>
+                                <td class="is-actions">
+                                    <a href="{% url 'form16-import-template' %}?fy={{ financial_year_start }}&format=csv" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Template" %}</a>
+                                </td>
+                                <td class="is-actions">
+                                    <a href="{% url 'form16-excel-export' %}?fy={{ financial_year_start }}&format=csv" class="oh-btn oh-btn--light oh-btn--sm">CSV</a>
+                                </td>
+                                <td class="is-actions">
+                                    <form method="post" action="{% url 'form16-bulk-import' %}" enctype="multipart/form-data" class="is-inline-upload">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="redirect_to" value="statutory-excel-hub">
+                                        <input type="hidden" name="fy" value="{{ financial_year_start }}">
+                                        <input type="file" name="form16_excel_file" accept=".csv,.tsv,.xlsx,.xls" required class="oh-input oh-input--sm">
+                                        <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Upload" %}</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p class="is-field__hint" style="padding:12px 16px;margin:0;">
+                    {% trans "Match employees by Badge ID. Yes/No columns accept: Yes, No, Y, N, 1, 0. CTC Metro defaults to Yes if blank." %}
+                </p>
+            </div>
+        </div>
+
+        <div class="is-section">
+            <div class="is-section__header">
+                <span class="is-section__icon"><ion-icon name="download-outline"></ion-icon></span>
+                <div>
+                    <h3 class="is-section__title">{% trans "Reports & other exports" %}</h3>
+                    <p class="is-section__desc">{% trans "Payslip-derived reports are export-only. Regenerate payslips to refresh totals." %}</p>
+                </div>
+            </div>
+            <div class="is-section__body is-section__body--flush">
+                <div class="is-table-wrap">
+                    <table class="is-table">
+                        <thead>
+                            <tr>
+                                <th>{% trans "Report" %}</th>
+                                <th>{% trans "Description" %}</th>
+                                <th class="is-actions">{% trans "Import" %}</th>
+                                <th class="is-actions">{% trans "Download (CSV)" %}</th>
+                                <th class="is-actions">{% trans "Open" %}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>{% trans "Statutory challans" %}</td>
+                                <td class="is-muted">{% trans "PF / ESI / PT / TDS monthly totals" %}</td>
+                                <td class="is-actions is-muted">—</td>
+                                <td class="is-actions">
+                                    <a href="{{ challan_export_url }}" class="oh-btn oh-btn--light oh-btn--sm">CSV</a>
+                                </td>
+                                <td class="is-actions">
+                                    <a href="{% url 'challan-list' %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Open" %}</a>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>{% trans "Statutory registers" %}</td>
+                                <td class="is-muted">{% trans "PF / ESI / PT monthly books (EPS, EDLI split)" %}</td>
+                                <td class="is-actions is-muted">—</td>
+                                <td class="is-actions">
+                                    <a href="{{ register_export_url }}" class="oh-btn oh-btn--light oh-btn--sm">CSV</a>
+                                </td>
+                                <td class="is-actions">
+                                    <a href="{% url 'statutory-register' %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Open" %}</a>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>{% trans "Form 24Q" %}</td>
+                                <td class="is-muted">{% trans "Quarterly TDS by employee" %}</td>
+                                <td class="is-actions is-muted">—</td>
+                                <td class="is-actions">
+                                    <a href="{{ form24q_export_url }}" class="oh-btn oh-btn--light oh-btn--sm">CSV</a>
+                                </td>
+                                <td class="is-actions">
+                                    <a href="{% url 'form24q-list' %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Open" %}</a>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>{% trans "Accounting journal" %}</td>
+                                <td class="is-muted">{% trans "Payroll journal for Tally / books import" %}</td>
+                                <td class="is-actions is-muted">—</td>
+                                <td class="is-actions">
+                                    <a href="{{ accounting_export_url }}" class="oh-btn oh-btn--light oh-btn--sm">CSV</a>
+                                </td>
+                                <td class="is-actions">
+                                    <a href="{% url 'accounting-export-list' %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Open" %}</a>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>{% trans "Approval inbox" %}</td>
+                                <td class="is-muted">{% trans "Pending leave, attendance, assets, shift, reimbursement" %}</td>
+                                <td class="is-actions is-muted">—</td>
+                                <td class="is-actions">
+                                    <a href="{% url 'approval-inbox-export' %}?format=csv" class="oh-btn oh-btn--light oh-btn--sm">CSV</a>
+                                </td>
+                                <td class="is-actions">
+                                    <a href="{% url 'approval-inbox' %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Open" %}</a>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>{% trans "F&F settlement estimates" %}</td>
+                                <td class="is-muted">{% trans "Gratuity, leave encashment, notice pay for exiting employees" %}</td>
+                                <td class="is-actions is-muted">—</td>
+                                <td class="is-actions">
+                                    <a href="{% url 'fnf-excel-export' %}?format=csv" class="oh-btn oh-btn--light oh-btn--sm">CSV</a>
+                                </td>
+                                <td class="is-actions">
+                                    <a href="{% url 'offboarding-dashboard' %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Open" %}</a>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.is-inline-upload {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    justify-content: flex-end;
+}
+.is-inline-upload .oh-input--sm {
+    max-width: 140px;
+    font-size: 12px;
+    padding: 4px 8px;
+}
+</style>
+{% endblock content %}

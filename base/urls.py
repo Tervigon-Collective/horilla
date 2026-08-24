@@ -5,6 +5,7 @@ from django.utils.translation import gettext_lazy as _
 from base import announcement
 from base import dashboard as dashboard_module
 from base import ess_dashboard, request_and_approve, views
+from base import approval_inbox_views
 from base.cbv import (
     announcement_cbv,
     company,
@@ -131,6 +132,26 @@ urlpatterns = [
         "dashboard/api/pending-approvals/",
         dashboard_module.dashboard_pending_approvals,
         name="dashboard-pending-approvals",
+    ),
+    path(
+        "approvals/inbox/",
+        approval_inbox_views.approval_inbox,
+        name="approval-inbox",
+    ),
+    path(
+        "approvals/inbox/action/",
+        approval_inbox_views.approval_inbox_action,
+        name="approval-inbox-action",
+    ),
+    path(
+        "approvals/inbox/row/<str:item_type>/<int:item_id>/",
+        approval_inbox_views.approval_inbox_row,
+        name="approval-inbox-row",
+    ),
+    path(
+        "approvals/inbox/export/",
+        approval_inbox_views.approval_inbox_export,
+        name="approval-inbox-export",
     ),
     path(
         "dashboard/api/turnover/",

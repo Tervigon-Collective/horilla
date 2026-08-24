@@ -276,6 +276,11 @@ def _parse_period(request):
     return from_date, to_date
 
 
+def _period_end(to_date):
+    """Last day of the selected period that is not in the future."""
+    return min(to_date, date.today())
+
+
 def _is_manager(user):
     """Return True if user is a reporting manager for at least one active employee."""
     try:
@@ -355,7 +360,8 @@ def dashboard_kpi_data(request):
     from employee.models import Employee
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
+    real_today = date.today()
     first_of_month = from_date
 
     total_employees = Employee.objects.filter(is_active=True).count()
@@ -366,7 +372,7 @@ def dashboard_kpi_data(request):
 
         new_joiners = EmployeeWorkInformation.objects.filter(
             date_joining__gte=first_of_month,
-            date_joining__lte=today,
+            date_joining__lte=period_end,
         ).count()
     except Exception:
         pass
@@ -375,8 +381,6 @@ def dashboard_kpi_data(request):
     try:
         from attendance.models import Attendance
         from leave.models import LeaveRequest
-
-        real_today = date.today()
         leave_employee_ids = list(
             LeaveRequest.objects.filter(
                 start_date__lte=real_today,
@@ -390,7 +394,7 @@ def dashboard_kpi_data(request):
             .distinct()
         )
         present_today = (
-            Attendance.objects.filter(attendance_date=today)
+            Attendance.objects.filter(attendance_date=real_today)
             .exclude(employee_id__in=leave_employee_ids)
             .values("employee_id")
             .distinct()
@@ -408,7 +412,6 @@ def dashboard_kpi_data(request):
     try:
         from leave.models import LeaveRequest
 
-        real_today = date.today()
         on_leave = (
             LeaveRequest.objects.filter(
                 start_date__lte=real_today,
@@ -443,6 +446,15 @@ def dashboard_kpi_data(request):
     except Exception:
         pass
 
+    if from_date.day == 1 and period_end >= from_date.replace(
+        day=28
+    ) and period_end.month == from_date.month:
+        period_label = period_end.strftime("%B %Y")
+    else:
+        period_label = (
+            f"{from_date.strftime('%b %d')} – {period_end.strftime('%b %d, %Y')}"
+        )
+
     return JsonResponse(
         {
             "total_employees": total_employees,
@@ -453,7 +465,8 @@ def dashboard_kpi_data(request):
             "pending_leaves": pending_leaves,
             "new_joiners": new_joiners,
             "open_recruitments": open_recruitments,
-            "date": today.isoformat(),
+            "date": real_today.isoformat(),
+            "period_label": period_label,
         }
     )
 
@@ -522,7 +535,7 @@ def dashboard_leave_breakdown(request):
         return JsonResponse({"no_permission": True})
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
     first_of_month = from_date
     breakdown = []
 
@@ -534,6 +547,7 @@ def dashboard_leave_breakdown(request):
         data = (
             LeaveRequest.objects.filter(
                 start_date__gte=first_of_month,
+                start_date__lte=period_end,
                 status__in=["approved", "requested"],
             )
             .values("leave_type_id__name")
@@ -552,7 +566,9 @@ def dashboard_leave_breakdown(request):
     except Exception:
         pass
 
-    return JsonResponse({"breakdown": breakdown, "month": today.strftime("%B %Y")})
+    return JsonResponse(
+        {"breakdown": breakdown, "month": period_end.strftime("%B %Y")}
+    )
 
 
 @login_required
@@ -729,8 +745,9 @@ def dashboard_todays_leave(request):
 
         qs = LeaveRequest.objects.filter(
             start_date__lte=today,
-            end_date__gte=today,
             status="approved",
+        ).filter(
+            Q(end_date__gte=today) | Q(end_date__isnull=True)
         ).select_related("employee_id", "leave_type_id")
 
         if not can_view_all:
@@ -768,9 +785,18 @@ def dashboard_todays_leave(request):
 
 @login_required
 def dashboard_upcoming_holidays(request):
-    """Upcoming holidays in the next 7 days for the current company."""
+    """Next upcoming holidays for the current company.
+
+    Uses the dashboard period when provided; otherwise shows the next holidays
+    from today (not only the next 7 days, which often left the card empty).
+    """
     today = date.today()
-    next_week = today + timedelta(days=7)
+    from_date, to_date = _parse_period(request)
+    period_end = _period_end(to_date)
+    # If the picker is the default "this month" (or any past-heavy range),
+    # still surface the next holidays after today so the card is useful.
+    window_start = max(from_date, today)
+    window_end = max(period_end, today + timedelta(days=90))
     holidays_data = []
 
     try:
@@ -780,14 +806,20 @@ def dashboard_upcoming_holidays(request):
 
         company_id = request.session.get("selected_company")
         qs = Holidays.objects.filter(
-            Q(start_date__gte=today, start_date__lte=next_week)
-            | Q(start_date__lte=today, end_date__gte=today),
+            Q(start_date__gte=window_start, start_date__lte=window_end)
+            | Q(start_date__lte=today, end_date__gte=today)
+            | Q(end_date__isnull=True, start_date=today)
+            | Q(
+                recurring=True,
+                start_date__month=today.month,
+                start_date__day=today.day,
+            ),
             is_specific=False,
         )
-        if company_id:
+        if company_id and company_id != "all":
             qs = qs.filter(company_id=company_id)
 
-        for h in qs.order_by("start_date")[:10]:
+        for h in qs.order_by("start_date")[:8]:
             holidays_data.append(
                 {
                     "id": h.pk,
@@ -961,7 +993,7 @@ def dashboard_payroll_summary(request):
     if not (request.user.is_superuser or request.user.has_perm("payroll.view_payslip")):
         return JsonResponse({"no_permission": True})
     from_date, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
     first_of_month = from_date
     # Always use full calendar month boundaries for previous month
     prev_month_end = first_of_month - timedelta(days=1)  # last day of previous month
@@ -990,7 +1022,7 @@ def dashboard_payroll_summary(request):
 
         current_qs = Payslip.objects.filter(
             start_date__gte=first_of_month,
-            start_date__lte=today,
+            start_date__lte=period_end,
             status__in=["confirmed", "paid", "review_ongoing"],
         )
         current = _aggregate(current_qs)
@@ -1013,7 +1045,7 @@ def dashboard_payroll_summary(request):
 
     return JsonResponse(
         {
-            "current_month": today.strftime("%B %Y"),
+            "current_month": period_end.strftime("%B %Y"),
             "previous_month": prev_month_start.strftime("%B %Y"),
             "current": current,
             "previous": previous,
@@ -1022,8 +1054,7 @@ def dashboard_payroll_summary(request):
     )
 
 
-@login_required
-def dashboard_pending_approvals(request):
+def get_pending_approvals_counts(request):
     """Pending items awaiting the logged-in user's approval.
 
     For users without any approval permission, shows their own pending requests
@@ -1217,7 +1248,14 @@ def dashboard_pending_approvals(request):
 
     pending["total"] = sum(pending.values())
 
-    return JsonResponse({"pending": pending, "is_restricted": is_restricted})
+    return {"pending": pending, "is_restricted": is_restricted}
+
+
+@login_required
+def dashboard_pending_approvals(request):
+    """JSON endpoint for dashboard pending-approval widget."""
+    result = get_pending_approvals_counts(request)
+    return JsonResponse(result)
 
 
 @login_required
@@ -1268,7 +1306,7 @@ def dashboard_turnover(request):
         return JsonResponse({"no_permission": True})
 
     _, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
     months = []
 
     try:
@@ -1278,12 +1316,12 @@ def dashboard_turnover(request):
 
         for i in range(5, -1, -1):
             # Calculate month boundaries using calendar-correct month subtraction
-            year = today.year
-            month = today.month - i
+            year = period_end.year
+            month = period_end.month - i
             while month <= 0:
                 month += 12
                 year -= 1
-            month_start = today.replace(year=year, month=month, day=1)
+            month_start = period_end.replace(year=year, month=month, day=1)
             if month_start.month == 12:
                 month_end = month_start.replace(
                     year=month_start.year + 1, month=1
@@ -1292,6 +1330,7 @@ def dashboard_turnover(request):
                 month_end = month_start.replace(
                     month=month_start.month + 1
                 ) - timedelta(days=1)
+            month_end = min(month_end, period_end)
 
             # New hires (joined this month)
             hires = EmployeeWorkInformation.objects.filter(

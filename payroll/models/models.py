@@ -289,6 +289,14 @@ class Contract(HorillaModel):
         default=0,
         verbose_name=_("Deduction For One Leave Amount"),
     )
+    deduct_attendance_absence_from_pay = models.BooleanField(
+        default=True,
+        verbose_name=_("Deduct Attendance Absence (LOP)"),
+        help_text=_(
+            "Deduct salary for working days without validated attendance "
+            "and without approved leave."
+        ),
+    )
 
     note = models.TextField(null=True, blank=True)
     history = HorillaAuditLog(
@@ -2293,6 +2301,7 @@ class Reimbursement(HorillaModel):
     reimbursement_types = [
         ("reimbursement", _("Reimbursement")),
         ("bonus_encashment", _("Bonus Point Encashment")),
+        ("travel", _("Travel Expense")),
     ]
 
     if apps.is_installed("leave"):
@@ -2352,6 +2361,13 @@ class Reimbursement(HorillaModel):
         editable=False,
     )
     description = models.TextField(null=True)
+    travel_from = models.CharField(
+        max_length=100, blank=True, null=True, verbose_name=_("Travel From")
+    )
+    travel_to = models.CharField(
+        max_length=100, blank=True, null=True, verbose_name=_("Travel To")
+    )
+    travel_date = models.DateField(blank=True, null=True, verbose_name=_("Travel Date"))
     allowance_id = models.ForeignKey(
         Allowance, on_delete=models.SET_NULL, null=True, editable=False
     )
@@ -2378,6 +2394,8 @@ class Reimbursement(HorillaModel):
         if not has_perm:
             self.employee_id = request.user.employee_get
         if self.type == "reimbursement" and self.attachment is None:
+            raise ValidationError({"attachment": "This field is required"})
+        if self.type == "travel" and self.attachment is None:
             raise ValidationError({"attachment": "This field is required"})
         if self.type == "leave_encashment" and self.leave_type_id is None:
             raise ValidationError({"leave_type_id": "This field is required"})
@@ -2419,20 +2437,12 @@ class Reimbursement(HorillaModel):
                 else:
                     proceed = False
                     if assigned_leave:
-                        available_days = assigned_leave.available_days
-                        carryforward_days = assigned_leave.carryforward_days
-                        if (
-                            available_days >= self.ad_to_encash
-                            and carryforward_days >= self.cfd_to_encash
+                        from leave.services import deduct_encashment_days
+
+                        if deduct_encashment_days(
+                            assigned_leave, self.ad_to_encash, self.cfd_to_encash
                         ):
                             proceed = True
-                            assigned_leave.available_days = (
-                                available_days - self.ad_to_encash
-                            )
-                            assigned_leave.carryforward_days = (
-                                carryforward_days - self.cfd_to_encash
-                            )
-                            assigned_leave.save()
                         else:
                             request = getattr(
                                 horilla_middlewares._thread_locals, "request", None
@@ -2466,16 +2476,19 @@ class Reimbursement(HorillaModel):
             elif self.status == "rejected" and self.allowance_id is not None:
                 cfd_days = self.cfd_to_encash
                 available_days = self.ad_to_encash
-                if self.type == "leave encashment":
+                if self.type == "leave_encashment":
+                    assigned_leave = self.leave_type_id.employee_available_leave.filter(
+                        employee_id=self.employee_id
+                    ).first()
                     if assigned_leave:
-                        assigned_leave.available_days = (
-                            assigned_leave.available_days + available_days
+                        from leave.services import restore_encashment_days
+
+                        restore_encashment_days(
+                            assigned_leave, available_days, cfd_days
                         )
-                        assigned_leave.carryforward_days = (
-                            assigned_leave.carryforward_days + cfd_days
-                        )
-                        assigned_leave.save()
                     self.allowance_id.delete()
+                    self.allowance_id = None
+                    super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
         request = getattr(horilla_middlewares._thread_locals, "request", None)

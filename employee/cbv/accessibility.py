@@ -2,6 +2,8 @@
 Accessiblility
 """
 
+from __future__ import annotations
+
 from functools import wraps
 
 from django.contrib import messages
@@ -35,6 +37,30 @@ def can_access_employee_record(request, employee) -> bool:
         return True
     try:
         return check_manager(request.user.employee_get, employee)
+    except Exception:
+        return False
+
+
+def can_manage_employee_action(request, employee, perm: str | None = None) -> bool:
+    """
+    Approve / validate / reject someone else's record.
+
+    Allowed: superuser, HR, holder of ``perm`` (e.g. attendance.change_attendance),
+    or reporting manager of that employee. Never the subject (except superuser).
+    """
+    if not employee or not request.user.is_authenticated:
+        return False
+    actor = getattr(request.user, "employee_get", None)
+    if not actor:
+        return False
+    if employee == actor and not request.user.is_superuser:
+        return False
+    if request.user.is_superuser or is_hr_user(request):
+        return True
+    if perm and request.user.has_perm(perm):
+        return True
+    try:
+        return check_manager(actor, employee)
     except Exception:
         return False
 

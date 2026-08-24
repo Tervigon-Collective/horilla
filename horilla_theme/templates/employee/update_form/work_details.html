@@ -20,6 +20,7 @@
 
     <div class="bg-white rounded-2xl shadow-card px-6 py-5">
         <div id="workMessage"></div>
+        {% if perms.employee.change_employeeworkinformation or perms.employee.change_employee or request.user.is_superuser %}
         <form
             method="post"
             hx-post="{% url 'employee-view-update' obj_id %}"
@@ -166,6 +167,11 @@
                 </button>
             </div>
         </form>
+        {% else %}
+        <p class="text-sm text-color-600 mb-0">
+            {% trans "Work information is managed by HR. Contact your administrator to update department, role, or reporting details." %}
+        </p>
+        {% endif %}
     </div>
 </div>
 

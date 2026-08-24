@@ -1,0 +1,96 @@
+{% load i18n %}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Increment Letter — {{ employee.get_full_name }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; font-size: 12px; color: #222; margin: 36px; line-height: 1.45; }
+        h1 { font-size: 16px; text-align: center; margin-bottom: 4px; }
+        .muted { color: #666; font-size: 11px; text-align: center; }
+        .meta { margin: 18px 0; }
+        table { width: 100%; border-collapse: collapse; margin: 12px 0 18px; }
+        th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+        th { background: #f5f5f5; }
+        .right { text-align: right; }
+        p { margin: 8px 0; }
+        .sign { margin-top: 48px; }
+    </style>
+</head>
+<body>
+    <h1>{{ company.company|default:"Company" }}</h1>
+    <p class="muted">{{ company.address|default:"" }}</p>
+    <p class="muted">{% trans "Confidential — Compensation revision" %}</p>
+
+    <div class="meta">
+        <p><strong>{% trans "Date" %}:</strong> {{ revision.effective_date }}</p>
+        <p><strong>{% trans "To" %}:</strong> {{ employee.get_full_name }}{% if employee.badge_id %} ({{ employee.badge_id }}){% endif %}</p>
+        {% if work %}
+        <p><strong>{% trans "Department" %}:</strong> {{ work.department_id|default:"—" }}
+           · <strong>{% trans "Designation" %}:</strong> {{ work.job_position_id|default:"—" }}</p>
+        {% endif %}
+    </div>
+
+    <p><strong>{% trans "Subject" %}:</strong> {% trans "Revision of compensation" %}</p>
+    {% if revision.note %}<p>{{ revision.note }}</p>{% endif %}
+
+    <p>
+        {% trans "This is to confirm that your compensation has been revised with effect from" %}
+        <strong>{{ revision.effective_date }}</strong>.
+    </p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>{% trans "Component" %}</th>
+                <th class="right">{% trans "Previous (monthly)" %}</th>
+                <th class="right">{% trans "Revised (monthly)" %}</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>{% trans "Basic" %}</td>
+                <td class="right">{{ revision.previous_basic|floatformat:2 }}</td>
+                <td class="right">{{ revision.new_basic|floatformat:2 }}</td>
+            </tr>
+            <tr>
+                <td>{% trans "HRA" %}</td>
+                <td class="right">—</td>
+                <td class="right">{{ revision.new_hra|floatformat:2 }}</td>
+            </tr>
+            <tr>
+                <td>{% trans "Special Allowance" %}</td>
+                <td class="right">—</td>
+                <td class="right">{{ revision.new_special|floatformat:2 }}</td>
+            </tr>
+            <tr>
+                <td><strong>{% trans "Monthly CTC" %}</strong></td>
+                <td class="right"><strong>{{ revision.previous_monthly_ctc|floatformat:2 }}</strong></td>
+                <td class="right"><strong>{{ revision.new_monthly_ctc|floatformat:2 }}</strong></td>
+            </tr>
+            <tr>
+                <td>{% trans "Annual CTC" %}</td>
+                <td class="right">{{ revision.previous_monthly_ctc|floatformat:2 }} × 12</td>
+                <td class="right">{{ revision.new_monthly_ctc|floatformat:2 }} × 12</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <p>{% trans "Increment" %}: <strong>{{ revision.increment_percent|floatformat:2 }}%</strong></p>
+    {% if revision.arrears_amount %}
+    <p>
+        {% trans "Estimated arrears" %} ({{ revision.arrears_months }} {% trans "months" %}):
+        <strong>{{ revision.arrears_amount|floatformat:2 }}</strong>.
+        {% trans "Payable with the next payroll run after verification." %}
+    </p>
+    {% endif %}
+
+    <p>{% trans "All other terms of your employment remain unchanged." %}</p>
+
+    <div class="sign">
+        <p>{% trans "For" %} {{ company.company|default:"the Company" }}</p>
+        <br><br>
+        <p>________________________<br>{% trans "Authorized signatory" %}</p>
+    </div>
+</body>
+</html>

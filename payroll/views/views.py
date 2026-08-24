@@ -74,6 +74,16 @@ status_choices = {
 }
 
 
+def _payroll_currency_symbol():
+    settings = PayrollSettings.objects.first()
+    return settings.currency_symbol if settings else "₹"
+
+
+def _payslip_head_data(payslip):
+    data = payslip.pay_head_data
+    return data if isinstance(data, dict) else {}
+
+
 @login_required
 @permission_required("payroll.add_contract")
 def contract_create(request):
@@ -500,7 +510,7 @@ def update_payslip_status(request, payslip_id):
         from .component_views import filter_payslip
 
         return redirect(reverse("payslip-list"))
-    data = payslip.pay_head_data
+    data = _payslip_head_data(payslip)
     data["employee"] = payslip.employee_id
     data["payslip"] = payslip
     data["json_data"] = data.copy()
@@ -511,6 +521,7 @@ def update_payslip_status(request, payslip_id):
 
 
 @login_required
+@permission_required("payroll.change_payslip")
 @hx_request_required
 def update_payslip_status_no_id(request):
     """
@@ -545,39 +556,32 @@ def view_payslip_pdf(request, payslip_id):
             employee = user.employee_get
 
             # Taking the company_name of the user
-            info = EmployeeWorkInformation.objects.filter(employee_id=employee)
-            if info.exists():
-                for data in info:
-                    employee_company = data.company_id
-                company_name = Company.objects.filter(company=employee_company)
-                emp_company = company_name.first()
+            info = EmployeeWorkInformation.objects.filter(employee_id=employee).first()
+            emp_company = info.company_id if info else None
+            date_format = (
+                emp_company.date_format
+                if emp_company and emp_company.date_format
+                else "MMM. D, YYYY"
+            )
 
-                # Access the date_format attribute directly
-                date_format = (
-                    emp_company.date_format
-                    if emp_company and emp_company.date_format
-                    else "MMM. D, YYYY"
-                )
-            else:
-                date_format = "MMM. D, YYYY"
-
-            data = payslip.pay_head_data
-            start_date_str = data["start_date"]
-            end_date_str = data["end_date"]
-
-            # Convert the string to a datetime.date object
-            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-            end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+            data = _payslip_head_data(payslip)
+            start_date = payslip.start_date
+            end_date = payslip.end_date
+            start_date_str = data.get("start_date")
+            end_date_str = data.get("end_date")
+            if start_date_str:
+                start_date = datetime.strptime(str(start_date_str), "%Y-%m-%d").date()
+            if end_date_str:
+                end_date = datetime.strptime(str(end_date_str), "%Y-%m-%d").date()
 
             month_start_name = start_date.strftime("%B %d, %Y")
             month_end_name = end_date.strftime("%B %d, %Y")
+            formatted_start_date = start_date.strftime("%b. %d, %Y")
+            formatted_end_date = end_date.strftime("%b. %d, %Y")
             # Formatted date for each format
             for format_name, format_string in pay_settings.HORILLA_DATE_FORMATS.items():
                 if format_name == date_format:
                     formatted_start_date = start_date.strftime(format_string)
-
-            for format_name, format_string in pay_settings.HORILLA_DATE_FORMATS.items():
-                if format_name == date_format:
                     formatted_end_date = end_date.strftime(format_string)
             data["month_start_name"] = month_start_name
             data["month_end_name"] = month_end_name
@@ -589,24 +593,26 @@ def view_payslip_pdf(request, payslip_id):
             data["json_data"]["employee"] = payslip.employee_id.id
             data["json_data"]["payslip"] = payslip.id
             data["instance"] = payslip
-            data["currency"] = PayrollSettings.objects.first().currency_symbol
+            data["currency"] = _payroll_currency_symbol()
             data["all_deductions"] = []
             for deduction_list in [
-                data["basic_pay_deductions"],
-                data["gross_pay_deductions"],
-                data["pretax_deductions"],
-                data["post_tax_deductions"],
-                data["tax_deductions"],
-                data["net_deductions"],
+                data.get("basic_pay_deductions") or [],
+                data.get("gross_pay_deductions") or [],
+                data.get("pretax_deductions") or [],
+                data.get("post_tax_deductions") or [],
+                data.get("tax_deductions") or [],
+                data.get("net_deductions") or [],
             ]:
                 data["all_deductions"].extend(deduction_list)
 
-            data["all_allowances"] = data["allowances"].copy()
+            data["all_allowances"] = (data.get("allowances") or []).copy()
+            data.setdefault("allowances", [])
             equalize_lists_length(data["allowances"], data["all_deductions"])
             data["zipped_data"] = zip(data["allowances"], data["all_deductions"])
             data["host"] = request.get_host()
             data["protocol"] = "https" if request.is_secure() else "http"
             data["company"] = company
+            data["payslip_logo_url"] = "/media/base/company/tervigon-payslip-logo.png"
 
             return render(request, "payroll/payslip/payslip_pdf.html", context=data)
         return redirect(filter_payslip)
@@ -614,7 +620,7 @@ def view_payslip_pdf(request, payslip_id):
 
 
 @login_required
-# @permission_required("payroll.view_payslip")
+@permission_required("payroll.view_payslip")
 def view_created_payslip(request, payslip_id, **kwargs):
     """
     This method is used to view the saved payslips
@@ -624,7 +630,7 @@ def view_created_payslip(request, payslip_id, **kwargs):
 
     if payslip is not None and can_view_payslip_record(request, payslip):
         # the data must be dictionary in the payslip model for the json field
-        data = payslip.pay_head_data
+        data = _payslip_head_data(payslip)
         data["employee"] = payslip.employee_id
         data["payslip"] = payslip
         data["json_data"] = data.copy()
@@ -677,6 +683,19 @@ def contract_info_initial(request):
             {"error": "Missing required parameter: employee_id"}, status=400
         )
     work_info = EmployeeWorkInformation.objects.filter(employee_id=employee_id).first()
+    if not work_info:
+        return JsonResponse(
+            {
+                "department": "",
+                "job_position": "",
+                "job_role": "",
+                "shift": "",
+                "work_type": "",
+                "wage": "",
+                "contract_start_date": "",
+                "contract_end_date": "",
+            }
+        )
     response_data = {
         "department": (
             work_info.department_id.id if work_info.department_id is not None else ""
@@ -730,6 +749,7 @@ def dashboard_employee_chart(request):
     """
     payroll dashboard employee chart data
     """
+    from payroll.cbv.accessibility import scoped_payslip_queryset
 
     date = request.GET.get("period", datetime.now().strftime("%Y-%m"))
     year, month = date.split("-")
@@ -745,7 +765,7 @@ def dashboard_employee_chart(request):
     }
     is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     if is_ajax and request.method == "GET":
-        employee_list = Payslip.objects.filter(
+        employee_list = scoped_payslip_queryset(request).filter(
             Q(start_date__month=month) & Q(start_date__year=year)
         )
         labels = []
@@ -814,11 +834,11 @@ def payslip_details(request):
     """
     payroll dashboard payslip details data
     """
+    from payroll.cbv.accessibility import scoped_payslip_queryset
 
     date = request.GET.get("period", datetime.now().strftime("%Y-%m"))
     year, month = date.split("-")
-    employee_list = []
-    employee_list = Payslip.objects.filter(
+    employee_list = scoped_payslip_queryset(request).filter(
         Q(start_date__month=month) & Q(start_date__year=year)
     )
     total_amount = 0
@@ -837,6 +857,7 @@ def dashboard_department_chart(request):
     """
     payroll dashboard department chart data
     """
+    from payroll.cbv.accessibility import scoped_payslip_queryset
 
     date = request.GET.get("period", datetime.now().strftime("%Y-%m"))
     year, month = date.split("-")
@@ -859,7 +880,7 @@ def dashboard_department_chart(request):
 
     is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     if is_ajax and request.method == "GET":
-        payslips = Payslip.objects.filter(
+        payslips = scoped_payslip_queryset(request).filter(
             start_date__month=month, start_date__year=year
         )
 
@@ -896,6 +917,7 @@ def dashboard_department_chart(request):
     return JsonResponse(response)
 
 
+@login_required
 def contract_ending(request):
     """
     payroll dashboard contract ending details data
@@ -941,6 +963,7 @@ def payslip_export(request):
     - contract_id (int): The ID of the contract to view.
 
     """
+    from payroll.cbv.accessibility import scoped_payslip_queryset
 
     start_date = request.POST.get("start_date")
     end_date = request.POST.get("end_date")
@@ -962,7 +985,7 @@ def payslip_export(request):
     table4_data = []
     table5_data = []
 
-    employee_payslip_list = Payslip.objects.all()
+    employee_payslip_list = scoped_payslip_queryset(request)
 
     if start_date:
         employee_payslip_list = employee_payslip_list.filter(start_date__gte=start_date)
@@ -977,17 +1000,11 @@ def payslip_export(request):
         employee_payslip_list = employee_payslip_list.filter(status=status)
 
     for employ in contributions:
-        payslips = Payslip.objects.filter(employee_id__id=employ)
+        payslips = scoped_payslip_queryset(request).filter(employee_id__id=employ)
         if end_date:
-            payslips = Payslip.objects.filter(
-                employee_id__id=employ, end_date__lte=end_date
-            )
+            payslips = payslips.filter(end_date__lte=end_date)
         if start_date:
-            payslips = Payslip.objects.filter(
-                employee_id__id=employ, start_date__gte=start_date
-            )
-            if end_date:
-                payslips = payslips.filter(end_date__lte=end_date)
+            payslips = payslips.filter(start_date__gte=start_date)
         pay_heads = payslips.values_list("pay_head_data", flat=True)
         # contribution_deductions = []
         deductions = []
@@ -1022,7 +1039,7 @@ def payslip_export(request):
                 employer_contribution = sum(
                     item["employer_contribution_amount"] for item in group
                 )
-            except:
+            except (KeyError, TypeError):
                 employer_contribution = 0
             if employer_contribution > 0:
                 table5_data.append(
@@ -1467,7 +1484,7 @@ def generate_payslip_pdf(template_path, context, html=False):
     try:
         # Render the HTML content from the template and context
         html_content = render_to_string(template_path, context)
-        request = getattr(_thread_locals, "request")
+        request = getattr(_thread_locals, "request", None)
         cookies = None
         if request:
             cookies = request.META.get("HTTP_COOKIE", "")
@@ -1536,30 +1553,27 @@ def payslip_pdf(request, id):
             user = request.user
             employee = user.employee_get
 
-            # Taking the company_name of the user
-            info = EmployeeWorkInformation.objects.filter(employee_id=employee)
-            date_format = "MMM. D, YYYY"
-            if info.exists():
-                for data in info:
-                    employee_company = data.company_id
-                company_name = Company.objects.filter(company=employee_company)
-                emp_company = company_name.first()
+            # Taking the company date format of the user
+            info = EmployeeWorkInformation.objects.filter(employee_id=employee).first()
+            emp_company = info.company_id if info else None
+            date_format = (
+                emp_company.date_format
+                if emp_company and emp_company.date_format
+                else "MMM. D, YYYY"
+            )
 
-                # Access the date_format attribute directly
-                date_format = (
-                    emp_company.date_format
-                    if emp_company and emp_company.date_format
-                    else "MMM. D, YYYY"
-                )
+            data = _payslip_head_data(payslip)
+            start_date = payslip.start_date
+            end_date = payslip.end_date
+            start_date_str = data.get("start_date")
+            end_date_str = data.get("end_date")
+            if start_date_str:
+                start_date = datetime.strptime(str(start_date_str), "%Y-%m-%d").date()
+            if end_date_str:
+                end_date = datetime.strptime(str(end_date_str), "%Y-%m-%d").date()
 
-            data = payslip.pay_head_data
-            start_date_str = data["start_date"]
-            end_date_str = data["end_date"]
-
-            # Convert the string to a datetime.date object
-            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-            end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
-
+            formatted_start_date = start_date.strftime("%b. %d, %Y")
+            formatted_end_date = end_date.strftime("%b. %d, %Y")
             # Format the start and end dates
             for format_name, format_string in pay_settings.HORILLA_DATE_FORMATS.items():
                 if format_name == date_format:
@@ -1576,23 +1590,25 @@ def payslip_pdf(request, id):
                     "employee": payslip.employee_id,
                     "payslip": payslip,
                     "json_data": data.copy(),
-                    "currency": PayrollSettings.objects.first().currency_symbol,
+                    "currency": _payroll_currency_symbol(),
                     "all_deductions": [],
-                    "all_allowances": data["allowances"].copy(),
+                    "all_allowances": (data.get("allowances") or []).copy(),
                     "host": request.get_host(),
                     "protocol": "https" if request.is_secure() else "http",
                     "company": company,
+                    "payslip_logo_url": "/media/base/company/tervigon-payslip-logo.png",
                 }
             )
+            data.setdefault("allowances", [])
 
             # Merge deductions and allowances for display
             for deduction_list in [
-                data["basic_pay_deductions"],
-                data["gross_pay_deductions"],
-                data["pretax_deductions"],
-                data["post_tax_deductions"],
-                data["tax_deductions"],
-                data["net_deductions"],
+                data.get("basic_pay_deductions") or [],
+                data.get("gross_pay_deductions") or [],
+                data.get("pretax_deductions") or [],
+                data.get("post_tax_deductions") or [],
+                data.get("tax_deductions") or [],
+                data.get("net_deductions") or [],
             ]:
                 data["all_deductions"].extend(deduction_list)
 
@@ -1671,13 +1687,17 @@ def payslip_select(request):
 @login_required
 @hx_request_required
 def payslip_select_filter(request):
+    from payroll.cbv.accessibility import scoped_payslip_queryset
+
     page_number = request.GET.get("page")
     filtered = request.GET.get("filter")
     filters = json.loads(filtered) if filtered else {}
     context = {}
 
     if page_number == "all":
-        payslip_filter = PayslipFilter(filters, queryset=Payslip.objects.all())
+        payslip_filter = PayslipFilter(
+            filters, queryset=scoped_payslip_queryset(request)
+        )
 
         # Get the filtered queryset
         filtered_employees = payslip_filter.qs
@@ -1690,6 +1710,22 @@ def payslip_select_filter(request):
     return JsonResponse(context)
 
 
+def _can_access_reimbursement_request(request, payroll_id):
+    """Return (reimbursement, allowed) for comment/view access checks."""
+    payroll = Reimbursement.objects.filter(id=payroll_id).first()
+    if not payroll:
+        return None, False
+    employee = getattr(request.user, "employee_get", None)
+    if employee and payroll.employee_id_id == employee.id:
+        return payroll, True
+    authorized = filter_own_and_subordinate_recordes(
+        request,
+        Reimbursement.objects.filter(pk=payroll_id),
+        "payroll.view_reimbursement",
+    )
+    return payroll, authorized.exists()
+
+
 @login_required
 @hx_request_required
 def create_payrollrequest_comment(request, payroll_id):
@@ -1698,7 +1734,13 @@ def create_payrollrequest_comment(request, payroll_id):
     """
     from payroll.forms.forms import ReimbursementRequestCommentForm
 
-    payroll = Reimbursement.objects.filter(id=payroll_id).first()
+    payroll, allowed = _can_access_reimbursement_request(request, payroll_id)
+    if not payroll:
+        return HorillaRedirect(request, message=_("Reimbursement request not found."))
+    if not allowed:
+        return HorillaRedirect(
+            request, message=_("You don't have permission to view this request.")
+        )
     emp = request.user.employee_get
     form = ReimbursementRequestCommentForm(
         initial={"employee_id": emp.id, "request_id": payroll_id}
@@ -1806,19 +1848,32 @@ def view_payrollrequest_comment(request, payroll_id):
     """
     This method is used to show Reimbursement request comments
     """
+    req, allowed = _can_access_reimbursement_request(request, payroll_id)
+    if not req:
+        return HorillaRedirect(request, message=_("Reimbursement request not found."))
+    if not allowed:
+        return HorillaRedirect(
+            request, message=_("You don't have permission to view this request.")
+        )
+
     comments = ReimbursementrequestComment.objects.filter(
         request_id=payroll_id
     ).order_by("-created_at")
 
-    req = Reimbursement.objects.get(id=payroll_id)
     no_comments = False
     if not comments.exists():
         no_comments = True
 
     if request.FILES:
         files = request.FILES.getlist("files")
-        comment_id = request.GET["comment_id"]
-        comment = ReimbursementrequestComment.objects.get(id=comment_id)
+        comment_id = request.GET.get("comment_id")
+        if not comment_id:
+            return HorillaRedirect(request, message=_("Comment not found."))
+        comment = ReimbursementrequestComment.objects.filter(
+            id=comment_id, request_id=payroll_id
+        ).first()
+        if not comment:
+            return HorillaRedirect(request, message=_("Comment not found."))
         attachments = []
         for file in files:
             file_instance = ReimbursementFile()

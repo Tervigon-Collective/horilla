@@ -45,6 +45,8 @@ def calculate_taxable_amount(**kwargs):
     contract = Contract.objects.filter(
         employee_id=employee, contract_status="active"
     ).first()
+    if not contract:
+        return 0
     filing = contract.filing_status
     if not filing:
         return 0
@@ -52,7 +54,7 @@ def calculate_taxable_amount(**kwargs):
     tax_brackets = TaxBracket.objects.filter(filing_status_id=filing).order_by(
         "min_income"
     )
-    num_days = (end_date - start_date).days + 1
+    num_days = max((end_date - start_date).days + 1, 1)
     calculation_functions = {
         "taxable_gross_pay": calculate_taxable_gross_pay,
         "gross_pay": calculate_gross_pay,

@@ -1,3 +1,22 @@
+function refreshHourAccountList() {
+    var applyFilter = document.getElementById("applyFilter");
+    if (applyFilter) {
+        applyFilter.click();
+        return;
+    }
+    var reload = document.getElementById("ot-tableReload");
+    if (reload) {
+        reload.click();
+        return;
+    }
+    if (typeof htmx !== "undefined" && typeof htmx.ajax === "function") {
+        htmx.ajax("GET", "/attendance/attendance-overtime-search/?year=" + new Date().getFullYear() + "&field=month", {
+            target: "#listContainer",
+            swap: "innerHTML",
+        });
+    }
+}
+
 tickCheckboxes();
 function makeListUnique(list) {
     return Array.from(new Set(list));

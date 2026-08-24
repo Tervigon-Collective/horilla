@@ -6,6 +6,16 @@
         overflow-y:auto
     }
 </style>
+{% if perms.payroll.view_payslip %}
+<p style="margin-bottom:12px;">
+    <a href="{% url 'employee-statutory-profile' emp_id=employee.id %}" class="oh-btn oh-btn--light oh-btn--sm">
+        {% trans "India Statutory Profile" %}
+    </a>
+    <a href="{% url 'form16-view' emp_id=employee.id %}" class="oh-btn oh-btn--light oh-btn--sm">
+        {% trans "Form 16" %}
+    </a>
+</p>
+{% endif %}
 {% if contracts %}
     <div class="oh-sticky-table height-adj">
         <div class="oh-sticky-table__table">

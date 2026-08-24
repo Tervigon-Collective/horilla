@@ -32,6 +32,7 @@ urlpatterns = [
         name="api-department_detail_with_pk",
     ),
     path("worktypes/", views.WorkTypeView.as_view(), name="api-worktype_detail"),
+    path("worktypes", views.WorkTypeView.as_view(), name="api-worktype_detail_noslash"),
     path(
         "worktypes/<int:pk>/",
         views.WorkTypeView.as_view(),
@@ -41,6 +42,11 @@ urlpatterns = [
         "rotating-worktypes/",
         views.RotatingWorkTypeView.as_view(),
         name="api-rotating_worktypes_detail",
+    ),
+    path(
+        "rotating-worktypes",
+        views.RotatingWorkTypeView.as_view(),
+        name="api-rotating_worktypes_detail_noslash",
     ),
     path(
         "rotating-worktypes/<int:pk>/",
@@ -243,14 +249,49 @@ urlpatterns = [
         name="api-rotating-worktype-create-permission-check",
     ),
     path(
+        "shift-request-approve-permission-check/<int:pk>",
+        views.ShiftRequestApprovePermissionCheck.as_view(),
+        name="api-shift-request-approve-permission-check-pk",
+    ),
+    path(
+        "shift-request-approve-permission-check/<int:pk>/",
+        views.ShiftRequestApprovePermissionCheck.as_view(),
+        name="api-shift-request-approve-permission-check-pk-slash",
+    ),
+    path(
         "worktype-request-approve-permission-check",
         views.WorktypeRequestApprovePermissionCheck.as_view(),
         name="api-rotating-shift-create-permission-check",
     ),
     path(
+        "worktype-request-approve-permission-check/<int:pk>",
+        views.WorktypeRequestApprovePermissionCheck.as_view(),
+        name="api-worktype-request-approve-permission-check-pk",
+    ),
+    path(
+        "worktype-request-approve-permission-check/<int:pk>/",
+        views.WorktypeRequestApprovePermissionCheck.as_view(),
+        name="api-worktype-request-approve-permission-check-pk-slash",
+    ),
+    path(
         "employee-tab-permission-check",
         views.EmployeeTabPermissionCheck.as_view(),
         name="api-rotating-shift-create-permission-check",
+    ),
+    path(
+        "pending-approvals/",
+        views.PendingApprovalsAPIView.as_view(),
+        name="api-pending-approvals",
+    ),
+    path(
+        "pending-approvals/inbox/",
+        views.PendingApprovalsInboxAPIView.as_view(),
+        name="api-pending-approvals-inbox",
+    ),
+    path(
+        "pending-approvals/action/",
+        views.PendingApprovalsActionAPIView.as_view(),
+        name="api-pending-approvals-action",
     ),
     path(
         "check-user-level", views.CheckUserLevel.as_view(), name="api-check-user-level"

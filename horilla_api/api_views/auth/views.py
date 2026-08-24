@@ -66,14 +66,18 @@ class LoginAPIView(APIView):
                 employee = user.employee_get
                 face_detection = False
                 face_detection_image = None
-                # Official mobile app only sends GPS when this flag is true.
-                # Radius enforcement still uses GeoFencing.start on clock-in/out.
-                geo_fencing = True
+                # Only require GPS in-app when company geofencing is actually enabled.
+                # Server still records IP-based location when the app posts empty body.
+                geo_fencing = False
                 company_id = None
                 try:
                     face_detection = employee.get_company().face_detection.start
-                except:
+                except Exception:
                     pass
+                try:
+                    geo_fencing = bool(employee.get_company().geo_fencing.start)
+                except Exception:
+                    geo_fencing = False
                 try:
                     face_detection_image = mobile_file_path(
                         employee.face_detection.image

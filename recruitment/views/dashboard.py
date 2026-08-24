@@ -220,11 +220,22 @@ def dashboard_hiring(request):
     """
 
     selected_year = int(request.GET.get("id") or datetime.date.today().year)
+    to_str = request.GET.get("to_date")
+    try:
+        period_end = (
+            datetime.date.fromisoformat(to_str) if to_str else datetime.date.today()
+        )
+    except (ValueError, TypeError):
+        period_end = datetime.date.today()
+    period_end = min(period_end, datetime.date.today())
+    if not request.GET.get("id"):
+        selected_year = period_end.year
 
     hired_candidates = Candidate.objects.filter(
         hired=True,
         joining_date__year=selected_year,
         joining_date__isnull=False,
+        joining_date__lte=period_end,
     )
 
     candidate_count_per_month = [0] * 12

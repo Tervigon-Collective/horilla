@@ -1,0 +1,192 @@
+{% extends "index.html" %}
+{% load i18n horillafilters %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+
+<div class="is-page">
+    <div class="is-page-head">
+        <h1 class="is-page-head__title">{% trans "F&F Settlement" %}</h1>
+        <p class="is-page-head__desc">
+            {{ settlement.employee.get_full_name }}
+            {% if record %} · {{ record.get_status_display }}{% else %} · {% trans "Not saved" %}{% endif %}
+        </p>
+    </div>
+
+    <div class="is-kpi-grid is-kpi-grid--3">
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--blue"><ion-icon name="calendar-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Last working day" %}</div>
+                <div class="is-kpi-card__value is-kpi-card__value--sm">{{ settlement.last_working_day|date:"d M Y"|default:"—" }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--amber"><ion-icon name="time-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Years of service" %}</div>
+                <div class="is-kpi-card__value">{{ settlement.years_of_service }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--purple"><ion-icon name="wallet-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Net payable" %}</div>
+                <div class="is-kpi-card__value">{% if record %}{{ record.net_payable|floatformat:0|currency_symbol_position }}{% else %}{{ settlement.net_payable|floatformat:0|currency_symbol_position }}{% endif %}</div>
+            </div>
+        </div>
+    </div>
+
+    {% if settlement.outstanding_assets %}
+    <div class="is-section" style="margin-bottom:16px;">
+        <div class="is-section__body">
+            <p>{% trans "Outstanding assets to recover" %}: <strong>{{ settlement.outstanding_assets }}</strong>
+                {% if settlement.asset_lines %} — {{ settlement.asset_lines|join:", " }}{% endif %}
+            </p>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if settlement.pending_claims %}
+    <div class="is-section" style="margin-bottom:16px;">
+        <div class="is-section__body">
+            <p>{% trans "Pending reimbursement claims (not auto-added — use Other additions if you will pay them here)" %}:
+                {{ settlement.pending_claims|floatformat:2|currency_symbol_position }}
+            </p>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="is-section">
+        <div class="is-section__header">
+            <span class="is-section__icon"><ion-icon name="document-text-outline"></ion-icon></span>
+            <div>
+                <h3 class="is-section__title">{% trans "Settlement breakdown" %}</h3>
+                <p class="is-section__desc">
+                    {% if locked %}
+                    {% trans "Confirmed figures are locked." %}
+                    {% else %}
+                    {% trans "Live calculation plus recoveries. Save a draft, then confirm and mark paid." %}
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+        <div class="is-section__body">
+            <div class="is-summary-grid">
+                <div class="is-summary-item">
+                    <div class="is-summary-item__label">{% trans "Gratuity" %}</div>
+                    <div class="is-summary-item__value">
+                        {{ settlement.gratuity|floatformat:2|currency_symbol_position }}
+                        {% if not settlement.gratuity_eligible %}
+                        <span class="is-muted" style="font-size:12px;font-weight:400;">({% trans "needs 5+ years" %})</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="is-summary-item">
+                    <div class="is-summary-item__label">{% trans "Unpaid bonus (min 8.33%)" %}</div>
+                    <div class="is-summary-item__value">{{ settlement.bonus_unpaid|default:0|floatformat:2|currency_symbol_position }}</div>
+                </div>
+                <div class="is-summary-item">
+                    <div class="is-summary-item__label">{% trans "Leave encashment" %} ({{ settlement.unused_leave_days }} {% trans "days" %})</div>
+                    <div class="is-summary-item__value">{{ settlement.leave_encashment|floatformat:2|currency_symbol_position }}</div>
+                </div>
+                <div class="is-summary-item">
+                    <div class="is-summary-item__label">{% trans "Notice period pay" %}</div>
+                    <div class="is-summary-item__value">{{ settlement.notice_period_pay|floatformat:2|currency_symbol_position }}</div>
+                </div>
+                <div class="is-summary-item">
+                    <div class="is-summary-item__label">{% trans "Loan / advance recovery" %}</div>
+                    <div class="is-summary-item__value">{% if record %}{{ record.loan_recovery|floatformat:2|currency_symbol_position }}{% else %}{{ settlement.loan_recovery|floatformat:2|currency_symbol_position }}{% endif %}</div>
+                </div>
+                {% if settlement.loan_lines %}
+                <div class="is-summary-item" style="grid-column:1/-1;">
+                    <div class="is-summary-item__label">{% trans "Open loans" %}</div>
+                    <div class="is-summary-item__value" style="font-size:13px;font-weight:500;">
+                        {% for loan in settlement.loan_lines %}
+                        {{ loan.title }} ({{ loan.amount|floatformat:0 }}){% if not forloop.last %}, {% endif %}
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+                <div class="is-summary-item is-summary-item--total">
+                    <div class="is-summary-item__label">{% trans "Net payable" %}</div>
+                    <div class="is-summary-item__value">{% if record %}{{ record.net_payable|floatformat:2|currency_symbol_position }}{% else %}{{ settlement.net_payable|floatformat:2|currency_symbol_position }}{% endif %}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if not locked %}
+    <form method="post" action="{% url 'fnf-settlement-save' pk=offboarding_employee.pk %}" class="is-section">
+        {% csrf_token %}
+        <div class="is-section__head">
+            <h2 class="is-section__title">{% trans "Adjustments" %}</h2>
+        </div>
+        <div class="is-section__body" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+            <div>
+                <label class="is-label">{% trans "Loan recovery" %}</label>
+                <input type="number" step="0.01" min="0" name="loan_recovery" class="oh-input oh-input--sm"
+                       value="{% if record %}{{ record.loan_recovery }}{% else %}{{ settlement.loan_recovery }}{% endif %}">
+            </div>
+            <div>
+                <label class="is-label">{% trans "Other additions" %}</label>
+                <input type="number" step="0.01" min="0" name="other_additions" class="oh-input oh-input--sm"
+                       value="{% if record %}{{ record.other_additions }}{% else %}0{% endif %}">
+            </div>
+            <div>
+                <label class="is-label">{% trans "Other deductions" %}</label>
+                <input type="number" step="0.01" min="0" name="other_deductions" class="oh-input oh-input--sm"
+                       value="{% if record %}{{ record.other_deductions }}{% else %}0{% endif %}">
+            </div>
+            <div style="grid-column:1/-1;">
+                <label class="is-label">{% trans "Remarks" %}</label>
+                <textarea name="remarks" class="oh-input" rows="2">{% if record %}{{ record.remarks|default:"" }}{% endif %}</textarea>
+            </div>
+        </div>
+        <div class="is-actions-row" style="margin-top:12px;">
+            <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Save draft" %}</button>
+            <button type="submit" formaction="{% url 'fnf-settlement-action' pk=offboarding_employee.pk %}" name="action" value="confirm" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Confirm settlement" %}</button>
+        </div>
+    </form>
+    {% elif record %}
+    <div class="is-section">
+        <div class="is-section__body">
+            <p>{% trans "Other additions" %}: {{ record.other_additions|floatformat:2|currency_symbol_position }}
+               · {% trans "Other deductions" %}: {{ record.other_deductions|floatformat:2|currency_symbol_position }}</p>
+            {% if record.remarks %}<p>{{ record.remarks }}</p>{% endif %}
+            {% if record.confirmed_on %}<p>{% trans "Confirmed" %}: {{ record.confirmed_on }}{% if record.confirmed_by %} · {{ record.confirmed_by.get_full_name }}{% endif %}</p>{% endif %}
+            {% if record.paid_on %}<p>{% trans "Paid" %}: {{ record.paid_on }}{% if record.paid_by %} · {{ record.paid_by.get_full_name }}{% endif %}</p>{% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="is-actions-row">
+        <a href="{% url 'fnf-settlement-pdf' pk=offboarding_employee.pk %}" class="oh-btn oh-btn--secondary oh-btn--sm">
+            <ion-icon name="download-outline"></ion-icon>
+            {% trans "Download PDF" %}
+        </a>
+        {% if record.status == "confirmed" %}
+        <form method="post" action="{% url 'fnf-settlement-action' pk=offboarding_employee.pk %}" style="display:inline;gap:8px;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="pay">
+            <input type="date" name="paid_on" class="oh-input oh-input--sm" value="{{ today }}">
+            <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Mark paid" %}</button>
+        </form>
+        <form method="post" action="{% url 'fnf-settlement-action' pk=offboarding_employee.pk %}" style="display:inline;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="reopen">
+            <button type="submit" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Reopen" %}</button>
+        </form>
+        {% endif %}
+        <a href="{% url 'fnf-settlement-list' %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "All F&F" %}</a>
+        <a href="{% url 'fnf-excel-export' %}" class="oh-btn oh-btn--light oh-btn--sm">
+            <ion-icon name="download-outline"></ion-icon>
+            {% trans "Export Excel" %}
+        </a>
+        <a href="{% url 'offboarding-individual-view' pk=offboarding_employee.pk %}" class="oh-btn oh-btn--light oh-btn--sm">
+            <ion-icon name="arrow-back-outline"></ion-icon>
+            {% trans "Back to exit process" %}
+        </a>
+    </div>
+</div>
+{% endblock content %}

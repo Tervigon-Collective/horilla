@@ -216,6 +216,17 @@ class EmployeeListAPIView(APIView):
         return paginator.get_paginated_response(serializer.data)
 
 
+def _can_modify_bank_details(request, employee):
+    """Bank details are confidential — self or HR only."""
+    from employee.cbv.accessibility import is_hr_user
+
+    if not employee:
+        return False
+    if is_hr_user(request):
+        return True
+    return getattr(employee, "employee_user_id", None) == request.user
+
+
 class EmployeeBankDetailsAPIView(APIView):
     """
     Manage employee bank details with CRUD operations.
@@ -275,19 +286,25 @@ class EmployeeBankDetailsAPIView(APIView):
 
         return Response({"error": _("Permission denied")}, status=403)
 
-    @manager_or_owner_permission_required(
-        EmployeeBankDetails, "employee.add_employeebankdetails"
-    )
     def post(self, request):
-        serializer = EmployeeBankDetailsSerializer(data=request.data)
+        employee_id = request.data.get("employee_id")
+        try:
+            employee = Employee.objects.get(pk=employee_id)
+        except (Employee.DoesNotExist, TypeError, ValueError):
+            return Response(
+                {"error": _("Invalid employee")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not _can_modify_bank_details(request, employee):
+            return Response({"error": _("Permission denied")}, status=403)
+        serializer = EmployeeBankDetailsSerializer(
+            data=request.data, context={"request": request}
+        )
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    @manager_or_owner_permission_required(
-        EmployeeBankDetails, "employee.add_employeebankdetails"
-    )
     def put(self, request, pk):
         try:
             bank_detail = EmployeeBankDetails.objects.get(pk=pk)
@@ -296,23 +313,29 @@ class EmployeeBankDetailsAPIView(APIView):
                 {"error": _("Bank details do not exist")},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        if not _can_modify_bank_details(request, bank_detail.employee_id):
+            return Response({"error": _("Permission denied")}, status=403)
 
-        serializer = EmployeeBankDetailsSerializer(bank_detail, data=request.data)
+        serializer = EmployeeBankDetailsSerializer(
+            bank_detail, data=request.data, context={"request": request}
+        )
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    @manager_permission_required("employee.change_employeebankdetails")
     def delete(self, request, pk):
         try:
             bank_detail = EmployeeBankDetails.objects.get(pk=pk)
-            bank_detail.delete()
         except EmployeeBankDetails.DoesNotExist:
             return Response(
                 {"error": _("Bank details do not exist")},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        if not _can_modify_bank_details(request, bank_detail.employee_id):
+            return Response({"error": _("Permission denied")}, status=403)
+        try:
+            bank_detail.delete()
         except Exception as E:
             return Response({"error": str(E)}, status=400)
 

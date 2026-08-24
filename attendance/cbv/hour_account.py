@@ -14,13 +14,14 @@ from django.utils.translation import gettext_lazy as _
 from attendance.filters import AttendanceOverTimeFilter
 from attendance.forms import AttendanceOverTimeExportForm, AttendanceOverTimeForm
 from attendance.models import AttendanceOverTime
-from base.decorators import manager_can_enter
 from base.methods import (
     choosesubordinates,
     filtersubordinates,
     has_export_access,
     is_reportingmanager,
 )
+from employee.models import EmployeeWorkInformation
+from horilla.methods import handle_no_permission
 from horilla_views.cbv_methods import hx_request_required, login_required
 from horilla_views.generic.cbv.views import (
     HorillaDetailedView,
@@ -153,7 +154,9 @@ class HourAccountNav(HorillaNavView):
                 }
             )
 
-        if self.request.user.has_perm("attendance.add_attendanceovertime"):
+        if self.request.user.has_perm(
+            "attendance.add_attendanceovertime"
+        ) or is_reportingmanager(self.request):
             actions.append(
                 {
                     "action": _("Delete"),
@@ -240,9 +243,6 @@ class HourAccountDetailView(HorillaDetailedView):
 
 
 @method_decorator(login_required, name="dispatch")
-@method_decorator(
-    manager_can_enter("attendance.add_attendanceovertime"), name="dispatch"
-)
 class HourAccountFormView(HorillaFormView):
     """
     Form View
@@ -253,6 +253,24 @@ class HourAccountFormView(HorillaFormView):
     # template_name = "cbv/recruitment/forms/create_form.html"
     new_display_title = _("Hours Balance")
 
+    def dispatch(self, request, *args, **kwargs):
+        user = request.user
+        employee = getattr(user, "employee_get", None)
+        is_manager = (
+            EmployeeWorkInformation.objects.filter(
+                reporting_manager_id=employee
+            ).exists()
+            if employee
+            else False
+        )
+        if not (
+            user.has_perm("attendance.add_attendanceovertime")
+            or user.has_perm("attendance.change_attendanceovertime")
+            or is_manager
+        ):
+            return handle_no_permission(request)
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         self.form_class(initial={"employee_id": self.request.user.employee_get})
@@ -260,7 +278,9 @@ class HourAccountFormView(HorillaFormView):
             self.form_class.verbose_name = _("Hour account update")
             self.form_class(instance=self.form.instance)
         self.form = choosesubordinates(
-            self.request, self.form, "attendance.add_attendanceovertime"
+            self.request,
+            self.form,
+            "attendance.change_attendanceovertime",
         )
         context["form"] = self.form
         return context
@@ -282,5 +302,10 @@ class HourAccountFormView(HorillaFormView):
                 message = _("Attendance account added")
             form.save()
             messages.success(self.request, _(message))
-            return self.HttpResponse()
+            return self.HttpResponse(
+                script=(
+                    "if(typeof refreshHourAccountList==='function')"
+                    "{refreshHourAccountList();}"
+                )
+            )
         return super().form_valid(form)

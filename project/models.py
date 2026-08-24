@@ -240,15 +240,25 @@ class Project(HorillaModel):
         if self.end_date is not None:
             if self.end_date < self.start_date:
                 raise ValidationError({"document": "End date is less than start date"})
-            if self.end_date < date.today():
+            if self.end_date < date.today() and self.status not in {
+                "completed",
+                "cancelled",
+            }:
                 self.status = "expired"
 
     def save(self, *args, **kwargs):
         is_new, request = self.pk is None, getattr(
             horilla_middlewares._thread_locals, "request", None
         )
-        if is_new and (cid := request.session.get("selected_company")) and cid != "all":
-            self.company_id = Company.find(cid)
+        if (
+            is_new
+            and request is not None
+            and (cid := request.session.get("selected_company"))
+            and cid != "all"
+        ):
+            company = Company.find(cid)
+            if company is not None:
+                self.company_id = company
         super().save(*args, **kwargs)
         if is_new:
             ProjectStage.objects.create(
@@ -292,6 +302,8 @@ class ProjectStage(HorillaModel):
     def clean(self) -> None:
         if self.is_end_stage:
             project = self.project
+            if project is None:
+                raise ValidationError({"project": _("Project is required for an end stage.")})
             existing_end_stage = project.project_stages.filter(
                 is_end_stage=True
             ).exclude(id=self.id)
@@ -394,7 +406,10 @@ class Task(HorillaModel):
                         )
                     }
                 )
-        if self.end_date is not None and self.end_date < date.today():
+        if self.end_date is not None and self.end_date < date.today() and self.status not in {
+            "completed",
+            "cancelled",
+        }:
             self.status = "expired"
 
     class Meta:
@@ -606,11 +621,17 @@ class TimeSheet(HorillaModel):
             employee = self.employee_id
             if self.task_id:
                 task = self.task_id
+                project = task.project
                 if (
                     not employee in task.task_managers.all()
                     and not employee in task.task_members.all()
-                    and not employee in task.project.managers.all()
-                    and not employee in task.project.members.all()
+                    and not (
+                        project
+                        and (
+                            employee in project.managers.all()
+                            or employee in project.members.all()
+                        )
+                    )
                 ):
                     raise ValidationError(_("Employee not included in this task"))
             elif self.project_id:

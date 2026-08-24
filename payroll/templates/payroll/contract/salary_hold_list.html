@@ -1,0 +1,113 @@
+{% extends "index.html" %}
+{% load i18n horillafilters static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+<div class="is-page">
+    <div class="is-page-head">
+        <h1 class="is-page-head__title">{% trans "Salary hold / release" %}</h1>
+        <p class="is-page-head__desc">{% trans "Held employees are skipped when generating payslips." %}</p>
+    </div>
+
+    <div class="is-section" style="margin-bottom:20px;">
+        <div class="is-section__head">
+            <h2 class="is-section__title">{% trans "Place salary on hold" %}</h2>
+        </div>
+        <div class="is-section__body">
+            <form method="post" action="{% url 'salary-hold-toggle' %}" class="is-form-row" style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="hold">
+                <div>
+                    <label class="is-label">{% trans "Employee" %}</label>
+                    <select name="employee_id" class="oh-select oh-select--sm" required style="min-width:220px;">
+                        <option value="">{% trans "Select…" %}</option>
+                        {% for emp in employees %}
+                        <option value="{{ emp.pk }}">{{ emp.get_full_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div style="flex:1;min-width:200px;">
+                    <label class="is-label">{% trans "Reason" %}</label>
+                    <input type="text" name="reason" class="oh-input oh-input--sm" placeholder="{% trans 'e.g. pending documents' %}">
+                </div>
+                <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Hold salary" %}</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="is-section">
+        <div class="is-section__head">
+            <h2 class="is-section__title">{% trans "Active holds" %}</h2>
+        </div>
+        <div class="is-section__body is-section__body--flush">
+            <div class="is-table-wrap">
+                <table class="is-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Employee" %}</th>
+                            <th>{% trans "Held on" %}</th>
+                            <th>{% trans "Reason" %}</th>
+                            <th>{% trans "Held by" %}</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for hold in active_holds %}
+                        <tr>
+                            <td>{{ hold.employee_id.get_full_name }}</td>
+                            <td>{{ hold.held_on }}</td>
+                            <td>{{ hold.reason|default:"—" }}</td>
+                            <td>{% if hold.held_by %}{{ hold.held_by.get_full_name }}{% else %}—{% endif %}</td>
+                            <td>
+                                <form method="post" action="{% url 'salary-hold-toggle' %}" style="display:inline;">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="release">
+                                    <input type="hidden" name="employee_id" value="{{ hold.employee_id_id }}">
+                                    <button type="submit" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Release" %}</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="5" class="is-muted">{% trans "No employees currently on salary hold." %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    {% if history %}
+    <div class="is-section" style="margin-top:20px;">
+        <div class="is-section__head">
+            <h2 class="is-section__title">{% trans "Recent releases" %}</h2>
+        </div>
+        <div class="is-section__body is-section__body--flush">
+            <div class="is-table-wrap">
+                <table class="is-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Employee" %}</th>
+                            <th>{% trans "Held" %}</th>
+                            <th>{% trans "Released" %}</th>
+                            <th>{% trans "Reason" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for hold in history %}
+                        <tr>
+                            <td>{{ hold.employee_id.get_full_name }}</td>
+                            <td>{{ hold.held_on }}</td>
+                            <td>{{ hold.released_on }}</td>
+                            <td>{{ hold.reason|default:"—" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock content %}

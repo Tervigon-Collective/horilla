@@ -716,20 +716,12 @@ class LeaveRequestApproveAPIView(APIView):
             raise serializers.ValidationError(e)
 
     def leave_approve_calculation(self, leave_request, available_leave):
-        if leave_request.requested_days > available_leave.available_days:
-            leave = leave_request.requested_days - available_leave.available_days
-            leave_request.approved_available_days = available_leave.available_days
-            available_leave.available_days = 0
-            available_leave.carryforward_days = (
-                available_leave.carryforward_days - leave
-            )
+        from leave.services import confirm_leave_approval
 
-            leave_request.approved_carryforward_days = leave
-        else:
-            temp = available_leave.available_days
-            available_leave.available_days = temp - leave_request.requested_days
-            leave_request.approved_available_days = leave_request.requested_days
-        available_leave.save()
+        result = confirm_leave_approval(leave_request, available_leave)
+        if result is not None:
+            result.save()
+        return result
 
     def leave_multiple_approve(self, request, leave_request, available_leave):
         if request.user.is_superuser:
@@ -746,6 +738,8 @@ class LeaveRequestApproveAPIView(APIView):
                 for manager in conditional_requests["managers"]
                 if manager.employee_user_id == request.user
             ]
+            if not approver:
+                return
             condition_approval = LeaveRequestConditionApproval.objects.filter(
                 manager_id=approver[0], leave_request_id=leave_request
             ).first()
@@ -768,19 +762,21 @@ class LeaveRequestApproveAPIView(APIView):
                 leave_request.save()
             else:
                 self.leave_multiple_approve(request, leave_request, available_leave)
-            with contextlib.suppress(Exception):
-                notify.send(
-                    request.user.employee_get,
-                    recipient=leave_request.employee_id.employee_user_id,
-                    verb="Your Leave request has been approved",
-                    verb_ar="تمت الموافقة على طلب الإجازة الخاص بك",
-                    verb_de="Ihr Urlaubsantrag wurde genehmigt",
-                    verb_es="Se ha aprobado su solicitud de permiso",
-                    verb_fr="Votre demande de congé a été approuvée",
-                    icon="people-circle",
-                    redirect=f"/leave/user-request-view?id={leave_request.id}",
-                    api_redirect=f"/api/leave/user-request/{leave_request.id}",
-                )
+            leave_request.refresh_from_db()
+            if leave_request.status == "approved":
+                with contextlib.suppress(Exception):
+                    notify.send(
+                        request.user.employee_get,
+                        recipient=leave_request.employee_id.employee_user_id,
+                        verb="Your Leave request has been approved",
+                        verb_ar="تمت الموافقة على طلب الإجازة الخاص بك",
+                        verb_de="Ihr Urlaubsantrag wurde genehmigt",
+                        verb_es="Se ha aprobado su solicitud de permiso",
+                        verb_fr="Votre demande de congé a été approuvée",
+                        icon="people-circle",
+                        redirect=f"/leave/user-request-view?id={leave_request.id}",
+                        api_redirect=f"/api/leave/user-request/{leave_request.id}",
+                    )
             return Response(status=200)
         return Response(serializer.errors, status=400)
 
@@ -795,22 +791,13 @@ class LeaveRequestRejectAPIView(APIView):
             raise serializers.ValidationError(e)
 
     def leave_calculation(self, leave_request, employee_id):
-        leave_type_id = leave_request.leave_type_id
-        available_leave = AvailableLeave.objects.get(
-            leave_type_id=leave_type_id, employee_id=employee_id
-        )
-        available_leave.available_days += leave_request.approved_available_days
-        available_leave.carryforward_days += leave_request.approved_carryforward_days
-        available_leave.save()
-        leave_request.approved_available_days = 0
-        leave_request.approved_carryforward_days = 0
         leave_request.status = "rejected"
         leave_request.save()
 
     @manager_permission_required("leave.change_leaverequest")
     def put(self, request, pk):
         leave_request = self.get_leave_request(pk)
-        employee_id = request.user.employee_get
+        employee_id = leave_request.employee_id
         if leave_request.status != "rejected":
             self.leave_calculation(leave_request, employee_id)
             with contextlib.suppress(Exception):
@@ -894,16 +881,17 @@ class LeaveAllocationRequestRejectAPIView(APIView):
 
     def reject_calculation(self, leave_allocation_request):
         if leave_allocation_request.status == "approved":
+            from leave.services import reverse_allocation_days
+
             leave_type = leave_allocation_request.leave_type_id
             requested_days = leave_allocation_request.requested_days
             available_leave = AvailableLeave.objects.filter(
                 leave_type_id=leave_type,
                 employee_id=leave_allocation_request.employee_id,
             ).first()
-            available_leave.available_days = max(
-                0, available_leave.available_days - requested_days
-            )
-            available_leave.save()
+            if available_leave:
+                reverse_allocation_days(available_leave, requested_days)
+                available_leave.save()
 
     @manager_permission_required("leave.change_leaveallocationrequest")
     def put(self, request, pk):
@@ -934,19 +922,12 @@ class LeaveRequestBulkApproveDeleteAPIview(APIView):
         raise serializers.ValidationError(_("Nothing to approve"))
 
     def leave_approve_calculation(self, leave_request, available_leave):
-        if leave_request.requested_days > available_leave.available_days:
-            leave = leave_request.requested_days - available_leave.available_days
-            leave_request.approved_available_days = available_leave.available_days
-            available_leave.available_days = 0
-            available_leave.carryforward_days = (
-                available_leave.carryforward_days - leave
-            )
-            leave_request.approved_carryforward_days = leave
-        else:
-            temp = available_leave.available_days
-            available_leave.available_days = temp - leave_request.requested_days
-            leave_request.approved_available_days = leave_request.requested_days
-        available_leave.save()
+        from leave.services import confirm_leave_approval
+
+        result = confirm_leave_approval(leave_request, available_leave)
+        if result is not None:
+            result.save()
+        return result
 
     @manager_permission_required("leave.change_leaverequest")
     def put(self, request):
@@ -954,9 +935,11 @@ class LeaveRequestBulkApproveDeleteAPIview(APIView):
         for leave_request in leave_requests:
             employee_id = leave_request.employee_id
             leave_type_id = leave_request.leave_type_id
-            available_leave = AvailableLeave.objects.get(
+            available_leave = AvailableLeave.objects.filter(
                 leave_type_id=leave_type_id, employee_id=employee_id
-            )
+            ).first()
+            if not available_leave:
+                continue
             total_available_leave = (
                 available_leave.available_days + available_leave.carryforward_days
             )

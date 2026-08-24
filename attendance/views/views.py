@@ -104,12 +104,14 @@ from base.forms import AttendanceAllowedIPForm, TrackLateComeEarlyOutForm
 from base.methods import (
     choosesubordinates,
     closest_numbers,
+    can_manage_subordinate,
     eval_validate,
     export_data,
     filtersubordinates,
     filtersubordinatesemployeemodel,
     get_key_instances,
     get_pagination,
+    get_subordinate_employee_ids,
 )
 from base.models import (
     AttendanceAllowedIP,
@@ -127,6 +129,7 @@ from horilla.decorators import (
     manager_can_enter,
     permission_required,
 )
+from horilla.methods import handle_no_permission
 from notifications.signals import notify
 
 
@@ -144,7 +147,7 @@ def attendance_validate(attendance):
     if conditions.exists():
         condition_for_at_work = strtime_seconds(conditions[0].validation_at_work)
     at_work = strtime_seconds(attendance.attendance_worked_hour)
-    return condition_for_at_work >= at_work
+    return at_work >= condition_for_at_work
 
 
 @login_required
@@ -282,17 +285,20 @@ def attendance_import(request):
         HttpResponse or redirect: An HTTP response with an Excel file containing error details
         if validation fails, or a redirect to the attendance view if successful.
     """
+    attendance_dicts = []
+    attendance_import = []
+    path_info = None
     if request.method == "POST":
-        file = request.FILES["attendance_import"]
-        file_extension = file.name.split(".")[-1].lower()
-        data_frame = (
-            pd.read_csv(file) if file_extension == "csv" else pd.read_excel(file)
-        )
-        attendance_dicts = data_frame.to_dict("records")
-        attendance_import = process_attendance_data(attendance_dicts)
-        path_info = None
-        if attendance_import:
-            path_info = handle_attendance_errors(attendance_import)
+        file = request.FILES.get("attendance_import")
+        if file:
+            file_extension = file.name.split(".")[-1].lower()
+            data_frame = (
+                pd.read_csv(file) if file_extension == "csv" else pd.read_excel(file)
+            )
+            attendance_dicts = data_frame.to_dict("records")
+            attendance_import = process_attendance_data(attendance_dicts)
+            if attendance_import:
+                path_info = handle_attendance_errors(attendance_import)
 
     created_attendance_count = len(attendance_dicts) - len(attendance_import)
     context = {
@@ -458,6 +464,7 @@ def attendance_update(request, obj_id):
     )
 
 
+@login_required
 def attendance_view_redirect(request):
     """
     Full page redirect for normal navigation; for HTMX requests (attendance-view),
@@ -473,7 +480,6 @@ def attendance_view_redirect(request):
 
 
 @login_required
-@permission_required("attendance.delete_attendance")
 @require_http_methods(["POST"])
 def attendance_delete(request, obj_id):
     """
@@ -483,22 +489,10 @@ def attendance_delete(request, obj_id):
     """
     try:
         attendance = Attendance.objects.get(id=obj_id)
-        month = attendance.attendance_date
-        month = month.strftime("%B").lower()
-        overtime = attendance.employee_id.employee_overtime.filter(month=month).last()
-        if overtime is not None:
-            if attendance.attendance_overtime_approve:
-                # Subtract overtime of this attendance
-                total_overtime = strtime_seconds(overtime.overtime)
-                attendance_overtime_seconds = strtime_seconds(
-                    attendance.attendance_overtime
-                )
-                if total_overtime > attendance_overtime_seconds:
-                    total_overtime = total_overtime - attendance_overtime_seconds
-                else:
-                    total_overtime = attendance_overtime_seconds - total_overtime
-                overtime.overtime = format_time(total_overtime)
-                overtime.save()
+        if not can_manage_subordinate(
+            request, attendance.employee_id, "attendance.delete_attendance"
+        ):
+            return handle_no_permission(request)
         try:
             attendance.delete()
             messages.success(request, _("Attendance deleted."))
@@ -521,7 +515,6 @@ def attendance_delete(request, obj_id):
 
 
 @login_required
-@permission_required("attendance.delete_attendance")
 @require_http_methods(["POST"])
 def attendance_bulk_delete(request):
     """
@@ -531,27 +524,17 @@ def attendance_bulk_delete(request):
     error_messages = []
     ids = request.POST.getlist("ids", "[]")
     attendances = Attendance.objects.filter(id__in=ids)
-    employee_ids = attendances.values_list("employee_id", flat=True)
-    overtimes = AttendanceOverTime.objects.filter(
-        employee_id__in=employee_ids
-    ).in_bulk()
+    if not request.user.has_perm("attendance.delete_attendance"):
+        sub_ids = get_subordinate_employee_ids(request)
+        if not sub_ids:
+            return handle_no_permission(request)
+        attendances = attendances.filter(employee_id__in=sub_ids)
+        if not attendances.exists():
+            return handle_no_permission(request)
 
     with transaction.atomic():
         for attendance in attendances:
             try:
-                month = attendance.attendance_date.strftime("%B").lower()
-                overtime = overtimes.get(attendance.employee_id.id)
-
-                if overtime and attendance.attendance_overtime_approve:
-                    # Calculate the new overtime
-                    total_overtime = strtime_seconds(overtime.overtime)
-                    attendance_overtime_seconds = strtime_seconds(
-                        attendance.attendance_overtime
-                    )
-                    total_overtime = abs(total_overtime - attendance_overtime_seconds)
-                    overtime.overtime = format_time(total_overtime)
-                    overtime.save()
-
                 attendance.delete()
                 success_count += 1
 
@@ -715,7 +698,6 @@ def attendance_overtime_update(request, obj_id):
 
 
 @login_required
-@permission_required("attendance.delete_attendanceovertime")
 @require_http_methods(["POST"])
 def attendance_overtime_delete(request, obj_id):
     """
@@ -727,6 +709,10 @@ def attendance_overtime_delete(request, obj_id):
     hx_target = request.META.get("HTTP_HX_TARGET", None)
     try:
         attendance = AttendanceOverTime.objects.get(id=obj_id)
+        if not can_manage_subordinate(
+            request, attendance.employee_id, "attendance.delete_attendanceovertime"
+        ):
+            return handle_no_permission(request)
         employee_id = attendance.employee_id.id
         attendance.delete()
         if hx_target == "ot-table":
@@ -758,15 +744,21 @@ def attendance_overtime_delete(request, obj_id):
 
 
 @login_required
-@permission_required("attendance.delete_attendanceovertime")
 def attendance_account_bulk_delete(request):
     """
     This method is used to bulk delete for Payslip
     """
     ids = json.loads(request.POST.get("ids", "[]"))
-    for id in ids:
+    hour_accounts = AttendanceOverTime.objects.filter(id__in=ids)
+    if not request.user.has_perm("attendance.delete_attendanceovertime"):
+        sub_ids = get_subordinate_employee_ids(request)
+        if not sub_ids:
+            return handle_no_permission(request)
+        hour_accounts = hour_accounts.filter(employee_id__in=sub_ids)
+        if not hour_accounts.exists():
+            return handle_no_permission(request)
+    for hour_account in hour_accounts:
         try:
-            hour_account = AttendanceOverTime.objects.get(id=id)
             hour_account.delete()
             messages.success(
                 request,
@@ -1092,8 +1084,18 @@ def handle_activity_import_error(error_data):
 @permission_required("attendance.add_attendanceactivity")
 def attendance_activity_import(request):
     if request.method == "POST":
-        file = request.FILES["activity_import"]
-        data_frame = pd.read_excel(file)
+        file = request.FILES.get("activity_import")
+        if not file:
+            messages.error(request, _("Please select a file to import."))
+            return render(request, "attendance/attendance_activity/import_activity.html")
+        file_extension = file.name.split(".")[-1].lower()
+        try:
+            data_frame = (
+                pd.read_csv(file) if file_extension == "csv" else pd.read_excel(file)
+            )
+        except Exception as e:
+            messages.error(request, _("Error reading file: ") + str(e))
+            return render(request, "attendance/attendance_activity/import_activity.html")
         activity_dicts = data_frame.to_dict("records")
         if activity_dicts:
             import_error_dicts = process_activity_dicts(activity_dicts)
@@ -1356,6 +1358,8 @@ def validate_bulk_attendance(request):
     """
     This method is used to validate a bulk of attendances.
     """
+    from employee.cbv.accessibility import can_manage_employee_action
+
     ids = json.loads(request.POST["ids"])
     validate_req_count = 0
     success_messages = []
@@ -1365,7 +1369,9 @@ def validate_bulk_attendance(request):
     for obj_id in ids:
         try:
             attendance = Attendance.objects.get(id=obj_id)
-            if attendance.employee_id.id != request.user.employee_get.id:
+            if attendance.employee_id.id != request.user.employee_get.id and can_manage_employee_action(
+                request, attendance.employee_id, "attendance.change_attendance"
+            ):
                 filtered_ids.append(obj_id)
         except Attendance.DoesNotExist:
             error_messages.append(_("Attendance not found"))
@@ -1388,16 +1394,7 @@ def validate_bulk_attendance(request):
                 continue
 
             attendance.attendance_validated = True
-            # Recalculate worked hours from attendance activities before validation
-            # to ensure Hours Account reflects actual worked time.
-            # Fixes: https://github.com/horilla/horilla-hr/issues/1055
-            if (
-                not attendance.attendance_worked_hour
-                or attendance.attendance_worked_hour == "00:00"
-            ):
-                at_work_seconds = attendance.get_at_work_from_activities()
-                if at_work_seconds > 0:
-                    attendance.attendance_worked_hour = format_time(at_work_seconds)
+            attendance.sync_worked_hours_from_clock_times()
             attendance.save()
             validate_req_count += 1
 
@@ -1442,22 +1439,20 @@ def validate_this_attendance(request, obj_id):
         id  : attendance id
     """
     try:
+        from employee.cbv.accessibility import can_manage_employee_action
+
         attendance = Attendance.objects.get(id=obj_id)
+        if not can_manage_employee_action(
+            request, attendance.employee_id, "attendance.change_attendance"
+        ):
+            messages.error(request, _("You don't have permission"))
+            return attendance_view_redirect(request)
         if not request.user.is_superuser:
             if attendance.employee_id.id == request.user.employee_get.id:
                 messages.error(request, _("You cannot validate your own attendance."))
                 return attendance_view_redirect(request)
         attendance.attendance_validated = True
-        # Recalculate worked hours from attendance activities before validation
-        # to ensure Hours Account reflects actual worked time.
-        # Fixes: https://github.com/horilla/horilla-hr/issues/1055
-        if (
-            not attendance.attendance_worked_hour
-            or attendance.attendance_worked_hour == "00:00"
-        ):
-            at_work_seconds = attendance.get_at_work_from_activities()
-            if at_work_seconds > 0:
-                attendance.attendance_worked_hour = format_time(at_work_seconds)
+        attendance.sync_worked_hours_from_clock_times()
         attendance.save()
         urlencode = request.GET.urlencode()
         modified_url = f"/attendance/attendance-view/?{urlencode}"
@@ -1629,7 +1624,7 @@ def approve_bulk_overtime(request):
 
 @login_required
 @hx_request_required
-# @manager_can_enter("attendance.change_attendance")
+@manager_can_enter("attendance.change_attendance")
 def attendance_add_to_batch(request):
     """
     This method is used to add attendance to a batch
@@ -1758,41 +1753,6 @@ def update_fields_based_shift(request):
             else AttendanceForm(initial=initial_data)
         )
     )
-    return render(
-        request,
-        "attendance/attendance/update_hx_form.html",
-        {"request": request, "form": form},
-    )
-
-
-@login_required
-@hx_request_required
-def update_worked_hour_field(request):
-    """
-    Update the worked hour field based on clock-in and clock-out times.
-
-    This view function calculates the total worked hours for an employee
-    by parsing the clock-in and clock-out dates and times from the request
-    parameters. It computes the duration between the two times and formats
-    the result as a string in the "HH:MM" format. The computed worked hours
-    are then initialized in an AttendanceForm, which is rendered in the
-    specified HTML template.
-    """
-    clock_in = parse_datetime(
-        request.GET.get("attendance_clock_in_date"),
-        request.GET.get("attendance_clock_in"),
-    )
-    clock_out = parse_datetime(
-        request.GET.get("attendance_clock_out_date"),
-        request.GET.get("attendance_clock_out"),
-    )
-
-    total_seconds = (
-        (clock_out - clock_in).total_seconds() if clock_in and clock_out else -1
-    )
-    hours, minutes = divmod(max(total_seconds, 0), 3600)
-    worked_hours_str = f"{int(hours):02}:{int(minutes // 60):02}"
-    form = AttendanceForm(initial={"attendance_worked_hour": worked_hours_str})
     return render(
         request,
         "attendance/attendance/update_hx_form.html",
@@ -2244,7 +2204,7 @@ def delete_grace_time(request, grace_id):
 
 @login_required
 @hx_request_required
-@permission_required("attendance.update_gracetime")
+@permission_required("attendance.change_gracetime")
 def update_isactive_gracetime(request):
     """
     ajax function to update is active field in GraceTime.
@@ -2279,7 +2239,7 @@ def update_isactive_gracetime(request):
 
 @login_required
 @hx_request_required
-@permission_required("attendance.update_gracetime")
+@permission_required("attendance.change_gracetime")
 def update_gracetime_clock_in_clock_out(request):
     """
     ajax function to update is active field in grace time.
@@ -2566,8 +2526,6 @@ def work_records_change_month(request):
         request, employee_filter_form.qs, "attendance.view_attendance"
     )
 
-    all_employees = employees
-
     paginator_emp = Paginator(employees, 20)
     page_emp = paginator_emp.get_page(request.GET.get("page"))
 
@@ -2577,7 +2535,10 @@ def work_records_change_month(request):
     except ValueError:
         year, month = date.today().year, date.today().month
 
-    employees = [request.user.employee_get] + list(page_emp.object_list)
+    visible_employees = list(page_emp.object_list)
+    current_employee = getattr(request.user, "employee_get", None)
+    if current_employee and current_employee not in visible_employees:
+        visible_employees = [current_employee] + visible_employees
 
     start_date_str = request.GET.get("start_date")
     end_date_str = request.GET.get("end_date")
@@ -2630,24 +2591,44 @@ def work_records_change_month(request):
             if day
         ]
 
+    employee_ids = [employee.pk for employee in visible_employees if employee]
     work_records = WorkRecords.objects.filter(
-        date__in=month_dates, employee_id__in=page_emp.object_list
+        date__in=month_dates, employee_id__in=employee_ids
     ).select_related("employee_id", "shift_id", "attendance_id")
 
-    work_records_dict = {(wr.employee_id.id, wr.date): wr for wr in work_records}
+    work_records_dict = {(wr.employee_id_id, wr.date): wr for wr in work_records}
 
-    work_record_table = {
-        employee: [
-            work_records_dict.get((employee.id, current_date))
-            for current_date in month_dates
-        ]
-        for employee in all_employees
-    }
+    table_rows = [
+        (
+            employee,
+            [
+                work_records_dict.get((employee.id, current_date))
+                for current_date in month_dates
+            ],
+        )
+        for employee in visible_employees
+    ]
 
-    paginated_table = list(work_record_table.items())
+    class _WorkRecordPage:
+        """Expose paginated employee rows using the employee paginator metadata."""
 
-    paginator = Paginator(paginated_table, 20)
-    page = paginator.get_page(request.GET.get("page"))
+        def __init__(self, rows, page_obj):
+            self.object_list = rows
+            self.number = page_obj.number
+            self.paginator = page_obj.paginator
+            self.has_previous = page_obj.has_previous()
+            self.has_next = page_obj.has_next()
+            self.previous_page_number = (
+                page_obj.previous_page_number() if page_obj.has_previous() else 1
+            )
+            self.next_page_number = (
+                page_obj.next_page_number() if page_obj.has_next() else page_obj.number
+            )
+
+        def __iter__(self):
+            return iter(self.object_list)
+
+    page = _WorkRecordPage(table_rows, page_emp)
 
     specific_employee_holidays = {}
     specific_dates = set()

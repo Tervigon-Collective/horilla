@@ -830,17 +830,9 @@ class KanbanRequiredTaskCheck(View):
         if current_stage.sequence is None or target_stage.sequence is None:
             return JsonResponse({"blocked": False})
 
-        pending_tasks = candidate_stage.pending_required_tasks(current_stage)
-        if pending_tasks.exists():
-            task_titles = ", ".join(pending_tasks.values_list("task_title", flat=True))
-            message = str(
-                _(
-                    "Complete the following required task(s) before "
-                    "moving to the next stage: %(tasks)s"
-                )
-                % {"tasks": task_titles}
-            )
-            return JsonResponse({"blocked": True, "message": message})
+        blocked = candidate_stage.forward_blocked_message(target_stage)
+        if blocked:
+            return JsonResponse({"blocked": True, "message": str(blocked)})
 
         return JsonResponse({"blocked": False})
 

@@ -1,0 +1,102 @@
+{% load i18n static basefilters %}
+{% if missing_records %}
+    <div class="oh-sticky-table h-100">
+        <div class="oh-sticky-table__table oh-table--sortable">
+            <div class="oh-sticky-table__thead">
+                <div class="oh-sticky-table__tr">
+                    <div class="oh-sticky-table__th">
+                        {% trans "Employee" %}
+                    </div>
+                    <div class="oh-sticky-table__th">
+                        {% trans "Date" %}
+                    </div>
+                    <div class="oh-sticky-table__th">
+                        {% trans "Issue" %}
+                    </div>
+                    {% if not main_dashboard %}
+                        <div class="oh-sticky-table__th">{% trans "Check-In" %}</div>
+                        <div class="oh-sticky-table__th">{% trans "Check-Out" %}</div>
+                        <div class="oh-sticky-table__th">{% trans "Shift" %}</div>
+                    {% endif %}
+                    <div class="oh-sticky-table__th oh-sticky-table__right">{% trans "Actions" %}</div>
+                </div>
+            </div>
+            {% for record in missing_records %}
+                <div class="oh-sticky-table__tbody">
+                    <div class="oh-sticky-table__tr" draggable="false">
+                        <div class="oh-sticky-table__sd">
+                            <div class="oh-profile oh-profile--md">
+                                <div class="oh-profile__avatar mr-1">
+                                    <img
+                                        src="{{ record.employee_id.get_avatar }}"
+                                        class="oh-profile__image"
+                                        alt="{{ record.employee_id }}"
+                                    >
+                                </div>
+                                <span class="oh-profile__name oh-text--dark">{{ record.employee_id }}</span>
+                            </div>
+                        </div>
+                        <div class="oh-sticky-table__td dateformat_changer">{{ record.date }}</div>
+                        <div class="oh-sticky-table__td">
+                            <span class="oh-badge oh-badge--danger">{{ record.message }}</span>
+                        </div>
+                        {% if not main_dashboard %}
+                            <div class="oh-sticky-table__td timeformat_changer">
+                                {% if record.attendance_id %}{{ record.attendance_id.attendance_clock_in }}{% else %}—{% endif %}
+                            </div>
+                            <div class="oh-sticky-table__td timeformat_changer">
+                                {% if record.attendance_id %}{{ record.attendance_id.attendance_clock_out }}{% else %}—{% endif %}
+                            </div>
+                            <div class="oh-sticky-table__td">{{ record.shift_id }}</div>
+                        {% endif %}
+                        <div class="oh-sticky-table__td oh-sticky-table__right">
+                            <a
+                                href="{% url 'attendance-view' %}?employee_id={{ record.employee_id.id }}&attendance_date={{ record.date|date:'Y-m-d' }}"
+                                class="oh-btn oh-btn--danger oh-btn--sm"
+                                onclick="event.stopPropagation()"
+                            >
+                                {% trans "Fix" %}
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+{% else %}
+    <div class="oh-empty h-100">
+        <img src="{% static 'images/ui/search.svg' %}" class="oh-404__image" alt="{% trans 'Page not found. 404.' %}">
+        <h1 class="oh-empty__title">{% trans "No Records found." %}</h1>
+        <p class="oh-empty__subtitle">{% trans "No missing punch records in the last 30 days." %}</p>
+    </div>
+{% endif %}
+{% if missing_records.has_previous or missing_records.has_next %}
+    <div class="float-end mt-2">
+        {% if missing_records.has_previous %}
+            <span
+                class="oh-card-dashboard__title"
+                style="cursor: pointer"
+                hx-target="#missingPunchCardBody"
+                hx-get="{% url 'dashboard-missing-punches' %}?page={{ missing_records.previous_page_number }}"
+                hx-trigger="click delay:0.3s"
+            >
+                <ion-icon name="caret-back-outline" role="img" class="md hydrated"></ion-icon>
+            </span>
+        {% endif %}
+        {% if missing_records.has_next %}
+            <span
+                class="oh-card-dashboard__title ms-2 float-end"
+                style="cursor: pointer"
+                hx-target="#missingPunchCardBody"
+                hx-get="{% url 'dashboard-missing-punches' %}?page={{ missing_records.next_page_number }}"
+                hx-trigger="click delay:0.3s"
+            >
+                <ion-icon name="caret-forward-outline" role="img" class="md hydrated"></ion-icon>
+            </span>
+        {% endif %}
+        <span class="oh-pagination__page mt-1 fw-bold">
+            {% trans "Page" %} {{ missing_records.number }} {% trans "of" %}
+            {{ missing_records.paginator.num_pages }}
+        </span>
+    </div>
+{% endif %}

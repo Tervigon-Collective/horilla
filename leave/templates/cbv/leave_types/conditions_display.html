@@ -9,3 +9,15 @@
 {% else %}
   <span class="text-muted">{% trans "None" %}</span>
 {% endif %}
+{% if instance.accrual_rules.exists %}
+  <div style="margin-top:4px;">
+  {% for rule in instance.accrual_rules.all %}
+    <span class="oh-badge oh-badge--secondary"
+          style="font-size:0.72rem; margin:1px 2px; display:inline-block;">
+      {{ rule.annual_days }}d
+      {% if rule.job_grade %}· {{ rule.job_grade }}{% endif %}
+      {% if rule.job_position_id %}· {{ rule.job_position_id }}{% endif %}
+    </span>
+  {% endfor %}
+  </div>
+{% endif %}

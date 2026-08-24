@@ -859,7 +859,7 @@ def email_send(request):
 
         # Create / reset portal
         token = secrets.token_hex(15)
-        portal, _ = OnboardingPortal.objects.get_or_create(candidate_id=candidate)
+        portal, _created = OnboardingPortal.objects.get_or_create(candidate_id=candidate)
         portal.token = token
         portal.used = False
         portal.count = 0
@@ -1327,6 +1327,9 @@ def employee_creation(request, token):
                     "email": candidate.email,
                 },
             )
+            from employee.methods.user_bootstrap import bootstrap_employee_access
+
+            bootstrap_employee_access(employee_personal_info, skip_if_assigned=True)
 
             Document.objects.bulk_create(
                 [
@@ -1590,6 +1593,27 @@ def candidate_stage_update(request, candidate_id, recruitment_id):
     stage = OnboardingStage.objects.get(id=stage_id)
     candidate = Candidate.objects.get(id=candidate_id)
     candidate_stage = CandidateStage.objects.get(candidate_id=candidate)
+    blocked = candidate_stage.forward_blocked_message(stage)
+    is_ajax = request.POST.get("is_ajax") or request.GET.get("is_ajax")
+    if blocked:
+        if is_ajax:
+            return JsonResponse({"type": "danger", "message": str(blocked)})
+        messages.error(request, blocked)
+        groups = onboarding_query_grouper(request, recruitments)
+        onboarding_stages = OnboardingStage.objects.all()
+        choices = CandidateTask.choice
+        for item in groups:
+            setattr(item["recruitment"], "stages", item["stages"])
+            return render(
+                request,
+                "onboarding/onboarding_table.html",
+                {
+                    "recruitment": groups[0]["recruitment"],
+                    "onboarding_stages": onboarding_stages,
+                    "choices": choices,
+                },
+            )
+        return JsonResponse({"type": "danger", "message": str(blocked)})
     candidate_stage.onboarding_stage_id = stage
     candidate_stage.save()
     onboarding_stages = OnboardingStage.objects.all()
@@ -1640,15 +1664,31 @@ def candidate_stage_bulk_update(request):
     recruitments = Recruitment.objects.filter(id=int(recrutment_id))
 
     choices = CandidateTask.choice
-
-    CandidateStage.objects.filter(candidate_id__id__in=candidate_id_list).update(
-        onboarding_stage_id=stage
-    )
-    type = "info"
-    message = "No candidates selected"
-    if candidate_id_list:
-        type = "success"
-        message = "Candidate stage updated successfully"
+    target_stage = OnboardingStage.objects.filter(id=stage).first()
+    candidate_stages = CandidateStage.objects.filter(
+        candidate_id__id__in=candidate_id_list
+    ).select_related("onboarding_stage_id", "candidate_id")
+    blocked_messages = []
+    if target_stage:
+        for candidate_stage in candidate_stages:
+            blocked = candidate_stage.forward_blocked_message(target_stage)
+            if blocked:
+                blocked_messages.append(f"{candidate_stage.candidate_id}: {blocked}")
+    if blocked_messages:
+        type = "danger"
+        message = "; ".join(blocked_messages)
+    elif not target_stage:
+        type = "danger"
+        message = "Stage not found"
+    else:
+        for candidate_stage in candidate_stages:
+            candidate_stage.onboarding_stage_id = target_stage
+            candidate_stage.save()
+        type = "info"
+        message = "No candidates selected"
+        if candidate_id_list:
+            type = "success"
+            message = "Candidate stage updated successfully"
     groups = onboarding_query_grouper(request, recruitments)
     for item in groups:
         setattr(item["recruitment"], "stages", item["stages"])
@@ -1877,6 +1917,7 @@ def stage_sequence_update(request):
 @login_required
 @require_http_methods(["POST"])
 @hx_request_required
+@recruitment_manager_can_enter("onboarding.change_onboardingstage")
 def stage_name_update(request, stage_id):
     """
     This method is used to update the name of recruitment stage

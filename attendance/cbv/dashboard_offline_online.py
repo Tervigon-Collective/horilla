@@ -12,6 +12,7 @@ from django.utils.translation import gettext_lazy as _
 from base.decorators import manager_can_enter
 from employee.filters import EmployeeFilter
 from employee.models import Employee
+from employee.cbv.accessibility import accessible_employees_queryset
 from horilla_views.cbv_methods import login_required
 from horilla_views.generic.cbv.views import HorillaListView
 
@@ -35,14 +36,14 @@ class DashboardOfflineEmployees(HorillaListView):
         self.search_url = reverse("not-in-yet")
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        super().get_queryset()
         queryset = (
             EmployeeFilter({"not_in_yet": date.today()})
             .qs.exclude(employee_work_info__isnull=True)
             .filter(is_active=True)
         )
-
-        return queryset
+        self.queryset = accessible_employees_queryset(self.request, queryset)
+        return self.queryset
 
     columns = [
         (_("Employee"), "get_full_name", "get_avatar"),
@@ -78,14 +79,14 @@ class DashboardOnlineEmployees(HorillaListView):
         self.search_url = reverse("not-out-yet")
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        super().get_queryset()
         queryset = (
             EmployeeFilter({"not_out_yet": date.today()})
             .qs.exclude(employee_work_info__isnull=True)
             .filter(is_active=True)
         )
-
-        return queryset
+        self.queryset = accessible_employees_queryset(self.request, queryset)
+        return self.queryset
 
     columns = [
         (_("Employee"), "get_full_name", "get_avatar"),

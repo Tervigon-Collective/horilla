@@ -7,6 +7,7 @@ from django.dispatch import receiver
 from employee.models import EmployeeWorkInformation
 from payroll.methods.deductions import create_deductions
 from payroll.models.models import Allowance, Contract, Deduction, LoanAccount, Payslip
+from payroll.models.salary_revision import SalaryHold, SalaryRevision  # noqa: F401
 
 
 @receiver(post_save, sender=EmployeeWorkInformation)

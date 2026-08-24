@@ -5,13 +5,44 @@ from datetime import datetime, timedelta
 from django.apps import apps
 from django.db.models.signals import post_migrate, post_save, pre_delete
 from django.dispatch import receiver
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from attendance.methods.utils import strtime_seconds
-from attendance.models import Attendance, AttendanceGeneralSetting, WorkRecords
+from attendance.models import Attendance, AttendanceActivity, AttendanceGeneralSetting, WorkRecords
 from base.models import Company, PenaltyAccounts
 from employee.models import Employee
 from horilla.methods import get_horilla_model_class
+
+
+def _should_flag_missing_punch_out(attendance):
+    """True when an open attendance should display as missing punch out."""
+    if attendance.missing_punch_out:
+        return True
+    if attendance.attendance_date < timezone.localdate():
+        return True
+    try:
+        shift_schedule = attendance.employee_id.get_shift_schedule()
+        if shift_schedule and shift_schedule.end_time:
+            now = timezone.localtime()
+            end_date = attendance.attendance_date
+            if (
+                shift_schedule.is_night_shift
+                and shift_schedule.start_time
+                and shift_schedule.end_time
+                and shift_schedule.start_time > shift_schedule.end_time
+            ):
+                end_date += timedelta(days=1)
+            end_dt = timezone.make_aware(
+                datetime.combine(end_date, shift_schedule.end_time)
+            )
+            if now >= end_dt:
+                return True
+    except Exception:
+        pass
+    now = timezone.localtime()
+    cutoff = now.replace(hour=23, minute=59, second=0, microsecond=0)
+    return now >= cutoff and attendance.attendance_date == timezone.localdate()
 
 
 @receiver(post_save, sender=Attendance)
@@ -72,8 +103,17 @@ def attendance_post_save(sender, instance, **kwargs):
             _("Half day leave") if status == "HDP" else _("An approved leave exists")
         )
 
-    if not instance.attendance_clock_out:
-        status, message = "FDP", _("Currently working")
+    if not instance.attendance_clock_in:
+        if (
+            instance.missing_punch_in
+            or instance.attendance_date < timezone.localdate()
+        ):
+            status, message = "CONF", "Missing punch in"
+    elif not instance.attendance_clock_out:
+        if _should_flag_missing_punch_out(instance):
+            status, message = "CONF", "Missing punch out"
+        else:
+            status, message = "FDP", _("Currently working")
 
     work_record.work_record_type = status
     work_record.message = message
@@ -85,6 +125,29 @@ def handle_attendance_deletion(sender, instance, **kwargs):
     for workrecord in instance.workrecords_set.all():
         if not workrecord.leave_request_id:
             workrecord.delete()
+
+
+def _refresh_attendance_from_activity(instance):
+    Attendance.refresh_for_employee_date(
+        instance.employee_id_id, instance.attendance_date
+    )
+
+
+@receiver(post_save, sender=AttendanceActivity)
+def attendance_activity_post_save(sender, instance, **kwargs):
+    _refresh_attendance_from_activity(instance)
+
+
+@receiver(pre_delete, sender=AttendanceActivity)
+def attendance_activity_pre_delete(sender, instance, **kwargs):
+    employee_id = instance.employee_id_id
+    attendance_date = instance.attendance_date
+    # defer refresh until after delete
+    from django.db import transaction
+
+    transaction.on_commit(
+        lambda: Attendance.refresh_for_employee_date(employee_id, attendance_date)
+    )
 
 
 # @receiver(post_migrate)

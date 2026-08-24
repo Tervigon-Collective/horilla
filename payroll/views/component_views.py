@@ -82,6 +82,11 @@ from payroll.methods.payslip_calc import (
     calculate_taxable_gross_pay,
 )
 from payroll.methods.tax_calc import calculate_taxable_amount
+from payroll.methods.ctc_wizard import is_salary_on_hold
+from payroll.methods.india_statutory import (
+    apply_india_statutory_to_payroll,
+    get_india_settings,
+)
 from payroll.models.models import (
     Allowance,
     Contract,
@@ -138,6 +143,8 @@ def payroll_calculation(employee, start_date, end_date):
     custom_leave_breakdown = basic_pay_details.get("custom_leave_breakdown", [])
     paid_days = basic_pay_details["paid_days"]
     unpaid_days = basic_pay_details["unpaid_days"]
+    leave_lop_days = basic_pay_details.get("leave_lop_days", unpaid_days)
+    attendance_lop_days = basic_pay_details.get("attendance_lop_days", 0)
     partial_pay_days = basic_pay_details.get("partial_pay_days", 0)
 
     working_days_details = basic_pay_details["month_data"]
@@ -182,8 +189,27 @@ def payroll_calculation(employee, start_date, end_date):
     )
 
     taxable_gross_pay = calculate_taxable_gross_pay(**kwargs)
-    tax_deductions = calculate_tax_deduction(**kwargs)
-    federal_tax = calculate_taxable_amount(**kwargs)
+    india_settings = get_india_settings(employee)
+    if india_settings and india_settings.enable_tds:
+        tax_deductions = {"tax_deductions": []}
+        federal_tax = 0.0
+    else:
+        tax_deductions = calculate_tax_deduction(**kwargs)
+        federal_tax = calculate_taxable_amount(**kwargs)
+
+    india_merge = apply_india_statutory_to_payroll(
+        employee=employee,
+        basic_pay=basic_pay,
+        gross_pay=gross_pay,
+        start_date=start_date,
+        end_date=end_date,
+        pretax_result=pretax_deductions,
+        federal_tax=federal_tax,
+    )
+    pretax_deductions = india_merge["pretax_deductions"]
+    federal_tax = india_merge["federal_tax"]
+    india_statutory = india_merge.get("india_statutory") or {}
+    india_employer_contributions = india_merge.get("india_employer_contributions") or []
 
     total_allowance = sum(item["amount"] for item in allowances["allowances"])
     total_pretax_deduction = sum(
@@ -201,7 +227,7 @@ def payroll_calculation(employee, start_date, end_date):
         + total_post_tax_deduction
         + total_tax_deductions
         + federal_tax
-        + loss_of_pay  # 1022
+        + loss_of_pay_amount
     )
 
     net_pay = gross_pay - total_deductions
@@ -243,6 +269,8 @@ def payroll_calculation(employee, start_date, end_date):
         "allowances": allowances["allowances"],
         "paid_days": paid_days,
         "unpaid_days": unpaid_days,
+        "leave_lop_days": leave_lop_days,
+        "attendance_lop_days": attendance_lop_days,
         "partial_pay_days": partial_pay_days,
         "basic_pay_deductions": basic_pay_deductions,
         "gross_pay_deductions": gross_pay_deductions,
@@ -255,6 +283,8 @@ def payroll_calculation(employee, start_date, end_date):
         "custom_leave_deduction": custom_leave_deduction,
         "custom_leave_breakdown": custom_leave_breakdown,
         "federal_tax": federal_tax,
+        "india_statutory": india_statutory,
+        "india_employer_contributions": india_employer_contributions,
         "start_date": start_date,
         "end_date": end_date,
         "range": f"{start_date.strftime('%b %d %Y')} - {end_date.strftime('%b %d %Y')}",
@@ -924,6 +954,15 @@ def generate_payslip(request):
                     emp_count -= 1
                     continue
 
+                if is_salary_on_hold(employee):
+                    messages.warning(
+                        request,
+                        _("%(name)s is on salary hold — payslip skipped.")
+                        % {"name": employee},
+                    )
+                    emp_count -= 1
+                    continue
+
                 payslip = payroll_calculation(employee, start_date, end_date)
                 payslips.append(payslip)
                 json_data.append(payslip["json_data"])
@@ -1059,6 +1098,19 @@ def create_payslip(request, new_post_data=None):
                 employee = form.cleaned_data["employee_id"]
                 start_date = form.cleaned_data["start_date"]
                 end_date = form.cleaned_data["end_date"]
+                if is_salary_on_hold(employee):
+                    messages.error(
+                        request,
+                        _(
+                            "%(name)s is on salary hold. Release the hold before generating a payslip."
+                        )
+                        % {"name": employee},
+                    )
+                    return render(
+                        request,
+                        "payroll/payslip/create_payslip.html",
+                        {"form": form},
+                    )
                 payslip_data = payroll_calculation(employee, start_date, end_date)
                 payslip_data["payslip"] = payslip
                 data = {}
@@ -1200,12 +1252,9 @@ def view_payslip(request):
     """
     This method is used to render the template for viewing a payslip.
     """
-    from payroll.cbv.accessibility import can_view_all_payslips
+    from payroll.cbv.accessibility import scoped_payslip_queryset
 
-    if can_view_all_payslips(request):
-        payslips = Payslip.objects.all()
-    else:
-        payslips = Payslip.objects.filter(employee_id__employee_user_id=request.user)
+    payslips = scoped_payslip_queryset(request)
     export_column = forms.PayslipExportColumnForm()
     filter_form = PayslipFilter(request.GET, payslips)
     payslips = filter_form.qs
@@ -1302,6 +1351,9 @@ def payslip_export(request):
             },
         )
 
+    from payroll.cbv.accessibility import scoped_payslip_queryset
+    from payroll.filters import PayslipFilter
+
     choices_mapping = {
         "draft": _("Draft"),
         "review_ongoing": _("Review Ongoing"),
@@ -1310,7 +1362,9 @@ def payslip_export(request):
     }
     selected_columns = []
     payslips_data = {}
-    payslips = PayslipFilter(request.GET).qs
+    payslips = PayslipFilter(
+        request.GET, queryset=scoped_payslip_queryset(request)
+    ).qs
     today_date = date.today().strftime("%Y-%m-%d")
     file_name = f"Payslip_excel_{today_date}.xlsx"
     selected_fields = request.GET.getlist("selected_fields")
@@ -2224,6 +2278,9 @@ def payslip_detailed_export_data(request):
     """
     This view create the data for exporting payslip data based on selected fields and filters,
     """
+    from payroll.cbv.accessibility import scoped_payslip_queryset
+    from payroll.filters import PayslipFilter
+
     choices_mapping = {
         "draft": _("Draft"),
         "review_ongoing": _("Review Ongoing"),
@@ -2233,7 +2290,9 @@ def payslip_detailed_export_data(request):
     selected_columns = []
     payslips_data = []
     totals = {}
-    payslips = PayslipFilter(request.GET).qs
+    payslips = PayslipFilter(
+        request.GET, queryset=scoped_payslip_queryset(request)
+    ).qs
     selected_fields = request.GET.getlist("selected_fields")
     form = forms.PayslipExportColumnForm()
 
@@ -2312,11 +2371,11 @@ def payslip_detailed_export_data(request):
         total_deduction = 0
         total_federal_tax = 0
 
-        federal_tax = payslip.pay_head_data["federal_tax"]
+        federal_tax = (payslip.pay_head_data or {}).get("federal_tax") or 0
         total_federal_tax += federal_tax
 
-        allos = payslip.pay_head_data["allowances"]
-        deducts = all_deductions(payslip.pay_head_data)
+        allos = (payslip.pay_head_data or {}).get("allowances") or []
+        deducts = all_deductions(payslip.pay_head_data or {})
 
         if allos:
             for allowance in allos:

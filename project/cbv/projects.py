@@ -304,8 +304,18 @@ class ProjectFormView(HorillaFormView):
         return context
 
     def form_valid(self, form: ProjectForm) -> HttpResponse:
+        from project.methods import can_mutate_project, is_project_manager_or_super_user
+
         if form.is_valid():
             if form.instance.pk:
+                project = form.instance
+                if not (
+                    self.request.user.has_perm("project.change_project")
+                    or is_project_manager_or_super_user(self.request, project)
+                    or can_mutate_project(self.request, project)
+                ):
+                    messages.error(self.request, _("You don't have permission."))
+                    return self.HttpResponse()
                 message = _(f"{self.form.instance} Updated")
                 HTTP_REFERER = self.request.META.get("HTTP_REFERER", None)
                 if HTTP_REFERER and "task-view/" in HTTP_REFERER:
@@ -315,6 +325,12 @@ class ProjectFormView(HorillaFormView):
                         "<script>window.location.reload()</script>"
                     )
             else:
+                if not (
+                    self.request.user.is_superuser
+                    or self.request.user.has_perm("project.add_project")
+                ):
+                    messages.error(self.request, _("You don't have permission."))
+                    return self.HttpResponse()
                 message = _("New project created")
             form.save()
             messages.success(self.request, _(message))

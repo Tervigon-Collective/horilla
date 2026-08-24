@@ -14,17 +14,9 @@ def task_crud_accessibility(
     """
     to access crud operations
     """
-    employee = request.user.employee_get
-    is_task_manager = employee in instance.task_managers.all()
-    is_project_manager = employee in instance.project.managers.all()
-    if (
-        request.user.has_perm("project.view_task")
-        or is_project_manager
-        or is_task_manager
-    ):
-        return True
-    else:
-        return False
+    from project.methods import can_delete_task, can_mutate_task
+
+    return can_mutate_task(request, instance) or can_delete_task(request, instance)
 
 
 def project_manager_accessibility(

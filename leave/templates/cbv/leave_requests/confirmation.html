@@ -4,7 +4,7 @@
 {% if perms.leave.change_leaverequest or can_manage %}
 <div class="flex items-center justify-center gap-1" onclick="event.stopPropagation();">
         {% if instance.status == 'cancelled' %}
-            {% if instance.end_date >= current_date %}
+            {% if instance.effective_end_date >= current_date %}
                 <button type="button" data-toggle="oh-modal-toggle"
                     data-target="#rejectModal" hx-get="{% url 'request-cancel' instance.id %}"
                     hx-target="#rejectForm" title="{% trans 'Approve cancellation request' %}"
@@ -57,7 +57,7 @@
                 </a>
             {% endif %} {% endcomment %}
 
-            {% if instance.status != 'rejected' and instance.end_date >= current_date %}
+            {% if instance.status != 'rejected' and instance.effective_end_date >= current_date %}
                 <a type="button" data-toggle="oh-modal-toggle"
                     data-target="#rejectModal" hx-get="{% url 'request-cancel' instance.id %}" hx-target="#rejectForm" title="{% trans 'Reject' %}"
                     class="oh-btn oh-btn--danger oh-btn--sq-sm">
@@ -74,7 +74,7 @@
     {% comment %} {% else %}
     <div class="oh-btn-group" onclick="event.stopPropagation();">
         {% if instance.status == 'cancelled' %}
-            {% if instance.end_date >= current_date %}
+            {% if instance.effective_end_date >= current_date %}
                 <button type="button" disabled title="{% trans 'Approve cancellation request' %}"
                     class="oh-btn oh-btn--warning w-100">
                     <ion-icon class="me-1" name="checkmark-outline"></ion-icon>
@@ -102,7 +102,7 @@
                     <ion-icon class="me-1" name="checkmark-outline"></ion-icon>
                 </button>
             {% endif %}
-            {% if instance.status != 'rejected' and instance.end_date >= current_date %}
+            {% if instance.status != 'rejected' and instance.effective_end_date >= current_date %}
                 <button type="button" disabled title="{% trans 'Reject' %}"
                     class="oh-btn oh-btn--danger w-100">
                     <ion-icon class="me-1" name="close-circle-outline"></ion-icon>

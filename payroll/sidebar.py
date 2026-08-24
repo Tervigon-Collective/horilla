@@ -47,9 +47,59 @@ SUBMENUS = [
         "accessibility": "payroll.sidebar.dasbhoard_accessibility",
     },
     {
+        "menu": _("Salary Revisions"),
+        "redirect": reverse("salary-revision-list"),
+        "accessibility": "payroll.sidebar.dasbhoard_accessibility",
+    },
+    {
+        "menu": _("Salary Holds"),
+        "redirect": reverse("salary-hold-list"),
+        "accessibility": "payroll.sidebar.dasbhoard_accessibility",
+    },
+    {
         "menu": _("Income Tax"),
         "redirect": reverse("filing-status-view"),
         "accessibility": "payroll.sidebar.federal_tax_accessibility",
+    },
+    {
+        "menu": _("India Statutory"),
+        "redirect": reverse("india-statutory-settings"),
+        "accessibility": "payroll.sidebar.india_statutory_accessibility",
+    },
+    {
+        "menu": _("Form 16"),
+        "redirect": reverse("form16-list"),
+        "accessibility": "payroll.sidebar.india_statutory_accessibility",
+    },
+    {
+        "menu": _("Statutory Challans"),
+        "redirect": reverse("challan-list"),
+        "accessibility": "payroll.sidebar.india_statutory_accessibility",
+    },
+    {
+        "menu": _("Statutory Registers"),
+        "redirect": reverse("statutory-register"),
+        "accessibility": "payroll.sidebar.india_statutory_accessibility",
+    },
+    {
+        "menu": _("Form 24Q"),
+        "redirect": reverse("form24q-list"),
+        "accessibility": "payroll.sidebar.india_statutory_accessibility",
+    },
+    {
+        "menu": _("TRACES e-Filing"),
+        "redirect": reverse("traces-efiling"),
+        "accessibility": "payroll.sidebar.india_statutory_accessibility",
+    },
+    {
+        "menu": _("Accounting Export"),
+        "redirect": reverse("accounting-export-list"),
+        "accessibility": "payroll.sidebar.india_statutory_accessibility",
+    },
+    {
+        "menu": _("Statutory Excel"),
+        "redirect": reverse("statutory-excel-hub"),
+        "accessibility": "payroll.sidebar.india_statutory_accessibility",
     },
     {
         "menu": _("Configuration"),
@@ -77,6 +127,12 @@ def loan_accessibility(request, submenu, user_perms, *args, **kwargs):
 
 def federal_tax_accessibility(request, submenu, user_perms, *args, **kwargs):
     return request.user.has_perm("payroll.view_filingstatus")
+
+
+def india_statutory_accessibility(request, submenu, user_perms, *args, **kwargs):
+    return request.user.has_perm("payroll.change_payslip") or request.user.has_perm(
+        "payroll.view_payslip"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +174,29 @@ class PayrollSettings:
                 {
                     "text": _("Leave Unit Amount"),
                     "description": _("Monetary value credited per leave day encashed"),
+                },
+            ],
+        },
+        {
+            "label": _("India Statutory Payroll"),
+            "url": reverse_lazy("india-statutory-settings"),
+            "accessibility": india_statutory_accessibility,
+            "search_entries": [
+                {
+                    "text": _("PF"),
+                    "description": _("Provident Fund settings for Indian payroll"),
+                },
+                {
+                    "text": _("ESI"),
+                    "description": _("Employee State Insurance settings"),
+                },
+                {
+                    "text": _("TDS"),
+                    "description": _("Tax deducted at source configuration"),
+                },
+                {
+                    "text": _("Form 16"),
+                    "description": _("Annual tax certificate records"),
                 },
             ],
         },

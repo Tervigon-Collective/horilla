@@ -275,6 +275,10 @@ _DEFAULT_HRMS_GROUPS = {
             "employee": ("view",),
         },
     },
+    "Employee": {
+        "apps": (),
+        "actions": (),
+    },
 }
 
 _ALL_HRMS_APP_LABELS = (
@@ -414,6 +418,15 @@ def _sync_default_hrms_groups():
         if permissions.exists():
             # Additive only — never strip permissions an admin may have customized
             group.permissions.add(*permissions)
+        if name == "Employee":
+            try:
+                from employee.methods.user_bootstrap import sync_employee_group_permissions
+
+                sync_employee_group_permissions(group)
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    "Employee ESS permission sync skipped", exc_info=True
+                )
 
 
 @receiver(post_migrate)

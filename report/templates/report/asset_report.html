@@ -260,7 +260,7 @@
                         }));
                 }
 
-                const logoUrl = "{{ protocol }}://{{ host }}{{ company.icon.url }}";
+                const logoUrl = "{% if company.icon %}{{ protocol }}://{{ host }}{{ company.icon.url }}{% endif %}";
                 await getBase64FromUrl(logoUrl).then((base64) => {
                     const base64Data = base64.split(',')[1];
                     const imageId = workbook.addImage({

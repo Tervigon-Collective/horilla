@@ -396,6 +396,9 @@ if apps.is_installed("pms"):
                 "%": "%",
                 "#": "Number",
                 "Currency": "Currency",
+                "$": "$",
+                "₹": "₹",
+                "€": "€",
             }
             data_list = [
                 {
@@ -432,7 +435,7 @@ if apps.is_installed("pms"):
                     ),
                     "Key Results": item["key_result_id__title"],
                     "Key Result Duration": f'{item["key_result_id__duration"]} {"Days"}',
-                    "Key Result Target": f'{item["key_result_id__target_value"]} {KEY_RESULT_TARGET.get(item["key_result_id__progress_type"])}',
+                    "Key Result Target": f'{item["key_result_id__target_value"]} {KEY_RESULT_TARGET.get(item["key_result_id__progress_type"], item["key_result_id__progress_type"] or "")}',
                     "Company": item["company_id__company"],
                 }
                 for item in data
@@ -600,6 +603,9 @@ if apps.is_installed("pms"):
                 "%": "%",
                 "#": "Number",
                 "Currency": "Currency",
+                "$": "$",
+                "₹": "₹",
+                "€": "€",
             }
 
             data_list = [
@@ -638,10 +644,10 @@ if apps.is_installed("pms"):
                     "Employee Keyresult": item["key_result"],
                     "Objective": item["employee_objective_id__objective_id__title"],
                     "Objective Duration": f'{item["employee_objective_id__objective_id__duration"]} {DURATION_UNIT.get(item["employee_objective_id__objective_id__duration_unit"])}',
-                    "Keyresult Start Value": f'{item["start_value"]} {KEY_RESULT_TARGET.get(item["progress_type"])}',
-                    "Keyresult Target Value": f'{item["target_value"]} {KEY_RESULT_TARGET.get(item["progress_type"])}',
+                    "Keyresult Start Value": f'{item["start_value"]} {KEY_RESULT_TARGET.get(item["progress_type"], item["progress_type"] or "")}',
+                    "Keyresult Target Value": f'{item["target_value"]} {KEY_RESULT_TARGET.get(item["progress_type"], item["progress_type"] or "")}',
                     "Keyresult Current Value": (
-                        f'{item["current_value"]} {KEY_RESULT_TARGET.get(item["progress_type"])}'
+                        f'{item["current_value"]} {KEY_RESULT_TARGET.get(item["progress_type"], item["progress_type"] or "")}'
                         if item["current_value"]
                         else "-"
                     ),

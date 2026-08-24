@@ -192,6 +192,17 @@ class AttendanceUpdateForm(BaseModelForm):
             }
         )
 
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        instance._allow_future_checkout = True
+        if commit:
+            instance.save()
+        return instance
+
+    def clean(self):
+        self.instance._allow_future_checkout = True
+        return super().clean()
+
     def as_p(self, *args, **kwargs):
         """
         Render the form fields as HTML table rows with Bootstrap styling.
@@ -341,26 +352,20 @@ class AttendanceForm(BaseModelForm):
 
     def save(self, commit=True):
         instance = super().save(commit=False)
+        instance._allow_future_checkout = True
         for emp_id in self.data.getlist("employee_id"):
             if int(emp_id) != int(instance.employee_id.id):
                 data_copy = self.data.copy()
                 data_copy.update({"employee_id": str(emp_id)})
                 attendance = AttendanceUpdateForm(data_copy).save(commit=False)
+                attendance._allow_future_checkout = True
                 attendance.save()
         if commit:
             instance.save()
         return instance
 
-    def as_p(self, *args, **kwargs):
-        """
-        Render the form fields as HTML table rows with Bootstrap styling.
-        """
-        _ = args, kwargs  # Explicitly mark as used for pylint
-        context = {"form": self}
-        table_html = render_to_string("attendance_form.html", context)
-        return table_html
-
     def clean(self) -> Dict[str, Any]:
+        self.instance._allow_future_checkout = True
         super().clean()
         self.instance.employee_id = Employee.objects.filter(
             id=self.data.get("employee_id")
@@ -405,6 +410,15 @@ class AttendanceForm(BaseModelForm):
             raise ValidationError(_("Employee not chosen"))
 
         return employee.first()
+
+    def as_p(self, *args, **kwargs):
+        """
+        Render the form fields as HTML table rows with Bootstrap styling.
+        """
+        _ = args, kwargs  # Explicitly mark as used for pylint
+        context = {"form": self}
+        table_html = render_to_string("attendance_form.html", context)
+        return table_html
 
 
 class AttendanceActivityForm(BaseModelForm):

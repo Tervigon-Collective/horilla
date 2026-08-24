@@ -162,6 +162,31 @@ urlpatterns = [
         name="offboarding-individual-view",
     ),
     path(
+        "fnf-settlements/",
+        views.fnf_settlement_list,
+        name="fnf-settlement-list",
+    ),
+    path(
+        "fnf-settlement/<int:pk>/",
+        views.fnf_settlement_view,
+        name="fnf-settlement",
+    ),
+    path(
+        "fnf-settlement/<int:pk>/save/",
+        views.fnf_settlement_save,
+        name="fnf-settlement-save",
+    ),
+    path(
+        "fnf-settlement/<int:pk>/action/",
+        views.fnf_settlement_action,
+        name="fnf-settlement-action",
+    ),
+    path(
+        "fnf-settlement/<int:pk>/pdf/",
+        views.fnf_settlement_pdf,
+        name="fnf-settlement-pdf",
+    ),
+    path(
         "offboarding-note-delete/<int:note_id>/",
         views.offboarding_note_delete,
         name="offboarding-note-delete",

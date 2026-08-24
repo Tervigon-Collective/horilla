@@ -165,7 +165,7 @@ def attendance_validate(attendance):
     if conditions.exists():
         condition_for_at_work = strtime_seconds(conditions[0].validation_at_work)
     at_work = strtime_seconds(attendance.attendance_worked_hour)
-    return condition_for_at_work >= at_work
+    return at_work >= condition_for_at_work
 
 
 @login_required

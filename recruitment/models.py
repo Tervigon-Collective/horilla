@@ -271,7 +271,11 @@ class Recruitment(HorillaModel):
         This method is used to get the count of
         hired candidates
         """
-        return self.candidate.filter(hired=True).count()
+        return (
+            self.candidate.filter(hired=True, is_active=True)
+            .exclude(canceled=True)
+            .count()
+        )
 
     def __str__(self):
         title = (
@@ -285,7 +289,7 @@ class Recruitment(HorillaModel):
         if self.title is None:
             raise ValidationError({"title": _("This field is required")})
         if self.is_published:
-            if self.vacancy <= 0:
+            if self.vacancy is None or self.vacancy <= 0:
                 raise ValidationError(
                     {
                         "vacancy": _(
@@ -434,13 +438,18 @@ class Recruitment(HorillaModel):
         """
         This method is used to check wether the vaccancy for the recruitment is completed or not
         """
+        if not self.vacancy:
+            return False
         hired_stage = Stage.objects.filter(
             recruitment_id=self, stage_type="hired"
         ).first()
         if hired_stage:
-            hired_candidate = hired_stage.candidate_set.all().exclude(canceled=True)
+            hired_candidate = hired_stage.candidate_set.filter(
+                is_active=True
+            ).exclude(canceled=True)
             if len(hired_candidate) >= self.vacancy:
                 return True
+        return False
 
 
 class Stage(HorillaModel):

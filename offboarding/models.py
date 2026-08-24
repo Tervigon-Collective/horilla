@@ -200,6 +200,21 @@ class OffboardingEmployee(HorillaModel):
         """
         return f'{reverse_lazy("offboarding-individual-view", kwargs={"pk": self.pk})}'
 
+    def fnf_settlement_link(self):
+        from django.core.exceptions import ObjectDoesNotExist
+        from django.urls import reverse
+
+        url = reverse("fnf-settlement", kwargs={"pk": self.pk})
+        try:
+            record = self.fnf_settlement
+            label = _("F&F Settlement") + f" ({record.get_status_display()})"
+        except ObjectDoesNotExist:
+            label = _("F&F Settlement")
+        return (
+            f'<a href="{url}" class="oh-btn oh-btn--secondary oh-btn--sm">'
+            f"{label}</a>"
+        )
+
     def get_notice_period_col(self):
         """
         This method for get custom column for notice period in detail view.
@@ -693,3 +708,91 @@ class OffboardingGeneralSetting(HorillaModel):
     resignation_request = models.BooleanField(default=False)
     company_id = models.ForeignKey(Company, on_delete=models.CASCADE, null=True)
     objects = HorillaCompanyManager("company_id")
+
+
+class FnFSettlement(HorillaModel):
+    """Persisted Full & Final settlement for an exit process."""
+
+    STATUS = [
+        ("draft", _("Draft")),
+        ("confirmed", _("Confirmed")),
+        ("paid", _("Paid")),
+    ]
+
+    offboarding_employee = models.OneToOneField(
+        OffboardingEmployee,
+        on_delete=models.CASCADE,
+        related_name="fnf_settlement",
+        verbose_name=_("Exit process"),
+    )
+    employee_id = models.ForeignKey(
+        Employee,
+        on_delete=models.CASCADE,
+        related_name="fnf_settlements",
+        verbose_name=_("Employee"),
+    )
+    last_working_day = models.DateField(null=True, blank=True)
+    years_of_service = models.FloatField(default=0)
+    gratuity = models.FloatField(default=0)
+    gratuity_eligible = models.BooleanField(default=False)
+    bonus_unpaid = models.FloatField(default=0)
+    leave_encashment = models.FloatField(default=0)
+    unused_leave_days = models.FloatField(default=0)
+    notice_period_pay = models.FloatField(default=0)
+    notice_days = models.PositiveIntegerField(default=0)
+    loan_recovery = models.FloatField(default=0)
+    other_additions = models.FloatField(default=0)
+    other_deductions = models.FloatField(default=0)
+    outstanding_assets = models.PositiveIntegerField(default=0)
+    total_earnings = models.FloatField(default=0)
+    total_recoveries = models.FloatField(default=0)
+    net_payable = models.FloatField(default=0)
+    status = models.CharField(max_length=12, choices=STATUS, default="draft")
+    remarks = models.TextField(blank=True, null=True)
+    confirmed_on = models.DateField(null=True, blank=True)
+    paid_on = models.DateField(null=True, blank=True)
+    confirmed_by = models.ForeignKey(
+        Employee,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="fnf_confirmed",
+    )
+    paid_by = models.ForeignKey(
+        Employee,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="fnf_paid",
+    )
+
+    objects = HorillaCompanyManager("employee_id__employee_work_info__company_id")
+
+    class Meta:
+        verbose_name = _("F&F Settlement")
+        verbose_name_plural = _("F&F Settlements")
+        ordering = ["-id"]
+
+    def __str__(self):
+        return f"{self.employee_id} F&F ({self.status})"
+
+    def recompute_totals(self):
+        from offboarding.settlement import compute_fnf_totals
+
+        totals = compute_fnf_totals(
+            gratuity=self.gratuity,
+            bonus_unpaid=self.bonus_unpaid,
+            leave_encashment=self.leave_encashment,
+            notice_period_pay=self.notice_period_pay,
+            other_additions=self.other_additions,
+            loan_recovery=self.loan_recovery,
+            other_deductions=self.other_deductions,
+        )
+        self.total_earnings = totals["total_earnings"]
+        self.total_recoveries = totals["total_recoveries"]
+        self.net_payable = totals["net_payable"]
+        return totals
+
+    def save(self, *args, **kwargs):
+        self.recompute_totals()
+        return super().save(*args, **kwargs)

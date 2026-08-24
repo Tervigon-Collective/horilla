@@ -693,7 +693,7 @@ class HorillaListView(ListView):
 
             serialized = []
             field_column_mapping_values = {}
-            for _, row in df.iterrows():
+            for _row_idx, row in df.iterrows():
                 record = {}
                 for model_field, excel_col in field_column_mapping.items():
                     if excel_col in row:

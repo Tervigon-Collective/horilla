@@ -122,6 +122,16 @@ class AttendancesListView(HorillaListView):
     ]
     records_per_page = 20
 
+    def get_queryset(self, queryset=None, filtered=False, *args, **kwargs):
+        if not self.queryset:
+            self.queryset = super().get_queryset(
+                queryset=queryset, filtered=filtered, *args, **kwargs
+            )
+            self.queryset = filtersubordinates(
+                self.request, self.queryset, "attendance.view_attendance"
+            )
+        return self.queryset
+
     # def get_queryset(self, queryset=None, filtered=False, *args, **kwargs):
     #     """
     #     Get queryset
@@ -266,7 +276,9 @@ class AttendancesNavView(HorillaNavView):
                 """,
                 }
             )
-        if self.request.user.has_perm("attendance.add_attendance"):
+        if self.request.user.has_perm("attendance.add_attendance") or is_reportingmanager(
+            self.request
+        ):
             actions.append(
                 {
                     "action": _("Delete"),
@@ -591,6 +603,10 @@ class AttendanceUpdateFormView(HorillaFormView):
         if self.form.instance.pk:
             self.form_class.verbose_name = _("Edit Attendance")
 
+        self.form = choosesubordinates(
+            self.request, self.form, "attendance.change_attendance"
+        )
+        context["form"] = self.form
         context["view_id"] = "attendanceUpdate"
 
         return context

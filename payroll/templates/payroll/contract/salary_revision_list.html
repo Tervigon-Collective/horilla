@@ -1,0 +1,56 @@
+{% extends "index.html" %}
+{% load i18n horillafilters static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+<div class="is-page">
+    <div class="is-page-head">
+        <h1 class="is-page-head__title">{% trans "Salary revisions" %}</h1>
+        <p class="is-page-head__desc">{% trans "Increment letters generated from the CTC wizard." %}
+            <a href="{% url 'salary-hold-list' %}">{% trans "Salary holds" %}</a>
+        </p>
+    </div>
+
+    <div class="is-section">
+        <div class="is-section__body is-section__body--flush">
+            <div class="is-table-wrap">
+                <table class="is-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Employee" %}</th>
+                            <th>{% trans "Effective" %}</th>
+                            <th>{% trans "From" %}</th>
+                            <th>{% trans "To" %}</th>
+                            <th>{% trans "Increment" %}</th>
+                            <th>{% trans "Arrears" %}</th>
+                            <th>{% trans "Paid" %}</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for rev in revisions %}
+                        <tr>
+                            <td>{{ rev.employee_id.get_full_name }}</td>
+                            <td>{{ rev.effective_date }}</td>
+                            <td class="is-num">{{ rev.previous_monthly_ctc|floatformat:0|currency_symbol_position }}</td>
+                            <td class="is-num">{{ rev.new_monthly_ctc|floatformat:0|currency_symbol_position }}</td>
+                            <td class="is-num">{{ rev.increment_percent|floatformat:1 }}%</td>
+                            <td class="is-num">{% if rev.arrears_amount %}{{ rev.arrears_amount|floatformat:0|currency_symbol_position }}{% else %}—{% endif %}</td>
+                            <td>{% if rev.arrears_amount %}{% if rev.arrears_paid %}{% trans "Yes" %}{% else %}{% trans "No" %}{% endif %}{% else %}—{% endif %}</td>
+                            <td>
+                                <a href="{% url 'salary-revision-letter' revision_id=rev.pk %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "View" %}</a>
+                                <a href="{% url 'salary-revision-letter' revision_id=rev.pk %}?format=pdf" class="oh-btn oh-btn--light oh-btn--sm">{% trans "PDF" %}</a>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="8" class="is-muted">{% trans "No revision letters yet. Apply a new CTC on a contract to generate one." %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

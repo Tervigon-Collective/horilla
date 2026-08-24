@@ -1,0 +1,117 @@
+{% extends "index.html" %}
+{% load i18n horillafilters static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+<div class="is-page">
+    <div class="is-page-head">
+        <h1 class="is-page-head__title">{% trans "Salary increment letter" %}</h1>
+        <p class="is-page-head__desc">{{ employee.get_full_name }} · {% trans "Effective" %} {{ revision.effective_date }}</p>
+    </div>
+
+    <div class="is-kpi-grid is-kpi-grid--3">
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--amber"><ion-icon name="trending-down-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Previous CTC" %}</div>
+                <div class="is-kpi-card__value">{{ revision.previous_monthly_ctc|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--green"><ion-icon name="trending-up-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Revised CTC" %}</div>
+                <div class="is-kpi-card__value">{{ revision.new_monthly_ctc|floatformat:0|currency_symbol_position }}</div>
+            </div>
+        </div>
+        <div class="is-kpi-card">
+            <div class="is-kpi-card__icon is-kpi-card__icon--purple"><ion-icon name="stats-chart-outline"></ion-icon></div>
+            <div>
+                <div class="is-kpi-card__label">{% trans "Increment" %}</div>
+                <div class="is-kpi-card__value">{{ revision.increment_percent|floatformat:1 }}%</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="is-actions-row" style="margin-bottom:16px;">
+        <a href="{% url 'salary-revision-letter' revision_id=revision.pk %}?format=pdf" class="oh-btn oh-btn--secondary oh-btn--sm">
+            <ion-icon name="download-outline"></ion-icon>
+            {% trans "Download PDF" %}
+        </a>
+        <a href="{% url 'contract-ctc-wizard' contract_id=contract.pk %}" class="oh-btn oh-btn--light oh-btn--sm">
+            {% trans "CTC Wizard" %}
+        </a>
+        <a href="{% url 'salary-revision-list' %}" class="oh-btn oh-btn--light oh-btn--sm">
+            {% trans "All revisions" %}
+        </a>
+        <a href="{% url 'salary-hold-list' %}" class="oh-btn oh-btn--light oh-btn--sm">
+            {% trans "Salary holds" %}
+        </a>
+    </div>
+
+    {% if on_hold %}
+    <div class="is-section" style="margin-bottom:16px;">
+        <div class="is-section__body">
+            <p>{% trans "This employee's salary is currently on hold. Payslips will not be generated until the hold is released." %}</p>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if revision.arrears_amount and not revision.arrears_paid %}
+    <div class="is-section" style="margin-bottom:16px;">
+        <div class="is-section__body">
+            <p class="is-muted" style="margin-bottom:10px;">
+                {% trans "Estimated arrears are not yet paid through payroll. Schedule a one-time allowance on a date inside the target payslip period." %}
+            </p>
+            <form method="post" action="{% url 'pay-salary-arrears' revision_id=revision.pk %}" style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+                {% csrf_token %}
+                <div>
+                    <label class="is-label">{% trans "Payment date (in payslip period)" %}</label>
+                    <input type="date" name="payment_date" class="oh-input oh-input--sm" value="{{ today }}">
+                </div>
+                <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">
+                    {% trans "Pay arrears via allowance" %}
+                </button>
+            </form>
+        </div>
+    </div>
+    {% elif revision.arrears_paid %}
+    <div class="is-section" style="margin-bottom:16px;">
+        <div class="is-section__body">
+            <p>
+                {% trans "Arrears paid" %}:
+                {{ revision.arrears_amount|floatformat:2|currency_symbol_position }}
+                {% if revision.arrears_paid_on %} · {{ revision.arrears_paid_on }}{% endif %}
+                {% if revision.arrears_allowance %} · {{ revision.arrears_allowance.title }}{% endif %}
+            </p>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="is-section">
+        <div class="is-section__body">
+            {% if revision.note %}<p>{{ revision.note }}</p>{% endif %}
+            <div class="is-summary-grid">
+                <div class="is-summary-item">
+                    <div class="is-summary-item__label">{% trans "Basic" %}</div>
+                    <div class="is-summary-item__value">{{ revision.new_basic|floatformat:2|currency_symbol_position }}</div>
+                </div>
+                <div class="is-summary-item">
+                    <div class="is-summary-item__label">{% trans "HRA" %}</div>
+                    <div class="is-summary-item__value">{{ revision.new_hra|floatformat:2|currency_symbol_position }}</div>
+                </div>
+                <div class="is-summary-item">
+                    <div class="is-summary-item__label">{% trans "Special Allowance" %}</div>
+                    <div class="is-summary-item__value">{{ revision.new_special|floatformat:2|currency_symbol_position }}</div>
+                </div>
+                {% if revision.arrears_amount %}
+                <div class="is-summary-item">
+                    <div class="is-summary-item__label">{% trans "Arrears" %} ({{ revision.arrears_months }} {% trans "months" %})</div>
+                    <div class="is-summary-item__value">{{ revision.arrears_amount|floatformat:2|currency_symbol_position }}</div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

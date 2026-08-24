@@ -1,0 +1,95 @@
+{% load i18n %}
+{# HTMX partial for grade / position leave accrual rules #}
+<div id="leaveTypeAccrualPanel">
+
+  <div class="d-flex align-items-center gap-2 mb-3" style="border-top: 1px solid hsl(213deg,22%,90%); padding-top: 1.25rem;">
+    <h6 class="oh-card__title mb-0">{% trans "Grade / position accrual rules" %}</h6>
+    <span class="oh-info"
+      title="{% trans 'When monthly accrual is on, matching rules set annual days (÷12). Prefer grade+position, then grade, then position.' %}">
+    </span>
+  </div>
+
+  {% if leave_type.accrual_rules.exists %}
+  <div class="d-flex flex-wrap gap-2 mb-4">
+    {% for rule in leave_type.accrual_rules.all %}
+    <span class="d-inline-flex align-items-center gap-2 px-3 py-1"
+          style="background:hsl(213deg,22%,94%); border:1px solid hsl(213deg,22%,82%);
+                 border-radius:20px; font-size:0.82rem;">
+      <strong class="text-dark">{{ rule.annual_days }} {% trans "days/year" %}</strong>
+      <span class="text-muted">
+        {% if rule.job_grade %}{% trans "Grade" %}: {{ rule.job_grade }}{% endif %}
+        {% if rule.job_grade and rule.job_position_id %} · {% endif %}
+        {% if rule.job_position_id %}{{ rule.job_position_id }}{% endif %}
+      </span>
+      <button type="button"
+        style="background:none;border:none;padding:0;line-height:1;cursor:pointer;
+               color:hsl(0,70%,55%);font-size:0.9rem;margin-left:2px;"
+        title="{% trans 'Remove' %}"
+        hx-post="{% url 'leave-type-accrual-delete' leave_type.id rule.id %}"
+        hx-target="#leaveTypeAccrualPanel"
+        hx-swap="outerHTML"
+        hx-confirm="{% trans 'Remove this accrual rule?' %}"
+        hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+        &times;
+      </button>
+    </span>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="text-muted small mb-3">
+    {% trans "No grade rules — monthly accrual uses the leave type total days ÷ 12." %}
+  </p>
+  {% endif %}
+
+  <div class="p-3" style="background:hsl(213deg,22%,97%); border:1px solid hsl(213deg,22%,88%);
+                           border-radius:6px;">
+    <p class="oh-label mb-2" style="font-size:0.8rem; text-transform:uppercase;
+                                     letter-spacing:.04em; color:hsl(213deg,18%,55%);">
+      {% trans "Add accrual rule" %}
+    </p>
+
+    <form hx-post="{% url 'leave-type-accrual-create' leave_type.id %}"
+          hx-target="#leaveTypeAccrualPanel"
+          hx-swap="outerHTML"
+          hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+      {% csrf_token %}
+
+      {% if accrual_form.non_field_errors %}
+      <div class="oh-alert oh-alert--danger oh-alert--animated mb-2">
+        {{ accrual_form.non_field_errors }}
+      </div>
+      {% endif %}
+
+      <div class="row g-3 mb-2">
+        <div class="col-sm-12 col-md-4">
+          <label class="oh-label">{% trans "Job Grade" %}</label>
+          {{ accrual_form.job_grade }}
+          {% if accrual_form.job_grade.errors %}
+            <small class="text-danger">{{ accrual_form.job_grade.errors.0 }}</small>
+          {% endif %}
+        </div>
+        <div class="col-sm-12 col-md-4">
+          <label class="oh-label">{% trans "Job Position" %}</label>
+          {{ accrual_form.job_position_id }}
+          {% if accrual_form.job_position_id.errors %}
+            <small class="text-danger">{{ accrual_form.job_position_id.errors.0 }}</small>
+          {% endif %}
+        </div>
+        <div class="col-sm-12 col-md-4">
+          <label class="oh-label">{% trans "Annual days" %}</label>
+          {{ accrual_form.annual_days }}
+          {% if accrual_form.annual_days.errors %}
+            <small class="text-danger">{{ accrual_form.annual_days.errors.0 }}</small>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="d-flex justify-content-end">
+        <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm px-4">
+          {% trans "Add Rule" %}
+        </button>
+      </div>
+    </form>
+  </div>
+
+</div>

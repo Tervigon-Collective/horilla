@@ -117,7 +117,11 @@ class EmployeeFaceDetectionGetPostAPIView(APIView):
                 serializer.save()
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        raise serializers.ValidationError(_("Facedetection not yet started.."))
+        msg = str(_("Facedetection not yet started.."))
+        return Response(
+            {"message": msg, "error": msg},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 def get_company(request):

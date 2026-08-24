@@ -10,11 +10,11 @@ from datetime import date, datetime, timedelta
 
 from django.apps import apps
 from django.conf import settings
-from django.contrib.auth.models import Permission
 from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
 from django.core.validators import RegexValidator
 from django.db import models
+from django.db.models import Q
 from django.db.models.query import QuerySet
 from django.db.models.signals import post_save
 from django.dispatch import receiver
@@ -315,7 +315,9 @@ class Employee(models.Model):
         """
         today = date.today()
         leaves_requests = (
-            self.leaverequest_set.filter(start_date__lte=today, end_date__gte=today)
+            self.leaverequest_set.filter(start_date__lte=today).filter(
+                Q(end_date__gte=today) | Q(end_date__isnull=True)
+            )
             if apps.is_installed("leave")
             else QuerySet().none()
         )
@@ -741,40 +743,28 @@ class Employee(models.Model):
 
     def save(self, *args, **kwargs):
         self.full_clean()
+
+        if self.employee_user_id_id is None:
+            from employee.methods.user_bootstrap import ensure_employee_user
+
+            user = ensure_employee_user(self)
+            if user:
+                self.employee_user_id = user
+
         super().save(*args, **kwargs)
 
         request = getattr(horilla_middlewares._thread_locals, "request", None)
         if request and not self.is_active and self.get_archive_condition() is not False:
             self.is_active = True
             super().save(*args, **kwargs)
-        employee = self
-
-        if employee.employee_user_id is None:
-            # Create user if no corresponding user exists
-            username = self.email
-            password = str(self.phone)
-
-            user = HorillaUser.objects.create_user(
-                username=username,
-                email=username,
-                password=password,
-                is_new_employee=True,
-            )
-            if not user:
-                user = HorillaUser.objects.create_user(
-                    username=username, email=username, password=password
-                )
-            self.employee_user_id = user
-            # default permissions
-            change_ownprofile = Permission.objects.get(codename="change_ownprofile")
-            view_ownprofile = Permission.objects.get(codename="view_ownprofile")
-            user.user_permissions.add(view_ownprofile)
-            user.user_permissions.add(change_ownprofile)
 
         if not hasattr(self, "employee_work_info"):
             EmployeeWorkInformation.objects.get_or_create(employee_id=self)
             return self.save()
 
+        from employee.methods.user_bootstrap import bootstrap_employee_access
+
+        bootstrap_employee_access(self, skip_if_assigned=True)
         return self
 
 
@@ -849,6 +839,13 @@ class EmployeeWorkInformation(models.Model):
         null=True,
         blank=True,
         verbose_name=_("Job Role"),
+    )
+    job_grade = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        verbose_name=_("Job Grade"),
+        help_text=_("Grade band used for leave accrual rules (e.g. L1, M2)"),
     )
     reporting_manager_id = models.ForeignKey(
         Employee,
@@ -1039,6 +1036,21 @@ class EmployeeBankDetails(HorillaModel):
     )
     any_other_code2 = models.CharField(
         max_length=50, null=True, blank=True, verbose_name="Bank Code #2"
+    )
+    pan_number = models.CharField(
+        max_length=20, null=True, blank=True, verbose_name=_("PAN Number")
+    )
+    uan_number = models.CharField(
+        max_length=20, null=True, blank=True, verbose_name=_("UAN Number")
+    )
+    pf_number = models.CharField(
+        max_length=30, null=True, blank=True, verbose_name=_("PF Number")
+    )
+    esi_number = models.CharField(
+        max_length=20, null=True, blank=True, verbose_name=_("ESI Number")
+    )
+    ifsc_code = models.CharField(
+        max_length=20, null=True, blank=True, verbose_name=_("IFSC Code")
     )
     additional_info = models.JSONField(null=True, blank=True)
     objects = HorillaCompanyManager(

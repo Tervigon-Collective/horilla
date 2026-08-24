@@ -31,6 +31,23 @@ from .models import (
 )
 
 
+def scope_leave_filter_employees(form, request) -> None:
+    """Limit employee pickers in leave filters to records the user may access."""
+    if (
+        not request
+        or not getattr(request, "user", None)
+        or not request.user.is_authenticated
+    ):
+        return
+    from employee.cbv.accessibility import accessible_employees_queryset
+
+    employee_qs = accessible_employees_queryset(
+        request, Employee.objects.filter(is_active=True)
+    )
+    if "employee_id" in form.fields:
+        form.fields["employee_id"].queryset = employee_qs
+
+
 class LeaveTypeFilter(FilterSet):
     """
     Filter class for LeaveType model.
@@ -120,6 +137,7 @@ class AssignedLeaveFilter(FilterSet):
 
     def __init__(self, data=None, queryset=None, *, request=None, prefix=None):
         super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
+        scope_leave_filter_employees(self.form, request)
         for field in self.form.fields.keys():
             self.form.fields[field].widget.attrs["id"] = f"{uuid.uuid4()}"
 
@@ -196,13 +214,15 @@ class LeaveRequestFilter(HorillaFilterSet):
         today = datetime.today()
 
         today_leave_requests = queryset.filter(
-            Q(start_date__lte=today) & Q(end_date__gte=today) & Q(status="approved")
+            Q(start_date__lte=today)
+            & (Q(end_date__gte=today) | Q(end_date__isnull=True))
+            & Q(status="approved")
         )
         start_of_week = today - timedelta(days=today.weekday())
         end_of_week = start_of_week + timedelta(days=6)
         weekly_leave_requests = queryset.filter(
-            status="approved", start_date__lte=end_of_week, end_date__gte=start_of_week
-        )
+            status="approved", start_date__lte=end_of_week
+        ).filter(Q(end_date__gte=start_of_week) | Q(end_date__isnull=True))
         start_of_month = today.replace(day=1)
         end_of_month = start_of_month.replace(day=28) + timedelta(days=4)
         if end_of_month.month != today.month:
@@ -210,16 +230,15 @@ class LeaveRequestFilter(HorillaFilterSet):
         monthly_leave_requests = queryset.filter(
             status="approved",
             start_date__lte=end_of_month,
-            end_date__gte=start_of_month,
-        )
+        ).filter(Q(end_date__gte=start_of_month) | Q(end_date__isnull=True))
         start_of_year = today.replace(month=1, day=1)
         end_of_year = today.replace(month=12, day=31)
         yearly_leave_requests = (
             queryset.filter(
                 status="approved",
                 start_date__lte=end_of_year,
-                end_date__gte=start_of_year,
             )
+            .filter(Q(end_date__gte=start_of_year) | Q(end_date__isnull=True))
             .annotate(year=TruncYear("start_date"))
             .filter(year=start_of_year)
         )
@@ -237,7 +256,7 @@ class LeaveRequestFilter(HorillaFilterSet):
         if value:
             today = now().date()
             return queryset.filter(start_date__lte=today).filter(
-                Q(end_date__gte=today) | Q(end_date__isnull=True, start_date=today)
+                Q(end_date__gte=today) | Q(end_date__isnull=True)
             )
         return queryset
 
@@ -284,6 +303,7 @@ class LeaveRequestFilter(HorillaFilterSet):
 
     def __init__(self, data=None, queryset=None, *, request=None, prefix=None):
         super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
+        scope_leave_filter_employees(self.form, request)
         for field in self.form.fields.keys():
             self.form.fields[field].widget.attrs["id"] = f"{uuid.uuid4()}"
 
@@ -371,8 +391,9 @@ class LeaveAllocationRequestFilter(FilterSet):
             "employee_id": ["exact"],
         }
 
-
-class LeaveRequestReGroup:
+    def __init__(self, data=None, queryset=None, *, request=None, prefix=None):
+        super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
+        scope_leave_filter_employees(self.form, request)
     """
     Class to keep the field name for group by option
     """

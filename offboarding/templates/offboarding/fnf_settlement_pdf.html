@@ -1,0 +1,65 @@
+{% load i18n %}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>F&amp;F Settlement — {{ employee.get_full_name }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; font-size: 12px; color: #222; margin: 36px; line-height: 1.45; }
+        h1 { font-size: 16px; text-align: center; margin-bottom: 4px; }
+        .muted { color: #666; font-size: 11px; text-align: center; }
+        .meta { margin: 18px 0; }
+        table { width: 100%; border-collapse: collapse; margin: 12px 0 18px; }
+        th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+        th { background: #f5f5f5; }
+        .right { text-align: right; }
+        .sign { margin-top: 48px; }
+    </style>
+</head>
+<body>
+    <h1>{{ company.company|default:"Company" }}</h1>
+    <p class="muted">{{ company.address|default:"" }}</p>
+    <p class="muted">{% trans "Full & Final Settlement" %}{% if record %} — {{ record.get_status_display }}{% endif %}</p>
+
+    <div class="meta">
+        <p><strong>{% trans "Employee" %}:</strong> {{ employee.get_full_name }}{% if employee.badge_id %} ({{ employee.badge_id }}){% endif %}</p>
+        {% if work %}
+        <p><strong>{% trans "Department" %}:</strong> {{ work.department_id|default:"—" }}
+           · <strong>{% trans "Designation" %}:</strong> {{ work.job_position_id|default:"—" }}</p>
+        {% endif %}
+        <p><strong>{% trans "Last working day" %}:</strong> {{ settlement.last_working_day }}</p>
+        <p><strong>{% trans "Years of service" %}:</strong> {{ settlement.years_of_service }}</p>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>{% trans "Component" %}</th>
+                <th class="right">{% trans "Amount" %}</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>{% trans "Gratuity" %}</td><td class="right">{% if record %}{{ record.gratuity|floatformat:2 }}{% else %}{{ settlement.gratuity|floatformat:2 }}{% endif %}</td></tr>
+            <tr><td>{% trans "Unpaid bonus" %}</td><td class="right">{% if record %}{{ record.bonus_unpaid|floatformat:2 }}{% else %}{{ settlement.bonus_unpaid|floatformat:2 }}{% endif %}</td></tr>
+            <tr><td>{% trans "Leave encashment" %}</td><td class="right">{% if record %}{{ record.leave_encashment|floatformat:2 }}{% else %}{{ settlement.leave_encashment|floatformat:2 }}{% endif %}</td></tr>
+            <tr><td>{% trans "Notice period pay" %}</td><td class="right">{% if record %}{{ record.notice_period_pay|floatformat:2 }}{% else %}{{ settlement.notice_period_pay|floatformat:2 }}{% endif %}</td></tr>
+            <tr><td>{% trans "Other additions" %}</td><td class="right">{% if record %}{{ record.other_additions|floatformat:2 }}{% else %}0.00{% endif %}</td></tr>
+            <tr><td>{% trans "Loan / advance recovery" %}</td><td class="right">({% if record %}{{ record.loan_recovery|floatformat:2 }}{% else %}{{ settlement.loan_recovery|floatformat:2 }}{% endif %})</td></tr>
+            <tr><td>{% trans "Other deductions" %}</td><td class="right">({% if record %}{{ record.other_deductions|floatformat:2 }}{% else %}0.00{% endif %})</td></tr>
+            <tr>
+                <td><strong>{% trans "Net payable" %}</strong></td>
+                <td class="right"><strong>{% if record %}{{ record.net_payable|floatformat:2 }}{% else %}{{ settlement.net_payable|floatformat:2 }}{% endif %}</strong></td>
+            </tr>
+        </tbody>
+    </table>
+
+    {% if record and record.remarks %}<p>{{ record.remarks }}</p>{% endif %}
+    <p class="muted">{% trans "This statement is generated from Horilla HRMS. Verify statutory amounts before bank transfer." %}</p>
+
+    <div class="sign">
+        <p>{% trans "For" %} {{ company.company|default:"the Company" }}</p>
+        <br><br>
+        <p>________________________<br>{% trans "Authorized signatory" %}</p>
+    </div>
+</body>
+</html>

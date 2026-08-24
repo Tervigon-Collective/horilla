@@ -46,6 +46,25 @@ def pms_owner_and_manager_can_enter(function, perm):
     def _function(request, *args, **kwargs):
         user = request.user
         employee = user.employee_get
+        emp_obj_id = kwargs.get("emp_obj_id") or kwargs.get("id")
+        if emp_obj_id:
+            emp_objective = EmployeeObjective.objects.filter(id=emp_obj_id).first()
+            if not emp_objective:
+                return handle_no_permission(request)
+            objective = emp_objective.objective_id
+            is_owner = emp_objective.employee_id == employee
+            is_obj_manager = objective and employee in objective.managers.all()
+            is_reporting = False
+            try:
+                from base.methods import check_manager
+
+                is_reporting = check_manager(employee, emp_objective.employee_id)
+            except Exception:
+                pass
+            if user.has_perm(perm) or is_owner or is_obj_manager or is_reporting:
+                return function(request, *args, **kwargs)
+            return handle_no_permission(request)
+
         is_manager = EmployeeWorkInformation.objects.filter(
             reporting_manager_id=employee
         ).exists()
@@ -64,6 +83,24 @@ def pms_owner_and_manager_can_enter(function, perm):
         return handle_no_permission(request)
 
     return _function
+
+
+def can_mutate_employee_key_result(request, employee_key_result) -> bool:
+    """Owner of the employee objective, objective managers, or change_employeekeyresult."""
+    if not employee_key_result or not request.user.is_authenticated:
+        return False
+    if request.user.is_superuser or request.user.has_perm("pms.change_employeekeyresult"):
+        return True
+    actor = getattr(request.user, "employee_get", None)
+    if not actor:
+        return False
+    emp_obj = employee_key_result.employee_objective_id
+    if emp_obj and emp_obj.employee_id == actor:
+        return True
+    objective = getattr(emp_obj, "objective_id", None) if emp_obj else None
+    if objective and actor in objective.managers.all():
+        return True
+    return False
 
 
 def check_permission_feedback_detailed_view(request, feedback, perm):

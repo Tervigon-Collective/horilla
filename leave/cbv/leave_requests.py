@@ -35,7 +35,7 @@ from horilla_views.generic.cbv.views import (
 )
 from leave.filters import LeaveRequestFilter
 from leave.forms import LeaveRequestCreationForm, LeaveRequestExportForm
-from leave.methods import filter_conditional_leave_request
+from leave.methods import filter_conditional_leave_request, scope_leave_requests
 from leave.models import AvailableLeave, LeaveRequest, LeaveType
 from leave.threading import LeaveMailSendThread
 from leave.views import multiple_approvals_check
@@ -295,6 +295,12 @@ class LeaveRequestsNavView(HorillaNavView):
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
 
+    def get_context_data(self, **kwargs: Any):
+        from leave.cbv.accessibility import apply_leave_nav_filter_context
+
+        context = super().get_context_data(**kwargs)
+        return apply_leave_nav_filter_context(self, context)
+
 
 @method_decorator(login_required, name="dispatch")
 @method_decorator(hx_request_required, name="dispatch")
@@ -310,9 +316,9 @@ class LeaveRequestsExportNav(TemplateView):
         """
         get data for export
         """
-        data = LeaveRequest.objects.all()
+        data = scope_leave_requests(self.request, LeaveRequest.objects.all())
         export_form = LeaveRequestExportForm
-        export_filter = LeaveRequestFilter(queryset=data)
+        export_filter = LeaveRequestFilter(queryset=data, request=self.request)
         context = super().get_context_data(**kwargs)
         context["export_form"] = export_form
         context["export_filter"] = export_filter
@@ -501,36 +507,10 @@ class LeaveRequestFormView(HorillaFormView):
                 save = True
 
                 if leave_request.leave_type_id.require_approval == "no":
-                    employee_id = leave_request.employee_id
-                    leave_type_id = leave_request.leave_type_id
-                    available_leave = AvailableLeave.objects.get(
-                        leave_type_id=leave_type_id, employee_id=employee_id
-                    )
+                    from leave.services import apply_auto_approve_deduction
+
                     leave_request.created_by = self.request.user.employee_get
-                    leave_request.save()
-                    if leave_request.requested_days > available_leave.available_days:
-                        leave = (
-                            leave_request.requested_days
-                            - available_leave.available_days
-                        )
-                        leave_request.approved_available_days = (
-                            available_leave.available_days
-                        )
-                        available_leave.available_days = 0
-                        available_leave.carryforward_days = (
-                            available_leave.carryforward_days - leave
-                        )
-                        leave_request.approved_carryforward_days = leave
-                    else:
-                        available_leave.available_days = (
-                            available_leave.available_days
-                            - leave_request.requested_days
-                        )
-                        leave_request.approved_available_days = (
-                            leave_request.requested_days
-                        )
-                    leave_request.status = "approved"
-                    available_leave.save()
+                    apply_auto_approve_deduction(leave_request)
                 if save:
                     leave_request.created_by = self.request.user.employee_get
                     leave_request.save()
@@ -643,8 +623,8 @@ class DashboardOnLeaveTable(LeaveRequestsListView):
         today = date.today()
 
         self.queryset = queryset.filter(
-            start_date__lte=today, end_date__gte=today, status="approved"
-        )
+            start_date__lte=today, status="approved"
+        ).filter(Q(end_date__gte=today) | Q(end_date__isnull=True))
 
         return self.queryset
 

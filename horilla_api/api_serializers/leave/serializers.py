@@ -3,13 +3,13 @@ from rest_framework import serializers
 
 from employee.models import Employee
 from horilla_api.api_methods.base.methods import mobile_file_path
-from leave.methods import calculate_requested_days
+from leave.methods import calculate_requested_days, overlapping_date_q
 from leave.models import *
 
 
 def leave_Validations(self, data):
     start_date = data.get("start_date")
-    end_date = data.get("end_date")
+    end_date = data.get("end_date") or start_date
     start_date_breakdown = (
         data.get("start_date_breakdown")
         if data.get("start_date_breakdown") is not None
@@ -54,8 +54,8 @@ def leave_Validations(self, data):
     errors = {}
     # checking if there is any requested days is overlapping with the existing leave request
     leave_requests = employee.leaverequest_set.filter(
-        start_date__lte=end_date, end_date__gte=start_date
-    )
+        overlapping_date_q(start_date, end_date)
+    ).exclude(status__in=["cancelled", "rejected"])
     if self.instance:
         leave_requests = leave_requests.exclude(id=self.instance.id)
     if leave_requests:
@@ -521,9 +521,14 @@ class LeaveRequestApproveSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(_("Nothing to approve."))
         employee_id = leave_request.employee_id
         leave_type_id = leave_request.leave_type_id
-        available_leave = AvailableLeave.objects.get(
+        available_leave = AvailableLeave.objects.filter(
             leave_type_id=leave_type_id, employee_id=employee_id
-        )
+        ).first()
+        if not available_leave:
+            raise serializers.ValidationError(
+                _("Employee is not assigned with leave type %(leave_type)s.")
+                % {"leave_type": leave_type_id}
+            )
         total_available_leave = (
             available_leave.available_days + available_leave.carryforward_days
         )

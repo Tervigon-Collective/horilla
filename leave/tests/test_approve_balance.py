@@ -72,10 +72,10 @@ class LeaveRequestApproveBalanceTests(TestCase):
         req = self._request(3)
         req.no_approval()
         avail.refresh_from_db()
-        self.assertEqual(avail.available_days, 0)
-        self.assertEqual(avail.carryforward_days, 2)
-        self.assertEqual(req.approved_available_days, 1)
-        self.assertEqual(req.approved_carryforward_days, 2)
+        self.assertEqual(avail.available_days, 1)
+        self.assertEqual(avail.carryforward_days, 1)
+        self.assertEqual(req.approved_available_days, 0)
+        self.assertEqual(req.approved_carryforward_days, 3)
         self.assertEqual(req.status, "approved")
 
     def test_insufficient_balance_gate_blocks(self):

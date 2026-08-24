@@ -1,0 +1,165 @@
+{% extends "index.html" %}
+{% load i18n horillafilters %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+
+<div class="is-page">
+    <div class="is-page-head">
+        <h1 class="is-page-head__title">{% trans "CTC Wizard" %}</h1>
+        <p class="is-page-head__desc">{{ contract.employee_id.get_full_name }} · {{ contract.contract_name }}</p>
+    </div>
+
+    <div class="is-section">
+        <div class="is-section__header">
+            <span class="is-section__icon"><ion-icon name="calculator-outline"></ion-icon></span>
+            <div>
+                <h3 class="is-section__title">{% trans "Split monthly CTC" %}</h3>
+                <p class="is-section__desc">{% trans "Auto-split into Basic, HRA, and Special Allowance on the contract." %}</p>
+            </div>
+        </div>
+        <div class="is-section__body">
+            <form method="post">
+                {% csrf_token %}
+                <div class="is-form-grid">
+                    <div class="is-field">
+                        <label class="oh-label" for="monthly_ctc">{% trans "Monthly CTC" %}</label>
+                        <input type="number" step="0.01" min="0" name="monthly_ctc" id="monthly_ctc"
+                               class="oh-input" value="{{ preview_ctc }}" required>
+                    </div>
+                    <div class="is-field">
+                        <label class="oh-label" for="effective_date">{% trans "Effective date" %}</label>
+                        <input type="date" name="effective_date" id="effective_date"
+                               class="oh-input" value="{{ today }}" required>
+                    </div>
+                    <div class="is-field">
+                        <label class="oh-label">{% trans "Metro city (HRA 50% of Basic)" %}</label>
+                        <label class="oh-switch">
+                            <input type="checkbox" name="metro" value="1" {% if metro %}checked{% endif %}>
+                            <span class="oh-switch__slider"></span>
+                        </label>
+                    </div>
+                    <div class="is-field" style="grid-column:1/-1;">
+                        <label class="oh-label" for="note">{% trans "Letter note (optional)" %}</label>
+                        <input type="text" name="note" id="note" class="oh-input"
+                               placeholder="{% trans 'Annual increment / promotion / correction' %}">
+                    </div>
+                    <div class="is-field" style="align-self:end;">
+                        <button type="submit" class="oh-btn oh-btn--secondary" style="width:100%;">
+                            <ion-icon name="checkmark-outline"></ion-icon>
+                            {% trans "Apply and generate letter" %}
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    {% if split %}
+    <div class="is-section">
+        <div class="is-section__header">
+            <span class="is-section__icon"><ion-icon name="pie-chart-outline"></ion-icon></span>
+            <div>
+                <h3 class="is-section__title">{% trans "Preview split" %}</h3>
+                <p class="is-section__desc">{% trans "Basic is set on contract wage; HRA and Special Allowance are created as fixed employee allowances." %}</p>
+            </div>
+        </div>
+        <div class="is-section__body is-section__body--flush">
+            <div class="is-table-wrap">
+                <table class="is-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Component" %}</th>
+                            <th>{% trans "Monthly" %}</th>
+                            <th>{% trans "Annual" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>{% trans "Basic" %}</td>
+                            <td class="is-num">{{ split.basic|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ split.annual_basic|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        <tr>
+                            <td>{% trans "HRA" %}</td>
+                            <td class="is-num">{{ split.hra|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ split.annual_hra|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        <tr>
+                            <td>{% trans "Special Allowance" %}</td>
+                            <td class="is-num">{{ split.special|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ split.annual_special|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td>{% trans "Total CTC" %}</td>
+                            <td class="is-num">{{ split.monthly_ctc|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ split.annual_ctc|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if snapshot %}
+    <p class="is-muted" style="margin-top:8px;font-size:13px;">
+        {% trans "Current reconstructed CTC" %}:
+        {{ snapshot.monthly_ctc|floatformat:2|currency_symbol_position }}
+        ({% trans "Basic" %} {{ snapshot.basic|floatformat:2|currency_symbol_position }}
+        · {% trans "HRA" %} {{ snapshot.hra|floatformat:2|currency_symbol_position }}
+        · {% trans "Special" %} {{ snapshot.special|floatformat:2|currency_symbol_position }})
+    </p>
+    {% endif %}
+
+    {% if revisions %}
+    <div class="is-section">
+        <div class="is-section__header">
+            <span class="is-section__icon"><ion-icon name="document-text-outline"></ion-icon></span>
+            <div>
+                <h3 class="is-section__title">{% trans "Revision letters" %}</h3>
+            </div>
+        </div>
+        <div class="is-section__body is-section__body--flush">
+            <div class="is-table-wrap">
+                <table class="is-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Effective" %}</th>
+                            <th>{% trans "From CTC" %}</th>
+                            <th>{% trans "To CTC" %}</th>
+                            <th>{% trans "Change" %}</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for rev in revisions %}
+                        <tr>
+                            <td>{{ rev.effective_date }}</td>
+                            <td class="is-num">{{ rev.previous_monthly_ctc|floatformat:0|currency_symbol_position }}</td>
+                            <td class="is-num">{{ rev.new_monthly_ctc|floatformat:0|currency_symbol_position }}</td>
+                            <td class="is-num">{{ rev.increment_percent|floatformat:1 }}%</td>
+                            <td>
+                                <a href="{% url 'salary-revision-letter' revision_id=rev.pk %}" class="oh-btn oh-btn--light oh-btn--sm">
+                                    {% trans "Letter" %}
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="is-actions-row" style="margin-top:16px;">
+        <a href="{% url 'update-contract' contract_id=contract.pk %}" class="oh-btn oh-btn--light oh-btn--sm">
+            <ion-icon name="arrow-back-outline"></ion-icon>
+            {% trans "Back to contract" %}
+        </a>
+    </div>
+</div>
+{% endblock content %}

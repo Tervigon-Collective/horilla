@@ -593,7 +593,10 @@ def update_candidate_stage_and_sequence(request):
 
     for index, cand_id in enumerate(order_list):
         pipeline_cache["candidates"].filter(id=cand_id).update(
-            sequence=index, stage_id=stage
+            sequence=index,
+            stage_id=stage,
+            hired=(stage.stage_type == "hired"),
+            canceled=(stage.stage_type == "cancelled"),
         )
 
     if stage.stage_type == "hired" and stage.recruitment_id.is_vacancy_filled():
@@ -624,6 +627,7 @@ def update_candidate_sequence(request):
             sequence=index,
             stage_id=stage,
             hired=(stage.stage_type == "hired"),
+            canceled=(stage.stage_type == "cancelled"),
         )
 
     return JsonResponse({})
@@ -943,7 +947,8 @@ def candidate_stage_update(request, cand_id):
         candidate_obj.hired = stage_obj.stage_type == "hired"
         candidate_obj.canceled = stage_obj.stage_type == "cancelled"
         candidate_obj.schedule_date = schedule_date
-        candidate_obj.start_onboard = False
+        if stage_obj.stage_type != "hired":
+            candidate_obj.start_onboard = False
         candidate_obj.save()
         with contextlib.suppress(Exception):
             managers = stage_obj.stage_managers.select_related("employee_user_id")
@@ -1148,6 +1153,7 @@ def add_more_individual_files(request, id):
 
 @login_required
 @hx_request_required
+@manager_can_enter(perm="recruitment.change_stagenote")
 def delete_stage_note_file(request, id):
     """
     This method is used to delete the stage note file
@@ -1165,6 +1171,7 @@ def delete_stage_note_file(request, id):
 
 @login_required
 @hx_request_required
+@manager_can_enter(perm="recruitment.change_stagenote")
 def delete_individual_note_file(request, id):
     """
     This method is used to delete the stage note file
@@ -1399,6 +1406,7 @@ def add_candidate(request):
 @login_required
 @require_http_methods(["POST"])
 @hx_request_required
+@manager_can_enter(perm="recruitment.change_stage")
 def stage_title_update(request, stage_id):
     """
     This method is used to update the name of recruitment stage
@@ -2133,6 +2141,10 @@ def candidate_conversion(request, cand_id, **kwargs):
             work_info.department_id = candidate_obj.job_position_id.department_id
             work_info.company_id = candidate_obj.recruitment_id.company_id
             work_info.save()
+
+            from employee.methods.user_bootstrap import bootstrap_employee_access
+
+            bootstrap_employee_access(new_employee, skip_if_assigned=True)
 
             Document.objects.bulk_create(
                 [
@@ -3435,7 +3447,7 @@ def extract_text_with_font_info(pdf):
                                 "capitalization": sum(
                                     1 for c in span["text"] if c.isupper()
                                 )
-                                / len(span["text"]),
+                                / max(len(span["text"]), 1),
                             }
                         )
             except:
@@ -3867,6 +3879,7 @@ def hired_candidate_chart(request):
 
 @login_required
 @hx_request_required
+@manager_can_enter(perm="recruitment.change_candidate")
 def candidate_document_request(request):
     """
     This function is used to create document requests of an employee in employee requests view.
@@ -3903,6 +3916,7 @@ def candidate_document_request(request):
 
 @login_required
 @hx_request_required
+@manager_can_enter(perm="recruitment.change_candidate")
 def document_create(request, id):
     """
     This function is used to create documents from employee individual & profile view.
@@ -3931,6 +3945,7 @@ def document_create(request, id):
 
 
 @login_required
+@manager_can_enter(perm="recruitment.change_candidate")
 def update_document_title(request, id):
     """
     This function is used to create documents from employee individual & profile view.

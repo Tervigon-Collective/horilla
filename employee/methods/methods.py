@@ -447,6 +447,7 @@ def bulk_create_user_import(success_lists):
             email=row["Email"],
             password=str(row["Phone"]).strip(),
             is_superuser=False,
+            is_new_employee=True,
         )
         for row in success_lists
         if row["Email"] not in existing_usernames

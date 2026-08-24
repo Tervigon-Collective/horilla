@@ -30,6 +30,7 @@ from leave.methods import (
     calculate_requested_days,
     company_leave_dates_list,
     holiday_dates_list,
+    overlapping_date_q,
 )
 from leave.models import AvailableLeave, LeaveRequest, LeaveType, leave_requested_dates
 from leave.threading import LeaveMailSendThread
@@ -335,9 +336,16 @@ class MyLeaveRequestForm(HorillaFormView):
                 end_date_breakdown = leave_request.end_date_breakdown
                 leave_type = leave_request.leave_type_id
                 employee = self.request.user.employee_get
-                available_leave = AvailableLeave.objects.get(
+                available_leave = AvailableLeave.objects.filter(
                     employee_id=employee, leave_type_id=leave_type
-                )
+                ).first()
+                if not available_leave:
+                    form.add_error(
+                        None,
+                        _("Employee is not assigned with leave type %(leave_type)s.")
+                        % {"leave_type": leave_type},
+                    )
+                    return self.form_invalid(form)
                 available_total_leave = (
                     available_leave.available_days + available_leave.carryforward_days
                 )
@@ -348,7 +356,7 @@ class MyLeaveRequestForm(HorillaFormView):
                 holidays = Holidays.objects.filter(
                     Q(is_specific=False) | Q(employees=employee)
                 )
-                holiday_dates = holiday_dates_list(holidays)
+                holiday_dates = holiday_dates_list(holidays, start_date, end_date)
                 company_leaves = CompanyLeaves.objects.all()
                 company_leave_dates = company_leave_dates_list(
                     company_leaves, start_date
@@ -393,37 +401,9 @@ class MyLeaveRequestForm(HorillaFormView):
                         leave_request = form.save(commit=False)
                         save = True
                         if leave_request.leave_type_id.require_approval == "no":
-                            employee_id = leave_request.employee_id
-                            leave_type_id = leave_request.leave_type_id
-                            available_leave = AvailableLeave.objects.get(
-                                leave_type_id=leave_type_id, employee_id=employee_id
-                            )
-                            if (
-                                leave_request.requested_days
-                                > available_leave.available_days
-                            ):
-                                leave = (
-                                    leave_request.requested_days
-                                    - available_leave.available_days
-                                )
-                                leave_request.approved_available_days = (
-                                    available_leave.available_days
-                                )
-                                available_leave.available_days = 0
-                                available_leave.carryforward_days = (
-                                    available_leave.carryforward_days - leave
-                                )
-                                leave_request.approved_carryforward_days = leave
-                            else:
-                                available_leave.available_days = (
-                                    available_leave.available_days
-                                    - leave_request.requested_days
-                                )
-                                leave_request.approved_available_days = (
-                                    leave_request.requested_days
-                                )
-                            leave_request.status = "approved"
-                            available_leave.save()
+                            from leave.services import apply_auto_approve_deduction
+
+                            apply_auto_approve_deduction(leave_request)
                         if save:
                             leave_request.created_by = self.request.user.employee_get
                             leave_request.save()
@@ -510,9 +490,16 @@ class MyLeaveRequestSingleForm(HorillaFormView):
         end_date = datetime.strptime(self.request.POST.get("end_date"), "%Y-%m-%d")
         start_date_breakdown = self.request.POST.get("start_date_breakdown")
         end_date_breakdown = self.request.POST.get("end_date_breakdown")
-        available_leave = AvailableLeave.objects.get(
+        available_leave = AvailableLeave.objects.filter(
             employee_id=employee, leave_type_id=leave_type
-        )
+        ).first()
+        if not available_leave:
+            form.add_error(
+                None,
+                _("Employee is not assigned with leave type %(leave_type)s.")
+                % {"leave_type": leave_type},
+            )
+            return self.form_invalid(form)
         available_total_leave = (
             available_leave.available_days + available_leave.carryforward_days
         )
@@ -522,7 +509,7 @@ class MyLeaveRequestSingleForm(HorillaFormView):
         requested_dates = leave_requested_dates(start_date, end_date)
         requested_dates = [date.date() for date in requested_dates]
         holidays = Holidays.objects.filter(Q(is_specific=False) | Q(employees=employee))
-        holiday_dates = holiday_dates_list(holidays)
+        holiday_dates = holiday_dates_list(holidays, start_date, end_date)
         company_leaves = CompanyLeaves.objects.all()
         company_leave_dates = company_leave_dates_list(company_leaves, start_date)
         if (
@@ -548,8 +535,10 @@ class MyLeaveRequestSingleForm(HorillaFormView):
                 )
                 requested_days = requested_days - company_leave_count
         overlapping_requests = LeaveRequest.objects.filter(
-            employee_id=employee, start_date__lte=end_date, end_date__gte=start_date
-        ).exclude(status__in=["cancelled", "rejected"])
+            employee_id=employee
+        ).filter(overlapping_date_q(start_date, end_date)).exclude(
+            status__in=["cancelled", "rejected"]
+        )
         if overlapping_requests.exists():
             form.add_error(
                 None, _("There is already a leave request for this date range")
@@ -565,34 +554,9 @@ class MyLeaveRequestSingleForm(HorillaFormView):
                 leave_request.employee_id = employee
 
                 if leave_request.leave_type_id.require_approval == "no":
-                    employee_id = leave_request.employee_id
-                    leave_type_id = leave_request.leave_type_id
-                    available_leave = AvailableLeave.objects.get(
-                        leave_type_id=leave_type_id, employee_id=employee_id
-                    )
-                    if leave_request.requested_days > available_leave.available_days:
-                        leave = (
-                            leave_request.requested_days
-                            - available_leave.available_days
-                        )
-                        leave_request.approved_available_days = (
-                            available_leave.available_days
-                        )
-                        available_leave.available_days = 0
-                        available_leave.carryforward_days = (
-                            available_leave.carryforward_days - leave
-                        )
-                        leave_request.approved_carryforward_days = leave
-                    else:
-                        available_leave.available_days = (
-                            available_leave.available_days
-                            - leave_request.requested_days
-                        )
-                        leave_request.approved_available_days = (
-                            leave_request.requested_days
-                        )
-                    leave_request.status = "approved"
-                    available_leave.save()
+                    from leave.services import apply_auto_approve_deduction
+
+                    apply_auto_approve_deduction(leave_request)
                 if save:
                     leave_request.created_by = employee
                     leave_request.save()

@@ -256,23 +256,25 @@ class TaskTimeSheet(TimeSheetList):
         queryset = HorillaListView.get_queryset(self)
         task_id = self.kwargs.get("task_id")
         task = Task.objects.filter(id=task_id).first()
-        queryset = TimeSheet.objects.filter(task_id=task_id)
-        employee_id = self.request.GET.get("employee_id")
-        if employee_id and employee_id.isdigit():
-            employee = Employee.objects.filter(id=employee_id).first()
-            if not task:
-                return queryset.none()
-            if (
-                employee
-                and not employee in task.task_managers.all()
-                and not employee in task.project.managers.all()
-                and not employee.employee_user_id.is_superuser
-            ):
-                queryset = queryset.filter(employee_id=employee_id)
-        else:
+        if not task:
             return queryset.none()
-
-        return queryset
+        queryset = TimeSheet.objects.filter(task_id=task_id)
+        actor = self.request.user.employee_get
+        # Managers / perm holders see all timesheets on the task; others only own.
+        is_manager = (
+            self.request.user.is_superuser
+            or self.request.user.has_perm("project.view_timesheet")
+            or (actor and actor in task.task_managers.all())
+            or (actor and task.project and actor in task.project.managers.all())
+        )
+        employee_id = self.request.GET.get("employee_id")
+        if is_manager:
+            if employee_id and employee_id.isdigit():
+                queryset = queryset.filter(employee_id=employee_id)
+            return queryset
+        if actor:
+            return queryset.filter(employee_id=actor)
+        return queryset.none()
 
 
 @method_decorator(login_required, name="dispatch")
@@ -391,7 +393,14 @@ class TimeSheetFormView(HorillaFormView):
         return context
 
     def form_valid(self, form: TimeSheetForm) -> HttpResponse:
+        from project.methods import time_sheet_update_permissions
+
         if form.is_valid():
+            if form.instance.pk and not time_sheet_update_permissions(
+                self.request, form.instance.pk
+            ):
+                messages.error(self.request, _("You don't have permission."))
+                return self.HttpResponse()
             if form.instance.pk:
                 message = _(f"{self.form.instance} Updated")
             else:

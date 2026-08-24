@@ -32,6 +32,11 @@ def _parse_period(request):
     return from_date, to_date
 
 
+def _period_end(to_date):
+    """Last day of the selected period that is not in the future."""
+    return min(to_date, date.today())
+
+
 @login_required
 @permission_required("leave.delete_leaverequest")
 def leave_dashboard_view(request):
@@ -46,6 +51,7 @@ def leave_kpi_data(request):
     from leave.models import AvailableLeave, LeaveAllocationRequest, LeaveRequest
 
     from_date, to_date = _parse_period(request)
+    period_end = _period_end(to_date)
     first_of_month = from_date
     real_today = date.today()  # always current date for point-in-time metrics
 
@@ -54,13 +60,13 @@ def leave_kpi_data(request):
     approved_this_month = LeaveRequest.objects.filter(
         status="approved",
         start_date__gte=first_of_month,
-        start_date__lte=to_date,
+        start_date__lte=period_end,
     ).count()
 
     rejected_this_month = LeaveRequest.objects.filter(
         status="rejected",
         start_date__gte=first_of_month,
-        start_date__lte=to_date,
+        start_date__lte=period_end,
     ).count()
 
     # Always reflects who is on leave right now, independent of the date filter
@@ -82,7 +88,7 @@ def leave_kpi_data(request):
     total_days_used = LeaveRequest.objects.filter(
         status="approved",
         start_date__gte=first_of_month,
-        start_date__lte=to_date,
+        start_date__lte=period_end,
     ).aggregate(total=Coalesce(Sum("requested_days"), 0.0, output_field=FloatField()))[
         "total"
     ]
@@ -115,9 +121,9 @@ def leave_kpi_data(request):
             "total_days_used": round(float(total_days_used), 1),
             "pending_allocations": pending_allocations,
             "pending_comp": pending_comp,
-            "month": to_date.strftime("%B %Y"),
+            "month": period_end.strftime("%B %Y"),
             "from_date": first_of_month.isoformat(),
-            "to_date": to_date.isoformat(),
+            "to_date": period_end.isoformat(),
             "today": real_today.isoformat(),
         }
     )
@@ -130,7 +136,7 @@ def leave_monthly_trend(request):
     from leave.models import LeaveRequest
 
     _, to_date = _parse_period(request)
-    today = to_date
+    today = _period_end(to_date)
     months = []
 
     base = today.replace(day=1)
@@ -187,7 +193,7 @@ def leave_type_distribution(request):
     from leave.models import LeaveRequest
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    today = _period_end(to_date)
     first_of_month = from_date
     types = []
 
@@ -230,7 +236,7 @@ def leave_department_breakdown(request):
     from leave.models import LeaveRequest
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    today = _period_end(to_date)
     first_of_month = from_date
     departments = []
 
@@ -269,6 +275,7 @@ def leave_utilization_rate(request):
     from leave.models import AvailableLeave, LeaveRequest
 
     from_date, to_date = _parse_period(request)
+    period_end = _period_end(to_date)
     utilization = []
 
     try:
@@ -288,7 +295,7 @@ def leave_utilization_rate(request):
             for row in (
                 LeaveRequest.objects.filter(
                     status="approved",
-                    start_date__lte=to_date,
+                    start_date__lte=period_end,
                     end_date__gte=from_date,
                 )
                 .values("leave_type_id")
@@ -327,7 +334,7 @@ def leave_paid_unpaid_split(request):
     from leave.models import LeaveRequest
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    today = _period_end(to_date)
     first_of_month = from_date
 
     paid = 0
@@ -370,7 +377,7 @@ def leave_top_takers(request):
     from leave.models import LeaveRequest
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    today = _period_end(to_date)
     first_of_month = from_date
     takers = []
 
@@ -429,13 +436,14 @@ def leave_on_leave_today(request):
     from leave.models import LeaveRequest
 
     from_date, to_date = _parse_period(request)
+    period_end = _period_end(to_date)
     today = date.today()
     employees = []
 
     try:
         qs = (
             LeaveRequest.objects.filter(
-                start_date__lte=to_date,
+                start_date__lte=period_end,
                 end_date__gte=from_date,
                 status="approved",
             )
@@ -473,6 +481,7 @@ def leave_upcoming_holidays(request):
     from base.models import Holidays
 
     from_date, to_date = _parse_period(request)
+    period_end = _period_end(to_date)
     today = date.today()
     holidays = []
 
@@ -480,7 +489,7 @@ def leave_upcoming_holidays(request):
         qs = Holidays.objects.filter(
             is_specific=False,
             start_date__gte=from_date,
-            start_date__lte=to_date,
+            start_date__lte=period_end,
         ).order_by("start_date")[:10]
 
         for h in qs:
@@ -509,6 +518,7 @@ def leave_weekly_pattern(request):
     from leave.models import LeaveRequest
 
     from_date, to_date = _parse_period(request)
+    period_end = _period_end(to_date)
     days = [
         "Monday",
         "Tuesday",
@@ -523,13 +533,13 @@ def leave_weekly_pattern(request):
     try:
         leaves = LeaveRequest.objects.filter(
             status="approved",
-            start_date__lte=to_date,
+            start_date__lte=period_end,
             end_date__gte=from_date,
         )
 
         for lr in leaves:
             d = max(lr.start_date, from_date)
-            end = min(lr.end_date or lr.start_date, to_date)
+            end = min(lr.end_date or lr.start_date, period_end)
             while d <= end:
                 counts[d.weekday()] += 1
                 d += timedelta(days=1)
@@ -551,6 +561,7 @@ def leave_upcoming(request):
     from leave.models import LeaveRequest
 
     from_date, to_date = _parse_period(request)
+    period_end = _period_end(to_date)
     today = date.today()
     upcoming = []
 
@@ -559,7 +570,7 @@ def leave_upcoming(request):
             LeaveRequest.objects.filter(
                 status="approved",
                 start_date__gte=from_date,
-                start_date__lte=to_date,
+                start_date__lte=period_end,
             )
             .select_related("employee_id", "leave_type_id")
             .order_by("start_date")[:15]

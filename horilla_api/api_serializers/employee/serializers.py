@@ -48,6 +48,19 @@ class EmployeeListSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data["employee_profile"] = mobile_file_path(instance.employee_profile)
+        request = self.context.get("request")
+        from employee.cbv.accessibility import is_hr_user
+
+        own_or_hr = bool(
+            request
+            and request.user.is_authenticated
+            and (
+                is_hr_user(request)
+                or getattr(instance, "employee_user_id", None) == request.user
+            )
+        )
+        if not own_or_hr:
+            data.pop("employee_bank_details_id", None)
         return data
 
 
@@ -107,6 +120,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
                 "emergency_contact_relation",
             ):
                 data.pop(field, None)
+            data.pop("employee_bank_details_id", None)
         return data
 
     def create(self, validated_data):

@@ -1,0 +1,94 @@
+{% load i18n %}
+<div class="is-io-panel">
+    {% if export_csv_url or show_profiles_export and profiles_export_csv_url or show_ctc_export and ctc_export_csv_url or template_csv_url or profiles_template_csv_url or ctc_template_csv_url %}
+    <div class="is-io-panel__block">
+        <div class="is-io-panel__title">
+            {% trans "Download" %}
+            <span class="is-io-panel__badge">CSV</span>
+        </div>
+        <div class="is-io-panel__actions">
+            {% if export_csv_url %}
+            <a href="{{ export_csv_url }}" class="is-io-btn is-io-btn--download">
+                <ion-icon name="download-outline"></ion-icon>
+                <span>{{ export_label|default:"Export" }}</span>
+            </a>
+            {% endif %}
+            {% if show_profiles_export and profiles_export_csv_url %}
+            <a href="{{ profiles_export_csv_url }}" class="is-io-btn is-io-btn--download">
+                <ion-icon name="download-outline"></ion-icon>
+                <span>{% trans "Statutory profiles" %}</span>
+            </a>
+            {% endif %}
+            {% if show_ctc_export and ctc_export_csv_url %}
+            <a href="{{ ctc_export_csv_url }}" class="is-io-btn is-io-btn--download">
+                <ion-icon name="download-outline"></ion-icon>
+                <span>{% trans "CTC structures" %}</span>
+            </a>
+            {% endif %}
+            {% if template_csv_url %}
+            <a href="{{ template_csv_url }}" class="is-io-btn is-io-btn--template">
+                <ion-icon name="document-outline"></ion-icon>
+                <span>{{ template_label|default:"Import template" }}</span>
+            </a>
+            {% endif %}
+            {% if profiles_template_csv_url %}
+            <a href="{{ profiles_template_csv_url }}" class="is-io-btn is-io-btn--template">
+                <ion-icon name="document-outline"></ion-icon>
+                <span>{% trans "Profiles template" %}</span>
+            </a>
+            {% endif %}
+            {% if ctc_template_csv_url %}
+            <a href="{{ ctc_template_csv_url }}" class="is-io-btn is-io-btn--template">
+                <ion-icon name="document-outline"></ion-icon>
+                <span>{% trans "CTC template" %}</span>
+            </a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if show_form16_import or show_profiles_import or show_ctc_import %}
+    <div class="is-io-panel__block is-io-panel__block--import">
+        <div class="is-io-panel__title">
+            {% trans "Upload" %}
+            <span class="is-io-panel__badge is-io-panel__badge--muted">CSV · Excel · TSV</span>
+        </div>
+        <div class="is-io-panel__uploads">
+            {% if show_form16_import %}
+            <form method="post" action="{% url 'form16-bulk-import' %}" enctype="multipart/form-data" class="is-io-upload">
+                {% csrf_token %}
+                <input type="hidden" name="redirect_to" value="{{ redirect_view }}">
+                <input type="hidden" name="fy" value="{{ import_fy }}">
+                <div class="is-io-upload__label">{% trans "Bulk save Form 16" %}</div>
+                <div class="is-io-upload__row">
+                    <input type="file" name="form16_excel_file" accept=".csv,.tsv,.xlsx,.xls" required class="is-io-upload__file">
+                    <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Upload" %}</button>
+                </div>
+            </form>
+            {% endif %}
+            {% if show_profiles_import %}
+            <form method="post" action="{% url 'statutory-profiles-import' %}" enctype="multipart/form-data" class="is-io-upload">
+                {% csrf_token %}
+                <input type="hidden" name="redirect_to" value="{{ redirect_view }}">
+                <div class="is-io-upload__label">{% trans "Bulk upload profiles" %}</div>
+                <div class="is-io-upload__row">
+                    <input type="file" name="statutory_excel_file" accept=".csv,.tsv,.xlsx,.xls" required class="is-io-upload__file">
+                    <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Upload" %}</button>
+                </div>
+            </form>
+            {% endif %}
+            {% if show_ctc_import %}
+            <form method="post" action="{% url 'ctc-structure-import' %}" enctype="multipart/form-data" class="is-io-upload">
+                {% csrf_token %}
+                <input type="hidden" name="redirect_to" value="{{ redirect_view }}">
+                <div class="is-io-upload__label">{% trans "Bulk upload CTC" %}</div>
+                <div class="is-io-upload__row">
+                    <input type="file" name="ctc_excel_file" accept=".csv,.tsv,.xlsx,.xls" required class="is-io-upload__file">
+                    <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Upload" %}</button>
+                </div>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>

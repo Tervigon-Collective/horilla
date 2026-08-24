@@ -280,6 +280,12 @@ class LeaveAllocationRequestNav(HorillaNavView):
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
 
+    def get_context_data(self, **kwargs: Any):
+        from leave.cbv.accessibility import apply_leave_nav_filter_context
+
+        context = super().get_context_data(**kwargs)
+        return apply_leave_nav_filter_context(self, context)
+
 
 @method_decorator(login_required, name="dispatch")
 class LeaveAllocationRequestDetailView(HorillaDetailedView):

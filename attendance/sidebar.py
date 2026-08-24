@@ -53,6 +53,11 @@ SUBMENUS = [
         "accessibility": "attendance.sidebar.monthly_summary_accessibility",
     },
     {
+        "menu": _("Hours Balance"),
+        "redirect": reverse_lazy("attendance-overtime-view"),
+        "accessibility": "attendance.sidebar.hour_account_accessibility",
+    },
+    {
         "menu": _("Time Policies"),
         "redirect": reverse_lazy("grace-time-view"),
         "accessibility": "attendance.sidebar.validation_condition_accessibility",
@@ -107,6 +112,19 @@ def tracking_accessibility(request, submenu, user_perms, *args, **kwargs):
 def monthly_summary_accessibility(request, submenu, user_perms, *args, **kwargs):
     return request.user.has_perm("attendance.view_attendance") or is_reportingmanager(
         request.user
+    )
+
+
+def hour_account_accessibility(request, submenu, user_perms, *args, **kwargs):
+    """
+    Hours Balance — every employee can view their own records; managers and
+  admins with view_attendanceovertime see team data too.
+    """
+    return (
+        request.user.is_superuser
+        or request.user.has_perm("attendance.view_attendanceovertime")
+        or is_reportingmanager(request.user)
+        or bool(getattr(request.user, "employee_get", None))
     )
 
 

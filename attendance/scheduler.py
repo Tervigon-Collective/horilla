@@ -5,6 +5,7 @@ from datetime import timedelta
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from django.conf import settings
+from django.db import models
 from django.utils import timezone
 
 from base.backends import logger
@@ -63,6 +64,148 @@ def auto_punch_out():
                         )
                     except Exception as e:
                         logger.error(f"auto_punch_out error: {e}")
+
+
+def _is_end_of_day_reached(target_date):
+    """Only mark today's punches after 23:59 local time."""
+    today = timezone.localdate()
+    if target_date < today:
+        return True
+    if target_date > today:
+        return False
+    now = timezone.localtime()
+    cutoff = now.replace(hour=23, minute=59, second=0, microsecond=0)
+    return now >= cutoff
+
+
+def mark_missing_punches():
+    """
+    At end of day (23:59), flag:
+    - Missing punch OUT: checked in but no check-out
+    - Missing punch IN: check-out without check-in on attendance rows
+    - Missing punch IN: active employees on working days with no check-in
+    """
+    from attendance.models import Attendance, WorkRecords
+    from base.methods import get_working_days
+    from employee.models import Employee
+    from leave.models import LeaveRequest
+
+    try:
+        today = timezone.localdate()
+
+        # --- Missing punch OUT ---
+        missing_out = Attendance.objects.filter(
+            attendance_clock_in__isnull=False,
+            attendance_clock_out__isnull=True,
+            missing_punch_out=False,
+            attendance_date__lte=today,
+        )
+        for attendance in missing_out.iterator():
+            if not _is_end_of_day_reached(attendance.attendance_date):
+                continue
+            try:
+                attendance.missing_punch_out = True
+                attendance.save()
+            except Exception as exc:
+                logger.error(
+                    "mark_missing_punches missing_out id=%s: %s",
+                    attendance.pk,
+                    exc,
+                )
+
+        # --- Missing punch IN on attendance rows (out without in) ---
+        missing_in_rows = Attendance.objects.filter(
+            attendance_clock_in__isnull=True,
+            attendance_clock_out__isnull=False,
+            missing_punch_in=False,
+            attendance_date__lte=today,
+        )
+        for attendance in missing_in_rows.iterator():
+            if not _is_end_of_day_reached(attendance.attendance_date):
+                continue
+            try:
+                attendance.missing_punch_in = True
+                attendance.save()
+            except Exception as exc:
+                logger.error(
+                    "mark_missing_punches missing_in row id=%s: %s",
+                    attendance.pk,
+                    exc,
+                )
+
+        # --- Missing punch IN: no check-in on working days (today only at EOD) ---
+        def _mark_no_check_in_for_date(target_date):
+            if not _is_end_of_day_reached(target_date):
+                return
+
+            working_data = get_working_days(target_date, target_date)
+            if target_date not in working_data["working_days_on"]:
+                return
+
+            employees = Employee.objects.filter(is_active=True).select_related(
+                "employee_work_info"
+            )
+            for employee in employees.iterator():
+                try:
+                    work_info = getattr(employee, "employee_work_info", None)
+                    if not work_info or not work_info.shift_id:
+                        continue
+                    if work_info.date_joining and work_info.date_joining > target_date:
+                        continue
+
+                    on_leave = LeaveRequest.objects.filter(
+                        employee_id=employee,
+                        status="approved",
+                        start_date__lte=target_date,
+                        end_date__gte=target_date,
+                    ).exists()
+                    if on_leave:
+                        continue
+
+                    has_check_in = Attendance.objects.filter(
+                        employee_id=employee,
+                        attendance_date=target_date,
+                        attendance_clock_in__isnull=False,
+                    ).exists()
+                    if has_check_in:
+                        continue
+
+                    work_record, _ = WorkRecords.objects.get_or_create(
+                        employee_id=employee,
+                        date=target_date,
+                    )
+                    if work_record.is_leave_record or work_record.work_record_type == "HD":
+                        continue
+                    if work_record.message in ("Missing punch in", "Missing punch out"):
+                        continue
+                    if (
+                        work_record.work_record_type in ("FDP", "HDP")
+                        and work_record.is_attendance_record
+                        and work_record.attendance_id
+                        and work_record.attendance_id.attendance_clock_in
+                    ):
+                        continue
+
+                    work_record.work_record_type = "CONF"
+                    work_record.message = "Missing punch in"
+                    work_record.is_attendance_record = bool(work_record.attendance_id)
+                    if not work_record.shift_id:
+                        work_record.shift_id = work_info.shift_id
+                    work_record.save()
+                except Exception as exc:
+                    logger.error(
+                        "mark_missing_punches no_check_in emp=%s date=%s: %s",
+                        employee.pk,
+                        target_date,
+                        exc,
+                    )
+
+        _mark_no_check_in_for_date(today)
+        for days_ago in range(1, 8):
+            _mark_no_check_in_for_date(today - timedelta(days=days_ago))
+
+    except Exception as e:
+        logger.error(f"mark_missing_punches error: {e}")
 
 
 def create_work_record():
@@ -128,6 +271,15 @@ if not any(
         minutes=5,
         misfire_grace_time=600,
         id="auto_punch_out",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        mark_missing_punches,
+        "cron",
+        hour=23,
+        minute=59,
+        misfire_grace_time=3600,
+        id="mark_missing_punches",
         replace_existing=True,
     )
 

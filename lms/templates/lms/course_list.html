@@ -1,0 +1,45 @@
+{% extends "index.html" %}
+{% load i18n %}
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+<div class="is-page">
+  <div class="is-page-head">
+    <h1 class="is-page-head__title">{% trans "Courses" %}</h1>
+    <p class="is-page-head__desc">{% trans "Learning catalog for employee training." %}</p>
+  </div>
+  <div class="is-actions-row" style="margin-bottom:16px;">
+    {% if perms.lms.add_course %}
+    <a href="{% url 'lms-course-create' %}" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "New course" %}</a>
+    {% endif %}
+    <a href="{% url 'lms-my-learning' %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "My Learning" %}</a>
+  </div>
+  <div class="is-section">
+    <div class="is-section__body is-section__body--flush">
+      <table class="is-table">
+        <thead>
+          <tr>
+            <th>{% trans "Course" %}</th>
+            <th>{% trans "Hours" %}</th>
+            <th>{% trans "Lessons" %}</th>
+            <th>{% trans "Mandatory" %}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in courses %}
+          <tr>
+            <td>{{ c.title }}</td>
+            <td>{{ c.duration_hours }}</td>
+            <td>{{ c.lesson_count }}</td>
+            <td>{% if c.is_mandatory %}{% trans "Yes" %}{% else %}{% trans "No" %}{% endif %}</td>
+            <td><a href="{% url 'lms-course-detail' pk=c.pk %}" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Open" %}</a></td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5" class="is-muted">{% trans "No courses yet." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

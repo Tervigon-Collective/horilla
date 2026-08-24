@@ -107,4 +107,14 @@ urlpatterns = [
     path("attendance-type-check", AttendanceTypeAccessCheck.as_view()),
     path("my-attendance-detailed/<int:id>/", UserAttendanceDetailedView.as_view()),
     path("my-attendance-detailed/<int:id>", UserAttendanceDetailedView.as_view()),
+    path(
+        "monthly-summary/",
+        AttendanceMonthlySummaryAPIView.as_view(),
+        name="api-attendance-monthly-summary",
+    ),
+    path(
+        "monthly-summary",
+        AttendanceMonthlySummaryAPIView.as_view(),
+        name="api-attendance-monthly-summary-noslash",
+    ),
 ]

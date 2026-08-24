@@ -1,0 +1,85 @@
+{% extends "index.html" %}
+{% load i18n horillafilters static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+<div class="is-page">
+{% include "payroll/india_statutory/nav.html" with active_tab="traces" company=company settings=settings %}
+
+<div class="is-page__content">
+    <div class="is-section">
+        <div class="is-section__header">
+            <span class="is-section__icon"><ion-icon name="navigate-outline"></ion-icon></span>
+            <div>
+                <h3 class="is-section__title">{% trans "TRACES / NSDL RPU pack" %}</h3>
+                <p class="is-section__desc">{% trans "Download Annexure I + CSI challan for NSDL RPU. Generate FVU in RPU, then upload the FVU on TRACES." %}</p>
+            </div>
+        </div>
+        <div class="is-section__body">
+
+            <div class="is-io-panel">
+                <div class="is-io-panel__block">
+                    <div class="is-io-panel__title">
+                        {% trans "Form 24Q — TDS quarterly statement" %}
+                        <span class="is-io-panel__badge">ZIP</span>
+                    </div>
+                    <form method="get" action="{% url 'traces-24q-download' %}" class="is-toolbar__form" style="margin-bottom:0.5rem;flex-wrap:wrap;">
+                        <select name="quarter" class="oh-select oh-select-2">
+                            {% for opt in quarter_options %}
+                            <option value="{{ opt.value }}" {% if opt.value == selected_quarter %}selected{% endif %}>{{ opt.label }}</option>
+                            {% endfor %}
+                        </select>
+                        <select name="year" class="oh-select oh-select-2">
+                            {% for y in fy_options %}
+                            <option value="{{ y }}" {% if y == selected_fy_year %}selected{% endif %}>FY {{ y }}-{{ y|add:1 }}</option>
+                            {% endfor %}
+                        </select>
+                        <input type="text" name="bsr" class="oh-input" maxlength="7" placeholder="{% trans 'BSR code' %}" value="{{ default_bsr }}" style="width:8rem;">
+                        <input type="text" name="challan_serial" class="oh-input" placeholder="{% trans 'Challan serial' %}" style="width:9rem;">
+                        <input type="date" name="deposit_date" class="oh-input" value="{{ default_deposit_date }}">
+                        <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">
+                            <ion-icon name="download-outline"></ion-icon>
+                            {% trans "Download 24Q pack" %}
+                        </button>
+                    </form>
+                    <p class="is-muted" style="font-size:.85rem;">
+                        {% trans "ZIP contains RPU Annexure CSV, CSI challan line, and a working statement. TAN:" %}
+                        <strong>{{ default_tan|default:"—" }}</strong>
+                    </p>
+                </div>
+            </div>
+
+            <div class="is-io-panel">
+                <div class="is-io-panel__block">
+                    <div class="is-io-panel__title">
+                        {% trans "ITNS 281 — TDS challan (OLTAS)" %}
+                        <span class="is-io-panel__badge">TXT</span>
+                    </div>
+                    <form method="get" action="{% url 'oltas-challan-download' %}" class="is-toolbar__form" style="margin-bottom:0.5rem;flex-wrap:wrap;">
+                        <select name="month" class="oh-select oh-select-2">
+                            {% for opt in month_options %}
+                            <option value="{{ opt.value }}" {% if opt.value == selected_month %}selected{% endif %}>{{ opt.label }}</option>
+                            {% endfor %}
+                        </select>
+                        <select name="year" class="oh-select oh-select-2">
+                            {% for y in year_options %}
+                            <option value="{{ y }}" {% if y == selected_calendar_year %}selected{% endif %}>{{ y }}</option>
+                            {% endfor %}
+                        </select>
+                        <input type="text" name="bsr" class="oh-input" maxlength="7" placeholder="{% trans 'BSR code' %}" value="{{ default_bsr }}" style="width:8rem;">
+                        <input type="text" name="challan_serial" class="oh-input" placeholder="{% trans 'Challan serial' %}" style="width:9rem;">
+                        <input type="date" name="deposit_date" class="oh-input" value="{{ default_deposit_date }}">
+                        <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">
+                            <ion-icon name="download-outline"></ion-icon>
+                            {% trans "Download challan" %}
+                        </button>
+                    </form>
+                    <p class="is-muted" style="font-size:.85rem;">{% trans "TDS challan working file (major head 281, minor head 200). PF/ESI amounts are included as reference rows only." %}</p>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+</div>
+{% endblock content %}

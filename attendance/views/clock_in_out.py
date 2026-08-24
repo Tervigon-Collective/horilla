@@ -587,10 +587,17 @@ def clock_out_attendance_and_activity(
             total_seconds = days_second + seconds
             duration = duration + total_seconds
         duration = format_time(duration)
-        # update clock out of attendance
-        attendance = Attendance.objects.filter(employee_id=employee).order_by(
-            "-attendance_date", "-id"
-        )[0]
+        attendance = Attendance.objects.filter(
+            employee_id=employee,
+            attendance_date=attendance_activity.attendance_date,
+        ).first()
+        if not attendance:
+            logger.error(
+                "No attendance record found for employee %s on %s.",
+                employee,
+                attendance_activity.attendance_date,
+            )
+            return
         attendance.attendance_clock_out = now + ":00"
         attendance.attendance_clock_out_date = date_today
         attendance.attendance_worked_hour = duration

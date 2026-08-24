@@ -202,7 +202,8 @@ def _check_reporting_manager(request, *args, **kwargs):
         obj_id = kwargs["obj_id"]
         emp = Employee.objects.get(id=obj_id)
         re_manager = None
-        if emp.employee_work_info.reporting_manager_id != None:
+        work_info = getattr(emp, "employee_work_info", None)
+        if work_info and work_info.reporting_manager_id is not None:
             re_manager = emp.employee_work_info.reporting_manager_id
         employee = request.user.employee_get
         if re_manager != None:
@@ -259,7 +260,7 @@ def employee_profile(request):
 @login_required
 @enter_if_accessible(
     feature="profile_edit",
-    perm="employee.change_profile",
+    perm="employee.change_ownprofile",
 )
 def self_info_update(request):
     """
@@ -937,8 +938,8 @@ def document_delete(request, id):
                 )
                 if not existing_documents:
                     url = reverse(
-                        "employee-document-tab",
-                        kwargs={"employee_id": document_first.employee_id.id},
+                        "document-tab",
+                        kwargs={"pk": document_first.employee_id.id},
                     )
 
                     html = format_html(
@@ -1288,7 +1289,7 @@ def employee_profile_bank_details(request):
 
 
 @login_required
-@permission_required("employee.view_profile")
+@permission_required("employee.view_ownprofile")
 def employee_profile_update(request):
     """
     This method is used update own profile of the requested employee
@@ -1296,7 +1297,7 @@ def employee_profile_update(request):
 
     employee_user = request.user
     employee = Employee.objects.get(employee_user_id=employee_user)
-    if employee_user.has_perm("employee.change_profile"):
+    if employee_user.has_perm("employee.change_ownprofile"):
         if request.method == "POST":
             form = EmployeeForm(request.POST, request.FILES, instance=employee)
             if form.is_valid():
@@ -2763,13 +2764,22 @@ def employee_import(request):
     This method is used to create employee and corresponding user.
     """
     if request.method == "POST":
-        file = request.FILES["file"]
-        # Read the Excel file into a Pandas DataFrame
-        data_frame = pd.read_excel(file)
-        # Convert the DataFrame to a list of dictionaries
+        file = request.FILES.get("file")
+        if not file:
+            messages.error(request, _("Please select a file to import."))
+            return redirect(request.META.get("HTTP_REFERER", "/"))
+        file_extension = file.name.split(".")[-1].lower()
+        try:
+            data_frame = (
+                pd.read_csv(file) if file_extension == "csv" else pd.read_excel(file)
+            )
+        except Exception as e:
+            return HttpResponse(
+                f"<div class='alert-danger p-3 border-rounded'>Error reading file: {e}</div>"
+            )
         employee_dicts = data_frame.to_dict("records")
-        # Create or update Employee objects from the list of dictionaries
         error_list = []
+        created_count = 0
         for employee_dict in employee_dicts:
             try:
                 phone = employee_dict["phone"]
@@ -2790,6 +2800,7 @@ def employee_import(request):
                         email=email,
                         password=str(phone).strip(),
                         is_superuser=False,
+                        is_new_employee=True,
                     )
                     employee = Employee()
                     employee.employee_user_id = user
@@ -2798,15 +2809,16 @@ def employee_import(request):
                     employee.email = email
                     employee.phone = phone
                     employee.save()
-            except Exception:
-                error_list.append(employee_dict)
+                    created_count += 1
+                else:
+                    error_list.append({**employee_dict, "Error": f"User {email} already exists"})
+            except Exception as e:
+                error_list.append({**employee_dict, "Error": str(e)})
+        msg = f"{created_count} employee(s) imported successfully."
+        if error_list:
+            msg += f" {len(error_list)} row(s) had errors."
         return HttpResponse(
-            """
-    <div class='alert-success p-3 border-rounded'>
-        Employee data has been imported successfully.
-    </div>
-
-    """
+            f"<div class='alert-success p-3 border-rounded'>{msg}</div>"
         )
     data_frame = pd.DataFrame(columns=["employee_full_name", "email", "phone"])
     # Export the DataFrame to an Excel file
@@ -2963,6 +2975,14 @@ def work_info_import(request):
                     bulk_create_shifts(success_list)
                     bulk_create_employee_types(success_list)
                     bulk_create_work_info_import(success_list)
+                    from employee.methods.user_bootstrap import bootstrap_employees_queryset
+
+                    bootstrap_employees_queryset(
+                        Employee.objects.filter(
+                            id__in=[e.id for e in employees if e.id]
+                        ),
+                        skip_if_assigned=False,
+                    )
                     thread = threading.Thread(
                         target=set_initial_password, args=(employees,)
                     )
@@ -3067,11 +3087,11 @@ def work_info_export(request):
     if emp:
         info = EmployeeWorkInformation.objects.filter(employee_id=emp).first()
         if info:
-            company = Company.objects.filter(company=info.company_id).first()
+            company = info.company_id
             if company and company.date_format:
                 date_format = company.date_format
 
-    employees_data = {column_name: [] for _, column_name in selected_columns}
+    employees_data = {column_name: [] for _field, column_name in selected_columns}
     for employee in employees:
         for column_value, column_name in selected_columns:
             if column_value in field_overrides:
@@ -3221,6 +3241,8 @@ def joining_today_count(request):
         newbies_today = Candidate.objects.filter(
             joining_date__range=[date.today(), date.today() + timedelta(days=1)],
             is_active=True,
+            hired=True,
+            canceled=False,
         ).count()
     return HttpResponse(newbies_today)
 
@@ -3238,6 +3260,7 @@ def joining_week_count(request):
             ],
             is_active=True,
             hired=True,
+            canceled=False,
         ).count()
     return HttpResponse(newbies_week)
 
@@ -3248,11 +3271,18 @@ def leave_today_count(request):
     leave_today = 0
     if apps.is_installed("leave"):
         LeaveRequest = get_horilla_model_class(app_label="leave", model="leaverequest")
-        leave_today = LeaveRequest.objects.filter(
-            Q(start_date__lte=date.today(), end_date__gte=date.today()),
-            status="approved",
-            is_active=True,
-        ).count()
+        today = date.today()
+        leave_today = (
+            LeaveRequest.objects.filter(
+                start_date__lte=today,
+                status="approved",
+                is_active=True,
+            )
+            .filter(Q(end_date__gte=today) | Q(end_date__isnull=True))
+            .values("employee_id")
+            .distinct()
+            .count()
+        )
     return HttpResponse(leave_today)
 
 

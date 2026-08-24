@@ -19,6 +19,11 @@ from payroll.models.models import (
     ReimbursementrequestComment,
 )
 from payroll.models.tax_models import PayrollSettings, TaxBracket
+from payroll.models.india_statutory import (
+    EmployeeStatutoryProfile,
+    Form16Record,
+    IndiaStatutorySettings,
+)
 
 # Register your models here.
 admin.site.register(FilingStatus)
@@ -33,3 +38,6 @@ admin.site.register(Reimbursement)
 admin.site.register(ReimbursementrequestComment)
 admin.site.register(MultipleCondition)
 admin.site.register(PayslipAutoGenerate)
+admin.site.register(IndiaStatutorySettings)
+admin.site.register(EmployeeStatutoryProfile)
+admin.site.register(Form16Record)

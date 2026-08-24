@@ -108,3 +108,29 @@ class ComputeSalaryOnPeriodTests(TestCase):
         self.assertEqual(data["unpaid_days"], 0)
         self.assertEqual(data["basic_pay"], 10000.0)
         self.assertEqual(data["contract_wage"], 500.0)
+
+    @patch("payroll.methods.methods.get_attendance_lop_data")
+    @patch("payroll.methods.methods.months_between_range")
+    @patch(
+        "payroll.methods.methods.get_daily_salary",
+        return_value={"day_wage": 1000.0},
+    )
+    @patch("payroll.methods.methods.get_leaves", return_value=EMPTY_LEAVES)
+    def test_monthly_deducts_attendance_absence(
+        self, _leaves, _daily, mock_months, mock_attendance_lop
+    ):
+        self._activate(wage=31000.0)
+        mock_months.return_value = [
+            {"working_days_on_period": 22, "per_day_amount": 1000.0}
+        ]
+        mock_attendance_lop.return_value = {
+            "absence_days": 2.0,
+            "absence_dates": [date(2024, 1, 10), date(2024, 1, 11)],
+        }
+        data = compute_salary_on_period(self.employee, self.start, self.end)
+        self.assertEqual(data["attendance_lop_days"], 2.0)
+        self.assertEqual(data["leave_lop_days"], 0)
+        self.assertEqual(data["unpaid_days"], 2)
+        self.assertEqual(data["paid_days"], 20)
+        self.assertEqual(data["loss_of_pay"], 2000.0)
+        self.assertEqual(data["basic_pay"], 20000.0)

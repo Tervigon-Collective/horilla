@@ -1,0 +1,288 @@
+{% extends "index.html" %}
+{% load i18n horillafilters static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+
+<div class="is-page">
+    {% for message in messages %}
+    <div class="oh-alert-container">
+        <div class="oh-alert oh-alert--animated {{ message.tags }}">{{ message }}</div>
+    </div>
+    {% endfor %}
+
+    {% if not form %}
+    <div class="is-section">
+        <div class="is-section__body">
+            <p>{% trans "No company selected." %}</p>
+        </div>
+    </div>
+    {% else %}
+
+    {% include "payroll/india_statutory/nav.html" with active_tab="settings" settings=settings company=company %}
+
+    <div class="is-page__content">
+        {% include "payroll/india_statutory/_import_export_panel.html" %}
+
+        <div class="is-kpi-grid">
+            <div class="is-kpi-card">
+                <div class="is-kpi-card__icon is-kpi-card__icon--{% if settings.is_enabled %}green{% else %}red{% endif %}">
+                    <ion-icon name="{% if settings.is_enabled %}checkmark-circle-outline{% else %}close-circle-outline{% endif %}"></ion-icon>
+                </div>
+                <div>
+                    <div class="is-kpi-card__label">{% trans "Status" %}</div>
+                    <div class="is-kpi-card__value">{% if settings.is_enabled %}{% trans "Active" %}{% else %}{% trans "Disabled" %}{% endif %}</div>
+                    <div class="is-kpi-card__sub">{% trans "Master statutory switch" %}</div>
+                </div>
+            </div>
+            <div class="is-kpi-card">
+                <div class="is-kpi-card__icon is-kpi-card__icon--blue">
+                    <ion-icon name="shield-checkmark-outline"></ion-icon>
+                </div>
+                <div>
+                    <div class="is-kpi-card__label">{% trans "Components" %}</div>
+                    <div class="is-kpi-card__value is-kpi-card__value--sm">
+                        {% if settings.enable_pf %}PF{% endif %}
+                        {% if settings.enable_esi %}{% if settings.enable_pf %} · {% endif %}ESI{% endif %}
+                        {% if settings.enable_pt %}{% if settings.enable_pf or settings.enable_esi %} · {% endif %}PT{% endif %}
+                        {% if settings.enable_tds %}{% if settings.enable_pf or settings.enable_esi or settings.enable_pt %} · {% endif %}TDS{% endif %}
+                        {% if settings.enable_lwf %} · LWF{% endif %}
+                        {% if settings.enable_bonus %} · Bonus{% endif %}
+                        {% if settings.enable_gratuity %} · Gratuity{% endif %}
+                        {% if not settings.enable_pf and not settings.enable_esi and not settings.enable_pt and not settings.enable_tds %}—{% endif %}
+                    </div>
+                    <div class="is-kpi-card__sub">{% trans "Enabled deductions" %}</div>
+                </div>
+            </div>
+            <div class="is-kpi-card">
+                <div class="is-kpi-card__icon is-kpi-card__icon--amber">
+                    <ion-icon name="location-outline"></ion-icon>
+                </div>
+                <div>
+                    <div class="is-kpi-card__label">{% trans "Professional Tax" %}</div>
+                    <div class="is-kpi-card__value is-kpi-card__value--sm">{{ settings.get_pt_state_display|default:"—" }}</div>
+                    <div class="is-kpi-card__sub">{% trans "State for PT slab" %}</div>
+                </div>
+            </div>
+            <div class="is-kpi-card">
+                <div class="is-kpi-card__icon is-kpi-card__icon--purple">
+                    <ion-icon name="calculator-outline"></ion-icon>
+                </div>
+                <div>
+                    <div class="is-kpi-card__label">{% trans "TDS Regime" %}</div>
+                    <div class="is-kpi-card__value is-kpi-card__value--sm">{{ settings.get_default_tds_regime_display|default:"—" }}</div>
+                    <div class="is-kpi-card__sub">{% trans "Default for new employees" %}</div>
+                </div>
+            </div>
+        </div>
+
+        <form method="post">
+            {% csrf_token %}
+
+            <div class="is-section">
+                <div class="is-section__header">
+                    <span class="is-section__icon"><ion-icon name="power-outline"></ion-icon></span>
+                    <div>
+                        <h3 class="is-section__title">{% trans "Master Control" %}</h3>
+                        <p class="is-section__desc">{% trans "Apply PF, ESI, PT and TDS when generating payslips." %}</p>
+                    </div>
+                </div>
+                <div class="is-section__body">
+                    <div class="is-switch-row">
+                        <div>
+                            <label class="oh-label" for="{{ form.is_enabled.id_for_label }}">{{ form.is_enabled.label }}</label>
+                            <p class="is-field__hint">{% trans "Turn on Indian statutory payroll for this company." %}</p>
+                        </div>
+                        {{ form.is_enabled }}
+                    </div>
+                </div>
+            </div>
+
+            <div class="is-section">
+                <div class="is-section__header">
+                    <span class="is-section__icon"><ion-icon name="layers-outline"></ion-icon></span>
+                    <div>
+                        <h3 class="is-section__title">{% trans "Statutory Components" %}</h3>
+                        <p class="is-section__desc">{% trans "Choose which deductions to calculate on each payslip. LWF and Bonus Act are off until you enable them." %}</p>
+                    </div>
+                </div>
+                <div class="is-section__body">
+                    <div class="is-switch-grid">
+                        <div>
+                            <div class="is-switch-row">
+                                <label class="oh-label" for="{{ form.enable_pf.id_for_label }}">{{ form.enable_pf.label }}</label>
+                                {{ form.enable_pf }}
+                            </div>
+                            <div class="is-switch-row">
+                                <label class="oh-label" for="{{ form.enable_esi.id_for_label }}">{{ form.enable_esi.label }}</label>
+                                {{ form.enable_esi }}
+                            </div>
+                        </div>
+                        <div>
+                            <div class="is-switch-row">
+                                <label class="oh-label" for="{{ form.enable_pt.id_for_label }}">{{ form.enable_pt.label }}</label>
+                                {{ form.enable_pt }}
+                            </div>
+                            <div class="is-switch-row">
+                                <label class="oh-label" for="{{ form.enable_tds.id_for_label }}">{{ form.enable_tds.label }}</label>
+                                {{ form.enable_tds }}
+                            </div>
+                            <div class="is-switch-row">
+                                <label class="oh-label" for="{{ form.enable_lwf.id_for_label }}">{{ form.enable_lwf.label }}</label>
+                                {{ form.enable_lwf }}
+                            </div>
+                            <div class="is-switch-row">
+                                <label class="oh-label" for="{{ form.enable_bonus.id_for_label }}">{{ form.enable_bonus.label }}</label>
+                                {{ form.enable_bonus }}
+                            </div>
+                            <div class="is-switch-row">
+                                <label class="oh-label" for="{{ form.enable_gratuity.id_for_label }}">{{ form.enable_gratuity.label }}</label>
+                                {{ form.enable_gratuity }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="is-split-grid">
+                <div class="is-section">
+                    <div class="is-section__header">
+                        <span class="is-section__icon"><ion-icon name="wallet-outline"></ion-icon></span>
+                        <div>
+                            <h3 class="is-section__title">{% trans "Provident Fund (EPF)" %}</h3>
+                            <p class="is-section__desc">{% trans "Employee 12% EPF. Employer 12% splits into EPS 8.33% + EPF remainder. EDLI 0.50% is extra employer cost." %}</p>
+                        </div>
+                    </div>
+                    <div class="is-section__body">
+                        <div class="is-form-grid is-form-grid--auto">
+                            <div class="is-field">
+                                <label class="oh-label">{{ form.pf_wage_ceiling.label }}</label>
+                                {{ form.pf_wage_ceiling }}
+                            </div>
+                            <div class="is-field">
+                                <label class="oh-label">{{ form.pf_employee_rate.label }}</label>
+                                {{ form.pf_employee_rate }}
+                            </div>
+                            <div class="is-field">
+                                <label class="oh-label">{{ form.pf_employer_rate.label }}</label>
+                                {{ form.pf_employer_rate }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="is-section">
+                    <div class="is-section__header">
+                        <span class="is-section__icon"><ion-icon name="medkit-outline"></ion-icon></span>
+                        <div>
+                            <h3 class="is-section__title">{% trans "ESI" %}</h3>
+                            <p class="is-section__desc">{% trans "Employee State Insurance thresholds" %}</p>
+                        </div>
+                    </div>
+                    <div class="is-section__body">
+                        <div class="is-form-grid is-form-grid--auto">
+                            <div class="is-field">
+                                <label class="oh-label">{{ form.esi_gross_ceiling.label }}</label>
+                                {{ form.esi_gross_ceiling }}
+                            </div>
+                            <div class="is-field">
+                                <label class="oh-label">{{ form.esi_employee_rate.label }}</label>
+                                {{ form.esi_employee_rate }}
+                            </div>
+                            <div class="is-field">
+                                <label class="oh-label">{{ form.esi_employer_rate.label }}</label>
+                                {{ form.esi_employer_rate }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="is-split-grid is-split-grid--7030">
+                <div class="is-section">
+                    <div class="is-section__header">
+                        <span class="is-section__icon"><ion-icon name="business-outline"></ion-icon></span>
+                        <div>
+                            <h3 class="is-section__title">{% trans "Professional Tax" %}</h3>
+                            <p class="is-section__desc">{% trans "State-wise PT slab" %}</p>
+                        </div>
+                    </div>
+                    <div class="is-section__body">
+                        <div class="is-field">
+                            <label class="oh-label">{{ form.pt_state.label }}</label>
+                            {{ form.pt_state }}
+                            <span class="is-field__hint">{% trans "Delhi has no PT. Use employee work state when different." %}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="is-section">
+                    <div class="is-section__header">
+                        <span class="is-section__icon"><ion-icon name="cash-outline"></ion-icon></span>
+                        <div>
+                            <h3 class="is-section__title">{% trans "TDS (Income Tax)" %}</h3>
+                            <p class="is-section__desc">{% trans "Default regime and standard deduction" %}</p>
+                        </div>
+                    </div>
+                    <div class="is-section__body">
+                        <div class="is-form-grid is-form-grid--auto">
+                            <div class="is-field">
+                                <label class="oh-label">{{ form.default_tds_regime.label }}</label>
+                                {{ form.default_tds_regime }}
+                            </div>
+                            <div class="is-field">
+                                <label class="oh-label">{{ form.standard_deduction_annual.label }}</label>
+                                {{ form.standard_deduction_annual }}
+                            </div>
+                            <div class="is-field">
+                                <label class="oh-label">{{ form.standard_deduction_old_regime.label }}</label>
+                                {{ form.standard_deduction_old_regime }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="is-section">
+                <div class="is-section__header">
+                    <span class="is-section__icon"><ion-icon name="id-card-outline"></ion-icon></span>
+                    <div>
+                        <h3 class="is-section__title">{% trans "Employer Registration" %}</h3>
+                        <p class="is-section__desc">{% trans "TAN, PF and ESI establishment codes for compliance" %}</p>
+                    </div>
+                </div>
+                <div class="is-section__body">
+                    <div class="is-form-grid is-form-grid--auto">
+                        <div class="is-field">
+                            <label class="oh-label">{{ form.tan_number.label }}</label>
+                            {{ form.tan_number }}
+                        </div>
+                        <div class="is-field">
+                            <label class="oh-label">{{ form.bsr_code.label }}</label>
+                            {{ form.bsr_code }}
+                        </div>
+                        <div class="is-field">
+                            <label class="oh-label">{{ form.pf_establishment_code.label }}</label>
+                            {{ form.pf_establishment_code }}
+                        </div>
+                        <div class="is-field">
+                            <label class="oh-label">{{ form.esi_establishment_code.label }}</label>
+                            {{ form.esi_establishment_code }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="is-save-bar">
+                <span class="is-field__hint">
+                    <ion-icon name="information-circle-outline"></ion-icon>
+                    {% trans "Regenerate payslips after saving to apply statutory deductions." %}
+                </span>
+                <button type="submit" class="oh-btn oh-btn--secondary">
+                    <ion-icon name="save-outline"></ion-icon>
+                    {% trans "Save Settings" %}
+                </button>
+            </div>
+        </form>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -126,7 +126,7 @@ CHART_CONFIG = {
     },
     "employee_work_info": {
         "app": "employee",
-        "perm": "employee.change_employee",
+        "perm": "employee.change_employeeworkinformation",
         "need_reporting_manager": True,
     },
     "employees_chart": {"app": "employee"},
@@ -514,6 +514,18 @@ def get_subordinate_employee_ids(
             ).values_list("id", flat=True)
         )
         return direct_sub_ids
+
+
+def can_manage_subordinate(request, employee, perm):
+    """
+    True when the user has ``perm`` or ``employee`` is in their subordinate tree.
+    """
+    if request.user.has_perm(perm):
+        return True
+    if employee is None:
+        return False
+    employee_id = employee.id if hasattr(employee, "id") else employee
+    return employee_id in get_subordinate_employee_ids(request)
 
 
 def choosesubordinatesemployeemodel(request, form, perm):
@@ -1163,12 +1175,21 @@ def link_callback(uri, rel):
 
 
 def generate_pdf(template_path, context, path=True, title=None, html=True):
+    from horilla.models import has_xss
+
     title = "Document" if not title else title
 
     if html:
         html = template_path
     else:
         html = render_to_string(template_path, context)
+
+    if has_xss(html):
+        import logging
+        logging.getLogger(__name__).error(
+            "generate_pdf: XSS detected in rendered HTML; aborting PDF generation."
+        )
+        return HttpResponse("PDF generation blocked: unsafe content detected.", status=400)
 
     response = template_pdf(template=html, html=True, filename=title)
 
@@ -1208,6 +1229,7 @@ def is_holiday(date, employee=None):
     """
     holidays = Holidays.objects.filter(
         Q(start_date__lte=date, end_date__gte=date)
+        | Q(end_date__isnull=True, start_date=date)
         | Q(recurring=True, start_date__month=date.month, start_date__day=date.day)
     )
     if employee is not None:
@@ -1275,21 +1297,11 @@ def get_holiday_dates(range_start: date, range_end: date, employee=None) -> list
     """
     :return: this functions returns a list of all holiday dates.
     """
-    pay_range_dates = get_date_range(start_date=range_start, end_date=range_end)
-    query = Q()
-    for check_date in pay_range_dates:
-        query |= Q(start_date__lte=check_date, end_date__gte=check_date)
-    holidays = Holidays.objects.filter(query)
-    if employee is not None:
-        holidays = holidays.filter(Q(is_specific=False) | Q(employees=employee))
-    holiday_dates = set([])
-    for holiday in holidays:
-        holiday_dates = holiday_dates | (
-            set(
-                get_date_range(start_date=holiday.start_date, end_date=holiday.end_date)
-            )
-        )
-    return list(set(holiday_dates))
+    holiday_dates = set()
+    for check_date in get_date_range(start_date=range_start, end_date=range_end):
+        if is_holiday(check_date, employee=employee):
+            holiday_dates.add(check_date)
+    return list(holiday_dates)
 
 
 def get_company_leave_dates(year):
@@ -1496,7 +1508,7 @@ def template_pdf(template, context={}, html=False, filename="payslip.pdf"):
         pdf = pdfkit.from_string(html_content, False, options=pdf_options)
 
         response = HttpResponse(pdf, content_type="application/pdf")
-        response["Content-Disposition"] = f"inline; filename={filename}"
+        response["Content-Disposition"] = f'inline; filename="{filename}"'
         return response
     except Exception as e:
         return HttpResponse(f"Error generating PDF: {str(e)}", status=500)

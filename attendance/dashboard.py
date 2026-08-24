@@ -31,6 +31,11 @@ def _parse_period(request):
     return from_date, to_date
 
 
+def _period_end(to_date):
+    """Last day of the selected period that is not in the future."""
+    return min(to_date, date.today())
+
+
 def _latest_attendance_date(reference_date=None):
     """Return the latest attendance_date that actually has records.
 
@@ -57,20 +62,28 @@ def attendance_dashboard_view(request):
 
 
 @login_required
+@manager_can_enter("attendance.view_attendance")
 def attendance_kpi_data(request):
     """Return attendance KPI summary data as JSON."""
+    from attendance.methods.missing_punch import missing_punch_count, scoped_active_employees
     from attendance.models import Attendance, AttendanceLateComeEarlyOut
+    from base.methods import filtersubordinates
     from employee.models import Employee
 
     from_date, to_date = _parse_period(request)
-    today = to_date
-    first_of_month = from_date
-    total_employees = Employee.objects.filter(is_active=True).count()
+    period_end = _period_end(to_date)
+    real_today = date.today()
+    scoped_employees = scoped_active_employees(request)
+    total_employees = scoped_employees.count()
+
+    attendance_qs = filtersubordinates(
+        request,
+        Attendance.objects.filter(employee_id__is_active=True),
+        "attendance.view_attendance",
+    )
 
     present_today = (
-        Attendance.objects.filter(
-            attendance_date=today,
-        )
+        attendance_qs.filter(attendance_date=real_today)
         .values("employee_id")
         .distinct()
         .count()
@@ -83,7 +96,8 @@ def attendance_kpi_data(request):
     late_come = (
         AttendanceLateComeEarlyOut.objects.filter(
             type="late_come",
-            attendance_id__attendance_date=today,
+            attendance_id__attendance_date=real_today,
+            employee_id__in=scoped_employees,
         )
         .values("employee_id")
         .distinct()
@@ -93,7 +107,8 @@ def attendance_kpi_data(request):
     early_out = (
         AttendanceLateComeEarlyOut.objects.filter(
             type="early_out",
-            attendance_id__attendance_date=today,
+            attendance_id__attendance_date=real_today,
+            employee_id__in=scoped_employees,
         )
         .values("employee_id")
         .distinct()
@@ -102,15 +117,13 @@ def attendance_kpi_data(request):
 
     on_time = max(0, present_today - late_come)
 
-    # Pending validation
-    pending_validation = Attendance.objects.filter(
-        attendance_validated=False,
-    ).count()
+    pending_validation = attendance_qs.filter(attendance_validated=False).count()
+    missing_punches = missing_punch_count(request, days=30)
 
     # Pending overtime approval
     pending_overtime = 0
     try:
-        pending_overtime = Attendance.objects.filter(
+        pending_overtime = attendance_qs.filter(
             attendance_overtime_approve=False,
             attendance_validated=True,
             overtime_second__gt=0,
@@ -127,8 +140,9 @@ def attendance_kpi_data(request):
             "late_come": late_come,
             "early_out": early_out,
             "pending_validation": pending_validation,
+            "missing_punches": missing_punches,
             "pending_overtime": pending_overtime,
-            "date": today.isoformat(),
+            "date": real_today.isoformat(),
         }
     )
 
@@ -230,7 +244,7 @@ def attendance_department_breakdown(request):
     from employee.models import Employee
 
     _, to_date = _parse_period(request)
-    today = _latest_attendance_date(to_date)
+    today = _latest_attendance_date(_period_end(to_date))
     departments = []
 
     try:
@@ -272,7 +286,7 @@ def attendance_late_early_data(request):
     from attendance.models import AttendanceLateComeEarlyOut
 
     _, to_date = _parse_period(request)
-    today = _latest_attendance_date(to_date)
+    today = _latest_attendance_date(_period_end(to_date))
     late_data = []
     early_data = []
 
@@ -318,7 +332,7 @@ def attendance_overtime_summary(request):
     from attendance.models import Attendance
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
     first_of_month = from_date
     departments = []
 
@@ -326,7 +340,7 @@ def attendance_overtime_summary(request):
         data = (
             Attendance.objects.filter(
                 attendance_date__gte=first_of_month,
-                attendance_date__lte=today,
+                attendance_date__lte=period_end,
                 attendance_validated=True,
                 overtime_second__gt=0,
             )
@@ -358,9 +372,9 @@ def attendance_overtime_summary(request):
     return JsonResponse(
         {
             "departments": departments,
-            "month": today.strftime("%B %Y"),
+            "month": period_end.strftime("%B %Y"),
             "from_date": first_of_month.isoformat(),
-            "to_date": today.isoformat(),
+            "to_date": period_end.isoformat(),
         }
     )
 
@@ -393,6 +407,8 @@ def attendance_hours_distribution(request):
                 for r in AttendanceOverTime.objects.filter(
                     employee_id__employee_work_info__department_id__department=dept,
                     employee_id__is_active=True,
+                    month=from_date.strftime("%B"),
+                    year=str(from_date.year),
                 )
             )
 
@@ -453,13 +469,13 @@ def attendance_absenteeism_trend(request):
     from employee.models import Employee
 
     _, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
     months = []
 
     try:
         total_employees = Employee.objects.filter(is_active=True).count()
 
-        current_month_start = today.replace(day=1)
+        current_month_start = period_end.replace(day=1)
         for i in range(5, -1, -1):
             # Step back i full months using year/month arithmetic (no day drift)
             year = current_month_start.year
@@ -476,7 +492,7 @@ def attendance_absenteeism_trend(request):
             # Count working days (Mon-Fri) in the month
             working_days = 0
             d = month_start
-            while d <= min(month_end, today):
+            while d <= min(month_end, period_end):
                 if d.weekday() < 5:
                     working_days += 1
                 d += timedelta(days=1)
@@ -489,7 +505,7 @@ def attendance_absenteeism_trend(request):
             present_days = (
                 Attendance.objects.filter(
                     attendance_date__gte=month_start,
-                    attendance_date__lte=min(month_end, today),
+                    attendance_date__lte=min(month_end, period_end),
                 )
                 .values("employee_id", "attendance_date")
                 .distinct()
@@ -562,7 +578,7 @@ def attendance_avg_working_hours(request):
     from attendance.models import Attendance
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
     first_of_month = from_date
     departments = []
 
@@ -570,7 +586,7 @@ def attendance_avg_working_hours(request):
         data = (
             Attendance.objects.filter(
                 attendance_date__gte=first_of_month,
-                attendance_date__lte=today,
+                attendance_date__lte=period_end,
                 at_work_second__gt=0,
             )
             .values("employee_id__employee_work_info__department_id__department")
@@ -606,9 +622,9 @@ def attendance_avg_working_hours(request):
     return JsonResponse(
         {
             "departments": departments[:10],
-            "month": today.strftime("%B %Y"),
+            "month": period_end.strftime("%B %Y"),
             "from_date": first_of_month.isoformat(),
-            "to_date": today.isoformat(),
+            "to_date": period_end.isoformat(),
         }
     )
 
@@ -620,7 +636,7 @@ def attendance_top_absentees(request):
     from employee.models import Employee
 
     from_date, to_date = _parse_period(request)
-    today = to_date
+    period_end = _period_end(to_date)
     first_of_month = from_date
     absentees = []
 
@@ -628,7 +644,7 @@ def attendance_top_absentees(request):
         # Count working days so far this month
         working_days = 0
         d = first_of_month
-        while d <= today:
+        while d <= period_end:
             if d.weekday() < 5:
                 working_days += 1
             d += timedelta(days=1)
@@ -643,7 +659,7 @@ def attendance_top_absentees(request):
                 Attendance.objects.filter(
                     employee_id=emp,
                     attendance_date__gte=first_of_month,
-                    attendance_date__lte=today,
+                    attendance_date__lte=period_end,
                 )
                 .values("attendance_date")
                 .distinct()
@@ -671,7 +687,7 @@ def attendance_top_absentees(request):
     return JsonResponse(
         {
             "absentees": absentees[:10],
-            "month": today.strftime("%B %Y"),
+            "month": period_end.strftime("%B %Y"),
         }
     )
 
@@ -682,7 +698,7 @@ def attendance_clockin_distribution(request):
     from attendance.models import Attendance
 
     from_date, to_date = _parse_period(request)
-    target_date = _latest_attendance_date(to_date)
+    target_date = _latest_attendance_date(_period_end(to_date))
     buckets = {}
     try:
         qs = Attendance.objects.filter(
@@ -819,7 +835,7 @@ def attendance_overview(request):
     from attendance.models import Attendance, AttendanceLateComeEarlyOut
     from base.models import Department
 
-    _, to_date = _parse_period(request)
+    _from_date, to_date = _parse_period(request)
     target_date = _latest_attendance_date(to_date)
 
     labels = []

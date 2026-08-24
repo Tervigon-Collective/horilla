@@ -1,442 +1,528 @@
 {% load static i18n horillafilters %}
 <!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter" media="all">
-        <link
-            href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap"
-            rel="stylesheet"
-        >
-        <style>
-            html {
-                -webkit-box-sizing: border-box;
-                box-sizing: border-box;
-                overflow-x: hidden;
-                font-family: 'Inter', serif;
-            }
+<head>
+<meta charset="UTF-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 11px;
+    color: #333;
+    background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+.wrap {
+    width: 720px;
+    margin: 0 auto;
+    padding: 20px 30px;
+}
 
-            body {
-                margin: 0;
-                background-color: #f5f7ff;
-            }
+/* ── Top bar ── */
+.topbar {
+    height: 4px;
+    background: #2c3e7a;
+    margin-bottom: 0;
+}
 
-            table {
-                border: 1px solid #ccc;
-                border-collapse: collapse;
-                caption-side: bottom;
-            }
-            table tr,
-            table td,
-            table th {
-                padding: 10px;
-                border: 1px solid #ccc;
-                text-align: left;
-            }
+/* ── Header row ── */
+.hdr-table {
+    width: 100%;
+    border: none;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 12px;
+    margin-bottom: 0;
+}
+.hdr-table td {
+    border: none;
+    padding: 12px 0;
+    vertical-align: top;
+}
+.co-name {
+    font-size: 15px;
+    font-weight: 700;
+    color: #222;
+}
+.co-addr {
+    font-size: 10px;
+    color: #777;
+    line-height: 1.5;
+    margin-top: 3px;
+}
+.logo-td {
+    text-align: right;
+    vertical-align: middle !important;
+}
+.logo-td img {
+    max-width: 140px;
+    height: auto;
+}
 
-            .oh-payslip {
-                padding: 40px;
-                background: #fff;
-                font-size: 16px;
-            }
+/* ── Title ── */
+.slip-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #222;
+    padding: 14px 0 12px;
+    border-bottom: 1px solid #ddd;
+}
 
-            .oh-payslip-container {
-                max-width: 880px;
-                margin-right: auto;
-                margin-left: auto;
-                padding: 30px 15px;
-            }
+/* ── Summary section ── */
+.summary-table {
+    width: 100%;
+    border: none;
+    margin: 0;
+}
+.summary-table > tbody > tr > td {
+    border: none;
+    vertical-align: top;
+    padding: 14px 0;
+}
+.summary-left { width: 55%; }
+.summary-right {
+    width: 45%;
+    text-align: center;
+    vertical-align: middle !important;
+}
+.section-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #3355cc;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-bottom: 8px;
+}
+.info-row {
+    width: 100%;
+    border: none;
+}
+.info-row td {
+    border: none;
+    padding: 2px 0;
+    font-size: 11px;
+    line-height: 1.6;
+}
+.info-lbl {
+    width: 110px;
+    color: #555;
+}
+.info-sep {
+    width: 10px;
+    color: #555;
+}
+.info-val {
+    color: #222;
+    font-weight: 600;
+}
+.big-amount {
+    font-size: 26px;
+    font-weight: 700;
+    color: #111;
+    margin: 6px 0;
+}
+.big-label {
+    font-size: 11px;
+    color: #555;
+    margin-bottom: 4px;
+}
+.big-sub {
+    font-size: 10px;
+    color: #888;
+}
+.divider {
+    height: 1px;
+    background: #ddd;
+}
 
-            .oh-payslip-table .oh-payslip-td-head {
-                margin-right: 16px;
-                color: #777;
-            }
-            .oh-payslip-table .oh-payslip-td-value {
-                color: #111;
-            }
+/* ── Earnings / Deductions tables ── */
+.ed-outer {
+    width: 100%;
+    border: none;
+    margin-top: 6px;
+}
+.ed-outer > tbody > tr > td {
+    width: 50%;
+    vertical-align: top;
+    border: none;
+    padding: 0;
+}
+.ed-outer > tbody > tr > td:first-child { padding-right: 12px; }
+.ed-outer > tbody > tr > td:last-child { padding-left: 12px; }
 
-            .oh-footer-total .oh-footer-gross-text {
-                margin: 0;
-                color: #777;
-            }
-            .oh-footer-total .oh-footer-total-amount {
-                width: 25%;
-                font-weight: 700;
-            }
-            .oh-footer-total h5 {
-                margin: 0px 0 12px 0;
-                font-weight: 700;
-            }
+.ed-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.ed-table th {
+    font-size: 10px;
+    font-weight: 700;
+    color: #3355cc;
+    text-transform: uppercase;
+    text-align: left;
+    padding: 8px 6px;
+    border-top: 2px solid #3355cc;
+    border-bottom: 1px solid #ccc;
+    background: #fff;
+}
+.ed-table th.r { text-align: right; }
+.ed-table td {
+    padding: 6px 6px;
+    font-size: 11px;
+    border-bottom: 1px solid #eee;
+    color: #444;
+}
+.ed-table td.r {
+    text-align: right;
+    color: #222;
+    font-weight: 500;
+}
+.ed-table tr.total-row td {
+    font-weight: 700;
+    color: #222;
+    border-top: 1px solid #bbb;
+    border-bottom: 2px solid #3355cc;
+    padding-top: 8px;
+    padding-bottom: 8px;
+}
 
-            .oh-payslip_head {
-                display: -webkit-box;
-                display: -ms-flexbox;
-                display: flex;
-                -webkit-box-pack: justify;
-                -ms-flex-pack: justify;
-                justify-content: space-between;
-                -webkit-box-align: end;
-                -ms-flex-align: end;
-                align-items: flex-end;
-                margin-bottom: 25px;
-                padding-bottom: 25px;
-                border-bottom: 1px solid #eaeaea;
-                -webkit-box-align: center;
-                -ms-flex-align: center;
-                align-items: center;
-            }
+/* ── Net Pay summary ── */
+.net-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 16px;
+}
+.net-table th {
+    font-size: 10px;
+    font-weight: 700;
+    color: #3355cc;
+    text-transform: uppercase;
+    text-align: left;
+    padding: 8px 6px;
+    border-top: 2px solid #3355cc;
+    border-bottom: 1px solid #ccc;
+}
+.net-table th.r { text-align: right; }
+.net-table td {
+    padding: 6px 6px;
+    font-size: 11px;
+    border-bottom: 1px solid #eee;
+}
+.net-table td.lbl { color: #333; font-weight: 600; }
+.net-table td.r { text-align: right; color: #222; }
+.net-table tr.highlight td {
+    background: #eef1ff;
+    font-weight: 700;
+    font-size: 12px;
+    color: #111;
+    border-top: 1px solid #bbb;
+    border-bottom: 2px solid #3355cc;
+}
 
-            .oh-logo img {
-                width: 150px;
-                -o-object-fit: cover;
-                object-fit: cover;
-            }
+/* ── Footer ── */
+.total-line {
+    text-align: center;
+    padding: 16px 0 6px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #222;
+}
+.total-line small {
+    font-size: 10px;
+    font-weight: 400;
+    color: #666;
+}
+.footer-note {
+    text-align: center;
+    font-size: 9px;
+    color: #999;
+    padding: 20px 0 6px;
+    border-top: 1px solid #ddd;
+    margin-top: 14px;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+    <div class="topbar"></div>
 
-            .oh-payslip-secondhead p {
-                color: #777;
-            }
-            .oh-payslip-secondhead h4 {
-                margin: 10px 0;
-                font-weight: 700;
-                font-size: 16px;
-            }
+    <!-- HEADER -->
+    <table class="hdr-table">
+        <tr>
+            <td>
+                {% if employee.employee_work_info.company_id %}
+                <div class="co-name">{{ employee.employee_work_info.company_id }}</div>
+                <div class="co-addr">
+                    {{ employee.employee_work_info.company_id.address }},
+                    {{ employee.employee_work_info.company_id.city }},
+                    {{ employee.employee_work_info.company_id.state }},
+                    {{ employee.employee_work_info.company_id.country }}
+                    {% if employee.employee_work_info.company_id.zip %}- {{ employee.employee_work_info.company_id.zip }}{% endif %}
+                </div>
+                {% else %}
+                <div class="co-name">{{ company }}</div>
+                <div class="co-addr">
+                    {{ company.address }}, {{ company.city }}, {{ company.state }}, {{ company.country }}
+                    {% if company.zip %}- {{ company.zip }}{% endif %}
+                </div>
+                {% endif %}
+            </td>
+            <td class="logo-td">
+                <img src="{{payslip_logo_url|absolute_url:request}}" alt="Logo">
+            </td>
+        </tr>
+    </table>
 
-            .oh-payslip-company-name {
-                font-weight: 700;
-                font-size: 20px;
-            }
+    <!-- TITLE -->
+    <div class="slip-title">
+        {% trans "Payslip for the month of" %} {{ month_start_name }} {% trans "to" %} {{ month_end_name }}
+    </div>
 
-            .oh-payslip-company-address {
-                width: 90%;
-                color: #777;
-                font-size: 16px;
-                word-wrap: break-word;
-                margin-bottom: 0;
-            }
-
-            .oh-payslip_left .oh-payslip-left-title {
-                color: #777;
-                font-size: 16px;
-            }
-            .oh-payslip_left .oh-payslip-left-value {
-                margin: 10px 0;
-                color: #111;
-                font-weight: 700;
-                font-size: 16px;
-            }
-
-            .oh-allowance-table td {
-                color: #777;
-            }
-            .oh-allowance-table .oh-allowance-amount {
-                width: 25%;
-                color: #111;
-            }
-
-            .oh-bg-color {
-                background-color: #f7f7f7;
-            }
-
-            .oh-footer-page-number {
-                display: -webkit-box;
-                display: -ms-flexbox;
-                display: flex;
-                -webkit-box-pack: center;
-                -ms-flex-pack: center;
-                justify-content: center;
-                margin-top: 24px;
-            }
-            .oh-footer-page-number p {
-                margin: 0;
-                color: #777;
-            }
-            .mt-4 {
-                margin-top: 24px;
-            }
-            .w-100 {
-                width: 100%;
-            }
-            .w-50 {
-                width: 50%;
-            }
-            .d-flex {
-                display: flex;
-            }
-            .justify-content-between {
-                justify-content: space-between;
-            }
-            .align-item-center {
-                align-items: center;
-            }
-            .gap-2 {
-                gap: 16px;
-            }
-        </style>
-    </head>
-
-    <body id="printDiv">
-        <div class="container oh-payslip-container">
-            <div class="oh-payslip">
-                <div class="oh-payslip_in" id="download_section">
-                    {% if employee.employee_work_info.company_id %}
-                        <div class="oh-payslip_head">
-                            <div class="oh-payslip_left">
-                                <p class="oh-payslip-company-name">{{ employee.employee_work_info.company_id }}</p>
-                                <p class="oh-payslip-company-address">
-                                    {{ employee.employee_work_info.company_id.address }}
-                                    {{ employee.employee_work_info.company_id.country }}
-                                    {{ employee.employee_work_info.company_id.state }},
-                                    {{ employee.employee_work_info.company_id.city }}
-                                    {{ employee.employee_work_info.company_id.zip }}
-                                </p>
-                            </div>
-                            <div class="cs-payslip_right cs-text_right">
-                                <div class="oh-logo cs-mb5">
-                                    {% comment %} This works for: Local media, Cloud storage (GCS / S3), Signed URLs, PDF printing {% endcomment %}
-                                    <img
-                                        src="{{employee.employee_work_info.company_id.icon.url|absolute_url:request}}"
-                                        alt="{% trans 'Logo' %}"
-                                    >
-                                </div>
-                            </div>
-                        </div>
-                    {% else %}
-                        <div class="oh-payslip_head">
-                            <div class="oh-payslip_left">
-                                <p class="oh-payslip-company-name">{{ company }} - Headquarters</p>
-                                <p class="oh-payslip-company-address">
-                                    {{ company.address }}
-                                    {{ company.country }} {{ company.state }}, {{ company.city }}
-                                    {{ company.zip }}
-                                </p>
-                            </div>
-                            <div class="cs-payslip_right cs-text_right">
-                                <div class="oh-logo cs-mb5">
-                                    {% comment %} This works for: Local media, Cloud storage (GCS / S3), Signed URLs, PDF printing {% endcomment %}
-                                    <img src="{{company.icon.url|absolute_url:request}}" alt="{% trans 'Logo' %}">
-                                </div>
-                            </div>
-                        </div>
+    <!-- EMPLOYEE SUMMARY -->
+    <table class="summary-table">
+        <tr>
+            <td class="summary-left">
+                <div class="section-label">{% trans "Employee Pay Summary" %}</div>
+                <table class="info-row">
+                    <tr>
+                        <td class="info-lbl">{% trans "Employee Name" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ employee }}</td>
+                    </tr>
+                    <tr>
+                        <td class="info-lbl">{% trans "Employee ID" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ employee.badge_id }}</td>
+                    </tr>
+                    {% if employee.employee_work_info.job_position_id %}
+                    <tr>
+                        <td class="info-lbl">{% trans "Designation" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ employee.employee_work_info.job_position_id }}</td>
+                    </tr>
                     {% endif %}
-                    <div class="oh-payslip-secondhead d-flex justify-content-between cs-mb10">
-                        <h4>
-                            {{ month_start_name }}
-                            {% trans "to" %}
-                            {{ month_end_name }}
-                            {% trans "Payslip" %}
-                        </h4>
-                        <div class="oh-payslip_left">
-                            <div class="d-flex align-item-center gap-2">
-                                <span class="oh-payslip-left-title">{% trans "Employee Netpay :" %} </span>
-                                <p class="oh-payslip-left-value">
-                                    {{ net_pay|floatformat:2|currency_symbol_position }}<br>
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <table class="oh-payslip-table w-100 mt-4">
-                        <tbody>
-                            <tr class="">
-                                <td class="w-50">
-                                    <span class="oh-payslip-td-head">{% trans "Employee ID :" %}</span>
-                                    <span class="oh-payslip-td-value">{{ employee.badge_id }}</span>
-                                </td>
-                                <td class="w-50">
-                                    <span class="oh-payslip-td-head">{% trans "Employee Name :" %}</span>
-                                    <span class="oh-payslip-td-value">{{ employee }}</span>
-                                </td>
-                            </tr>
-                            <tr>
-                                <td class="w-50">
-                                    <span class="oh-payslip-td-head">{% trans "Department :" %}</span>
-                                    <span
-                                        class="oh-payslip-td-value"
-                                    >{{ employee.employee_work_info.department_id.department }}</span>
-                                </td>
-                                <td class="w-50">
-                                    <span class="oh-payslip-td-head">{% trans "Bank Acc./Cheque No :" %}</span>
-                                    <span
-                                        class="oh-payslip-td-value"
-                                    >{{ employee.employee_bank_details.account_number }}</span>
-                                </td>
-                            </tr>
-                            <tr>
-                                <td class="w-50">
-                                    <span class="oh-payslip-td-head">{% trans "Paid Days :" %}</span>
-                                    <span class="oh-payslip-td-value">{{ paid_days }}</span>
-                                </td>
-                                <td class="w-50">
-                                    <span class="oh-payslip-td-head">{% trans "LOP Days :" %}</span>
-                                    <span class="oh-payslip-td-value">{{ unpaid_days }}</span>
-                                </td>
-                            </tr>
-                            {% if partial_pay_days %}
-                                <tr>
-                                    <td class="w-50">
-                                        <span class="oh-payslip-td-head">{% trans "Partially Paid Days :" %}</span>
-                                        <span
-                                            class="oh-payslip-td-value"
-                                        >{{ partial_pay_days }}{% if custom_leave_breakdown %}
-                                                ({% for entry in custom_leave_breakdown %}{{ entry.percentage|floatformat:0 }}%{% if not forloop.last %},
-                                                    {% endif %}{% endfor %}){% endif %}</span>
-                                    </td>
-                                    <td class="w-50"></td>
-                                </tr>
-                            {% endif %}
-                        </tbody>
-                    </table>
-
-                    <table class="w-100 oh-allowance-table mt-4">
-                        <thead>
-                            <tr class="oh-bg-color">
-                                <th class="">{% trans "Allowance" %}</th>
-                                <th class="">{% trans "Amount" %}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>
-                                    {% trans "Basic Pay" %}
-                                </td>
-                                <td class="oh-allowance-amount">
-                                    {{ basic_pay|floatformat:2|currency_symbol_position }}
-                                </td>
-                            </tr>
-                            {% for allowance in all_allowances %}
-                                <tr>
-                                    <td class="">{{ allowance.title }}</td>
-                                    <td class="oh-allowance-amount">
-                                        {{ allowance.amount|floatformat:2|currency_symbol_position }}
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                        <tfoot class="oh-payslip__table-tfoot">
-                            <tr class="oh-payslip__table-tr">
-                                <th class="oh-payslip__table-tf">
-                                    {% trans "Total Gross Pay" %}
-                                </th>
-                                <th class="oh-payslip__table-tf">
-                                    {{ gross_pay|floatformat:2|currency_symbol_position }}
-                                </th>
-                            </tr>
-                        </tfoot>
-                    </table>
-
-                    <table class="w-100 oh-allowance-table mt-4">
-                        <thead>
-                            <tr class="oh-bg-color">
-                                <th class="">{% trans "Deduction" %}</th>
-                                <th class="">{% trans "Amount" %}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td class="">{% trans "Loss of Pay" %}</td>
-                                <td class="oh-allowance-amount">
-                                    {{ loss_of_pay|floatformat:2|currency_symbol_position }}
-                                </td>
-                            </tr>
-                            {% if custom_leave_deduction %}
-                                <tr style="color: #c47d00">
-                                    <td class="" style="padding-left: 1.2rem; font-size: 0.85em">
-                                        ↳ {% trans "Leave Payment Reduction" %}
-                                        <br><span style="color: #888; font-size: 0.85em">{% blocktrans %}Partial
-                                                deduction — {{ partial_pay_days }} day(s) on a partially paid leave
-                                                type{% endblocktrans %}</span>
-                                    </td>
-                                    <td class="oh-allowance-amount">
-                                        {{ custom_leave_deduction|floatformat:2|currency_symbol_position }}
-                                    </td>
-                                </tr>
-                            {% endif %}
-                            {% for deduction in basic_pay_deductions %}
-                                <tr>
-                                    <td class="">{{ deduction.title }}</td>
-                                    <td class="oh-allowance-amount">
-                                        {{ deduction.amount|floatformat:2|currency_symbol_position }}
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                            {% for deduction in gross_pay_deductions %}
-                                <tr>
-                                    <td class="">{{ deduction.title }}</td>
-                                    <td class="oh-allowance-amount">
-                                        {{ deduction.amount|floatformat:2|currency_symbol_position }}
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                            {% for deduction in pretax_deductions %}
-                                <tr>
-                                    <td class="">{{ deduction.title }}</td>
-                                    <td class="oh-allowance-amount">
-                                        {{ deduction.amount|floatformat:2|currency_symbol_position }}
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                            {% for deduction in post_tax_deductions %}
-                                <tr>
-                                    <td class="">{{ deduction.title }}</td>
-                                    <td class="oh-allowance-amount">
-                                        {{ deduction.amount|floatformat:2|currency_symbol_position }}
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                            <tr>
-                                <td class="">{% trans "Income Tax" %}</td>
-                                <td class="oh-allowance-amount">
-                                    {{ federal_tax|floatformat:2|currency_symbol_position }}
-                                </td>
-                            </tr>
-                            {% for deduction in tax_deductions %}
-                                <tr>
-                                    <td class="">{{ deduction.title }}</td>
-                                    <td class="oh-allowance-amount">
-                                        {{ deduction.amount|floatformat:2|currency_symbol_position }}
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                            {% for deduction in net_deductions %}
-                                <tr>
-                                    <td class="">{{ deduction.title }}</td>
-                                    <td class="oh-allowance-amount">
-                                        {{ deduction.amount|floatformat:2|currency_symbol_position }}
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                        <tfoot class="oh-payslip__table-tfoot">
-                            <tr class="oh-payslip__table-tr">
-                                <th class="oh-payslip__table-tf">{% trans "Total Deductions" %}</th>
-                                <th class="oh-payslip__table-tf">
-                                    {{ total_deductions|floatformat:2|currency_symbol_position }}
-                                </th>
-                            </tr>
-                        </tfoot>
-                    </table>
+                    {% if employee.employee_work_info.department_id %}
+                    <tr>
+                        <td class="info-lbl">{% trans "Department" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ employee.employee_work_info.department_id.department }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if employee.employee_work_info.date_joining %}
+                    <tr>
+                        <td class="info-lbl">{% trans "Date of Joining" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ employee.employee_work_info.date_joining }}</td>
+                    </tr>
+                    {% endif %}
+                    <tr>
+                        <td class="info-lbl">{% trans "Pay Period" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ month_start_name }} - {{ month_end_name }}</td>
+                    </tr>
+                    {% if employee.employee_bank_details.bank_name %}
+                    <tr>
+                        <td class="info-lbl">{% trans "Bank Name" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ employee.employee_bank_details.bank_name }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if employee.employee_bank_details.account_number %}
+                    <tr>
+                        <td class="info-lbl">{% trans "Bank Acc. No" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ employee.employee_bank_details.account_number }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if employee.employee_bank_details.ifsc_code %}
+                    <tr>
+                        <td class="info-lbl">{% trans "IFSC Code" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ employee.employee_bank_details.ifsc_code }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if employee.employee_bank_details.pan_number %}
+                    <tr>
+                        <td class="info-lbl">{% trans "PAN Number" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ employee.employee_bank_details.pan_number }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if employee.employee_bank_details.uan_number %}
+                    <tr>
+                        <td class="info-lbl">{% trans "UAN Number" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ employee.employee_bank_details.uan_number }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if employee.employee_bank_details.pf_number %}
+                    <tr>
+                        <td class="info-lbl">{% trans "PF Number" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ employee.employee_bank_details.pf_number }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if employee.employee_bank_details.esi_number %}
+                    <tr>
+                        <td class="info-lbl">{% trans "ESI Number" %}</td>
+                        <td class="info-sep">:</td>
+                        <td class="info-val">{{ employee.employee_bank_details.esi_number }}</td>
+                    </tr>
+                    {% endif %}
+                </table>
+            </td>
+            <td class="summary-right">
+                <div class="big-label">{% trans "Employee Net Pay" %}</div>
+                <div class="big-amount">{{ net_pay|floatformat:2|currency_symbol_position }}</div>
+                <div class="big-sub">{% trans "Paid Days:" %} {{ paid_days }} &nbsp;|&nbsp; {% trans "LOP Days:" %} {{ unpaid_days }}
+                {% if attendance_lop_days %}&nbsp;({% trans "Leave:" %} {{ leave_lop_days|default:unpaid_days }} + {% trans "Absent:" %} {{ attendance_lop_days }}){% endif %}
                 </div>
-                <div class="oh-footer-total mt-4">
-                    <table class="w-100">
-                        <tbody>
-                            <tr class="">
-                                <td class="">
-                                    <h5>{% trans "Total Net Payable" %}</h5>
-                                    <p class="oh-footer-gross-text">
-                                        {% trans "Gross earning - Total Deduction" %}
-                                    </p>
-                                </td>
-                                <td class="oh-footer-total-amount">
-                                    {{ net_pay|floatformat:2|currency_symbol_position }}
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </body>
-    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js"></script>
+            </td>
+        </tr>
+    </table>
+
+    <div class="divider"></div>
+
+    <!-- EARNINGS & DEDUCTIONS SIDE BY SIDE -->
+    <table class="ed-outer">
+        <tr>
+            <!-- EARNINGS -->
+            <td>
+                <table class="ed-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Earnings" %}</th>
+                            <th class="r">{% trans "Amount" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>{% trans "Basic Pay" %}</td>
+                            <td class="r">{{ basic_pay|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% for allowance in all_allowances %}
+                        <tr>
+                            <td>{{ allowance.title }}</td>
+                            <td class="r">{{ allowance.amount|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% endfor %}
+                        <tr class="total-row">
+                            <td>{% trans "Gross Earnings" %}</td>
+                            <td class="r">{{ gross_pay|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </td>
+            <!-- DEDUCTIONS -->
+            <td>
+                <table class="ed-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Deductions" %}</th>
+                            <th class="r">{% trans "Amount" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if loss_of_pay %}
+                        <tr>
+                            <td>{% trans "Loss of Pay" %}</td>
+                            <td class="r">{{ loss_of_pay|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% endif %}
+                        {% for deduction in basic_pay_deductions %}
+                        <tr>
+                            <td>{{ deduction.title }}</td>
+                            <td class="r">{{ deduction.amount|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% endfor %}
+                        {% for deduction in gross_pay_deductions %}
+                        <tr>
+                            <td>{{ deduction.title }}</td>
+                            <td class="r">{{ deduction.amount|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% endfor %}
+                        {% for deduction in pretax_deductions %}
+                        <tr>
+                            <td>{{ deduction.title }}</td>
+                            <td class="r">{{ deduction.amount|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% endfor %}
+                        {% for deduction in post_tax_deductions %}
+                        <tr>
+                            <td>{{ deduction.title }}</td>
+                            <td class="r">{{ deduction.amount|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% endfor %}
+                        {% if federal_tax %}
+                        <tr>
+                            <td>{% if india_statutory.tds %}TDS (Income Tax){% else %}{% trans "Income Tax" %}{% endif %}</td>
+                            <td class="r">{{ federal_tax|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% endif %}
+                        {% if india_employer_contributions %}
+                        {% for item in india_employer_contributions %}
+                        <tr>
+                            <td>{{ item.title }} ({% trans "Employer" %})</td>
+                            <td class="r" style="color:#666;">{{ item.amount|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% endfor %}
+                        {% endif %}
+                        {% for deduction in tax_deductions %}
+                        <tr>
+                            <td>{{ deduction.title }}</td>
+                            <td class="r">{{ deduction.amount|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% endfor %}
+                        {% for deduction in net_deductions %}
+                        <tr>
+                            <td>{{ deduction.title }}</td>
+                            <td class="r">{{ deduction.amount|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                        {% endfor %}
+                        <tr class="total-row">
+                            <td>{% trans "Total Deductions" %}</td>
+                            <td class="r">{{ total_deductions|floatformat:2|currency_symbol_position }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </td>
+        </tr>
+    </table>
+
+    <!-- NET PAY -->
+    <table class="net-table">
+        <thead>
+            <tr>
+                <th>{% trans "Net Pay" %}</th>
+                <th class="r">{% trans "Amount" %}</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td class="lbl">{% trans "Gross Earnings" %}</td>
+                <td class="r">{{ gross_pay|floatformat:2|currency_symbol_position }}</td>
+            </tr>
+            <tr>
+                <td class="lbl">{% trans "Total Deductions" %}</td>
+                <td class="r">(-) {{ total_deductions|floatformat:2|currency_symbol_position }}</td>
+            </tr>
+            <tr class="highlight">
+                <td class="lbl">{% trans "Net Pay (Gross Earnings - Total Deductions)" %}</td>
+                <td class="r">{{ net_pay|floatformat:2|currency_symbol_position }}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <!-- TOTAL LINE -->
+    <div class="total-line">
+        {% trans "Total Net Payable" %} {{ net_pay|floatformat:2|currency_symbol_position }}
+        <small>({% trans "Gross Earnings - Total Deductions" %})</small>
+    </div>
+
+    <!-- FOOTER -->
+    <div class="footer-note">
+        — {% trans "This document has been automatically generated; therefore, a signature is not required." %} —
+    </div>
+</div>
+</body>
 </html>

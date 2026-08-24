@@ -6,7 +6,7 @@ This module is used to register models for onboarding app
 """
 
 from ast import literal_eval
-from datetime import datetime
+from datetime import date
 from urllib.parse import urlencode
 
 from django.db import models
@@ -162,7 +162,7 @@ class CandidateStage(HorillaModel):
 
     def save(self, *args, **kwargs):
         if self.onboarding_stage_id.is_final_stage:
-            self.onboarding_end_date = datetime.today()
+            self.onboarding_end_date = date.today()
         super(CandidateStage, self).save(*args, **kwargs)
 
     def task_completion_ratio(self):
@@ -189,6 +189,29 @@ class CandidateStage(HorillaModel):
             is_required=True,
             candidates=self.candidate_id,
         ).exclude(id__in=completed_task_ids)
+
+    def forward_blocked_message(self, target_stage):
+        """
+        If moving forward from the current stage is blocked by incomplete
+        required tasks, return the user-facing error message; otherwise None.
+        """
+        current = self.onboarding_stage_id
+        if (
+            not current
+            or not target_stage
+            or current.sequence is None
+            or target_stage.sequence is None
+            or target_stage.sequence <= current.sequence
+        ):
+            return None
+        pending_tasks = self.pending_required_tasks(current)
+        if not pending_tasks.exists():
+            return None
+        task_titles = ", ".join(pending_tasks.values_list("task_title", flat=True))
+        return _(
+            "Complete the following required task(s) before "
+            "moving to the next stage: %(tasks)s"
+        ) % {"tasks": task_titles}
 
     def __getattribute__(self, name):
         if name.startswith("get_") and name.endswith("_task"):

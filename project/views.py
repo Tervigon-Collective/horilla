@@ -21,6 +21,13 @@ from horilla.http import HorillaRedirect
 from horilla.methods import handle_no_permission
 from notifications.signals import notify
 from project.methods import (
+    can_add_task_to_project,
+    can_delete_task,
+    can_mutate_project,
+    can_mutate_task,
+    can_view_employee_timesheet,
+    can_view_project,
+    can_view_task,
     generate_colors,
     paginator_qry,
     strtime_seconds,
@@ -150,7 +157,12 @@ def task_status_chart(request):
 
 @login_required
 def project_detailed_view(request, project_id):
-    project = Project.objects.get(id=project_id)
+    project = Project.objects.filter(id=project_id).first()
+    if not project:
+        return HorillaRedirect(request, message=_("Project not found"))
+    if not can_view_project(request, project):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
     task_count = project.task_set.count()
     context = {
         "project": project,
@@ -255,6 +267,10 @@ def change_project_status(request, project_id):
     status = request.POST.get("status")
     try:
         project = get_object_or_404(Project, id=project_id)
+        valid_statuses = {choice[0] for choice in Project.PROJECT_STATUS}
+        if status not in valid_statuses:
+            messages.error(request, _("Invalid status or missing data."))
+            return HttpResponse("<script>$('#reloadMessagesButton').click();</script>")
         if status:
             if project.status != status:
                 project.status = status
@@ -351,26 +367,11 @@ def convert_nan(field, dicts):
 
 
 @login_required
+@permission_required("project.add_project")
 def project_import(request):
     """
     This method is used to import Project instances and creates related objects
     """
-    data_frame = pd.DataFrame(
-        columns=[
-            "Title",
-            "Manager Badge id",
-            "Member Badge id",
-            "Status",
-            "Start Date",
-            "End Date",
-            "Description",
-        ]
-    )
-    # Export the DataFrame to an Excel file
-    response = HttpResponse(content_type="application/ms-excel")
-    response["Content-Disposition"] = 'attachment; filename="project_template.xlsx"'
-    data_frame.to_excel(response, index=False)
-
     if request.method == "POST" and request.FILES.get("file") is not None:
         file = request.FILES["file"]
         data_frame = pd.read_excel(file)
@@ -516,12 +517,25 @@ def project_import(request):
             data_frame.to_excel(response, index=False)
             return response
         return HttpResponse("Imported successfully")
+    data_frame = pd.DataFrame(
+        columns=[
+            "Title",
+            "Manager Badge id",
+            "Member Badge id",
+            "Status",
+            "Start Date",
+            "End Date",
+            "Description",
+        ]
+    )
+    response = HttpResponse(content_type="application/ms-excel")
+    response["Content-Disposition"] = 'attachment; filename="project_template.xlsx"'
+    data_frame.to_excel(response, index=False)
     return response
 
 
 @login_required
-# @permission_required("project.view_project")
-# @require_http_methods(["POST"])
+@permission_required("project.view_project")
 def project_bulk_export(request):
     """
     This method is used to export bulk of Project instances
@@ -686,7 +700,7 @@ def project_bulk_delete(request):
 
     # Delete in bulk
     if deletable_projects:
-        # Project.objects.filter(id__in=[p.id for p in deletable_projects]).delete()
+        Project.objects.filter(id__in=[p.id for p in deletable_projects]).delete()
         messages.success(
             request,
             _("{count} project(s) deleted successfully.").format(
@@ -764,10 +778,7 @@ def task_view(request, project_id, **kwargs):
 def quick_create_task(request, stage_id):
     project_stage = ProjectStage.objects.get(id=stage_id)
     hx_target = request.META.get("HTTP_HX_TARGET")
-    if (
-        request.user.employee_get in project_stage.project.managers.all()
-        or request.user.has_perm("project.add_task")
-    ):
+    if can_add_task_to_project(request, project_stage.project):
         form = QuickTaskForm(
             initial={
                 "stage": project_stage,
@@ -804,9 +815,7 @@ def create_task(request, stage_id):
     """
     project_stage = ProjectStage.objects.get(id=stage_id)
     project = project_stage.project
-    if request.user.employee_get in project.managers.all() or request.user.has_perm(
-        "project.delete_project"
-    ):
+    if can_add_task_to_project(request, project):
         form = TaskForm(initial={"project": project})
         if request.method == "POST":
             form = TaskForm(request.POST, request.FILES)
@@ -844,9 +853,7 @@ def create_task_in_project(request, project_id):
     # Serialize the queryset to JSON
 
     serialized_data = serializers.serialize("json", stages)
-    if request.user.employee_get in project.managers.all() or request.user.has_perm(
-        "project.delete_project"
-    ):
+    if can_add_task_to_project(request, project):
         form = TaskFormCreate(initial={"project": project})
         if request.method == "POST":
             form = TaskFormCreate(request.POST, request.FILES)
@@ -940,6 +947,9 @@ def task_details(request, task_id):
     task = Task.objects.filter(id=task_id).first()
     if not task:
         return HorillaRedirect(request, message=_("Task not found"))
+    if not can_view_task(request, task):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
     return render(request, "task/new/task_details.html", context={"task": task})
 
 
@@ -989,10 +999,17 @@ def task_stage_change(request):
     if not task_id or not stage_id:
         messages.error(request, _("Missing required parameters"))
         return JsonResponse({"error": "Missing required parameters"}, status=400)
+    task = Task.find(task_id)
     stage = ProjectStage.objects.filter(id=stage_id).first()
-    if not stage:
-        messages.error(request, _("Stage not found"))
-        return JsonResponse({"error": "Stage not found"}, status=404)
+    if not task or not stage:
+        messages.error(request, _("Task or stage not found"))
+        return JsonResponse({"error": "Task or stage not found"}, status=404)
+    if not can_mutate_task(request, task):
+        messages.error(request, _("You don't have permission."))
+        return JsonResponse({"error": "Permission denied"}, status=403)
+    if task.project_id and stage.project_id and task.project_id != stage.project_id:
+        messages.error(request, _("Stage does not belong to this task's project."))
+        return JsonResponse({"error": "Cross-project stage"}, status=400)
     Task.objects.filter(id=task_id).update(stage=stage)
     return JsonResponse(
         {
@@ -1007,7 +1024,12 @@ def task_timesheet(request, task_id):
     """
     For showing all timesheet related to task
     """
-    task = Task.objects.get(id=task_id)
+    task = Task.objects.filter(id=task_id).first()
+    if not task:
+        return HorillaRedirect(request, message=_("Task not found"))
+    if not can_view_task(request, task):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
     time_sheets = task.task_timesheet.all()
     context = {"time_sheets": time_sheets, "task_id": task_id}
     return render(
@@ -1020,6 +1042,11 @@ def task_timesheet(request, task_id):
 @login_required
 def create_timesheet_task(request, task_id):
     task = Task.objects.get(id=task_id)
+    if not can_mutate_task(request, task) and not request.user.has_perm(
+        "project.add_timesheet"
+    ):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
     project = task.project
     form = TimesheetInTaskForm(initial={"project_id": project, "task_id": task})
     if request.method == "POST":
@@ -1045,6 +1072,9 @@ def update_timesheet_task(request, timesheet_id):
     timesheet = TimeSheet.objects.filter(id=timesheet_id).first()
     if not timesheet:
         return HorillaRedirect(request, message=_("Timesheet not found"))
+    if not time_sheet_update_permissions(request, timesheet_id):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
     form = TimesheetInTaskForm(instance=timesheet)
     if request.method == "POST":
         form = TimesheetInTaskForm(request.POST, instance=timesheet)
@@ -1083,36 +1113,39 @@ def drag_and_drop_task(request):
         return JsonResponse({"error": "Task not found"}, status=404)
 
     if task.end_date and task.end_date < date.today():
-        messages.warning(request, _("Cannot update status. Task has already expired."))
-        return JsonResponse({"change": True})
+        # Overdue tasks may still be completed or reordered; do not hard-block.
+        messages.warning(
+            request,
+            _("This task is past its end date; updating anyway."),
+        )
 
     project = task.project
-    if (
-        request.user.has_perm("project.change_task")
-        or request.user.has_perm("project.change_project")
-        or request.user.employee_get in task.task_managers.all()
-        or request.user.employee_get in task.task_members.all()
-        or request.user.employee_get in project.managers.all()
-        or request.user.employee_get in project.members.all()
-    ):
-        if previous_stage_id != updated_stage_id:
-            task.stage = ProjectStage.objects.get(id=updated_stage_id)
-            task.save()
+    if not project:
+        messages.error(request, _("Task has no project."))
+        return JsonResponse({"change": False, "error": "No project"}, status=400)
+    if not can_mutate_task(request, task):
+        messages.info(request, _("You dont have permission."))
+        return JsonResponse({"change": False})
+    if previous_stage_id != updated_stage_id:
+        new_stage = ProjectStage.objects.filter(id=updated_stage_id).first()
+        if not new_stage or new_stage.project_id != project.id:
+            messages.error(request, _("Stage does not belong to this task's project."))
+            return JsonResponse({"change": False}, status=400)
+        task.stage = new_stage
+        task.save()
+        change = True
+    sequence = json.loads(request.POST["sequence"])
+    for key, val in sequence.items():
+        seq_task = Task.objects.filter(id=key, project=project).first()
+        if seq_task and seq_task.sequence != val:
+            Task.objects.filter(id=key, project=project).update(sequence=val)
             change = True
-        sequence = json.loads(request.POST["sequence"])
-        for key, val in sequence.items():
-            if Task.objects.get(id=key).sequence != val:
-                Task.objects.filter(id=key).update(sequence=val)
-                change = True
-        message = (
-            _("Task stage has been successfully updated.")
-            if previous_stage_id != updated_stage_id
-            else _("Tasks order has been successfully updated.")
-        )
-        messages.success(request, message)
-        return JsonResponse({"change": change})
-    change = True
-    messages.info(request, _("You dont have permission."))
+    message = (
+        _("Task stage has been successfully updated.")
+        if previous_stage_id != updated_stage_id
+        else _("Tasks order has been successfully updated.")
+    )
+    messages.success(request, message)
     return JsonResponse({"change": change})
 
 
@@ -1143,10 +1176,21 @@ def task_all_create(request):
     """
     For creating new task in task all view
     """
+    if not (
+        request.user.is_superuser or request.user.has_perm("project.add_task")
+    ):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
     form = TaskAllForm()
     if request.method == "POST":
         form = TaskAllForm(request.POST, request.FILES)
         if form.is_valid():
+            project = form.cleaned_data.get("project")
+            if not can_add_task_to_project(request, project) and not request.user.has_perm(
+                "project.add_task"
+            ):
+                messages.error(request, _("You don't have permission."))
+                return HorillaRedirect(request)
             form.save()
             messages.success(request, _("New task created"))
             response = render(
@@ -1172,9 +1216,12 @@ def update_project_task_status(request, task_id):
     task = Task.find(task_id)
     if not task:
         return HorillaRedirect(request, message=_("Task not found"))
-
-    if task.end_date and task.end_date < date.today():
-        messages.warning(request, _("Cannot update status. Task has already expired."))
+    if not can_mutate_task(request, task):
+        messages.error(request, _("You don't have permission."))
+        return HttpResponse("<script>$('#reloadMessagesButton').click();</script>")
+    valid_statuses = {choice[0] for choice in Task.TASK_STATUS}
+    if status not in valid_statuses:
+        messages.error(request, _("Invalid status."))
         return HttpResponse("<script>$('#reloadMessagesButton').click();</script>")
 
     task.status = status
@@ -1186,6 +1233,9 @@ def update_project_task_status(request, task_id):
 @login_required
 def update_task_all(request, task_id):
     task = Task.objects.get(id=task_id)
+    if not can_mutate_task(request, task):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
     form = TaskAllForm(instance=task)
     if request.method == "POST":
         form = TaskAllForm(request.POST, request.FILES, instance=task)
@@ -1234,8 +1284,7 @@ def task_all_filter(request):
 
 
 @login_required
-# @permission_required("project.change_task")
-# @require_http_methods(["POST"])
+@require_http_methods(["POST"])
 def task_all_bulk_archive(request):
     """
     This method is used to archive bulk of Task instances
@@ -1250,8 +1299,8 @@ def task_all_bulk_archive(request):
         is_active = True
     for task_id in ids:
         task = Task.objects.filter(id=task_id).first()
-        if not task:
-            continue  # Skip if task not found
+        if not task or not can_delete_task(request, task):
+            continue  # Skip if task not found or no permission
         task.is_active = is_active
         task.save()
         message = _("archived")
@@ -1264,7 +1313,7 @@ def task_all_bulk_archive(request):
 
 
 @login_required
-# @permission_required("project.delete_task")
+@require_http_methods(["POST"])
 def task_all_bulk_delete(request):
     """
     This method is used to delete set of Task instances
@@ -1277,8 +1326,8 @@ def task_all_bulk_delete(request):
     del_ids = []
     for task_id in ids:
         task = Task.find(task_id)
-        if not task:
-            continue  # Skip if task not found
+        if not task or not can_delete_task(request, task):
+            continue  # Skip if task not found or no permission
         try:
             task.delete()
             del_ids.append(task)
@@ -1290,7 +1339,6 @@ def task_all_bulk_delete(request):
 
 
 @login_required
-# @permission_required("project.change_task")
 def task_all_archive(request, task_id):
     """
     This method is used to archive project instance
@@ -1300,6 +1348,9 @@ def task_all_archive(request, task_id):
     task = Task.objects.filter(id=task_id).first()
     if not task:
         return HorillaRedirect(request, message=_("Task not found"))
+    if not can_delete_task(request, task):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
     task.is_active = not task.is_active
     task.save()
     message = _(f"{task} un-archived")
@@ -1439,9 +1490,18 @@ def create_stage_taskall(request):
             messages.error(request, _("Missing required parameters: project_id"))
             return JsonResponse({"error": "Missing required parameters: project_id"})
         project = Project.objects.get(id=project_id)
+        if not can_mutate_project(request, project):
+            messages.error(request, _("You don't have permission."))
+            return JsonResponse({"error": "Permission denied"}, status=403)
         form = ProjectStageForm(initial={"project": project})
     if request.method == "POST":
         form = ProjectStageForm(request.POST)
+        project = form.instance.project if form.is_bound else None
+        if request.POST.get("project"):
+            project = Project.objects.filter(id=request.POST.get("project")).first()
+        if not can_mutate_project(request, project):
+            messages.error(request, _("You don't have permission."))
+            return JsonResponse({"error": "Permission denied"}, status=403)
         if form.is_valid():
             instance = form.save()
             return JsonResponse({"id": instance.id, "name": instance.title})
@@ -1465,17 +1525,18 @@ def drag_and_drop_stage(request):
         return JsonResponse({"error": "Missing required parameters: sequence"})
     sequence = json.loads(sequence)
     stage_id = list(sequence.keys())[0]
-    project = ProjectStage.objects.get(id=stage_id).project
+    stage = ProjectStage.objects.filter(id=stage_id).first()
+    if not stage or not stage.project:
+        messages.error(request, _("Project stage not found"))
+        return JsonResponse({"error": "Stage not found"}, status=404)
+    project = stage.project
     change = False
-    if (
-        request.user.has_perm("project.change_project")
-        or request.user.employee_get in project.managers.all()
-        or request.user.employee_get in project.members.all()
-    ):
+    if can_mutate_project(request, project):
         for key, val in sequence.items():
-            if val != ProjectStage.objects.get(id=key).sequence:
+            stage_obj = ProjectStage.objects.filter(id=key, project=project).first()
+            if stage_obj and stage_obj.sequence != val:
                 change = True
-                ProjectStage.objects.filter(id=key).update(sequence=val)
+                ProjectStage.objects.filter(id=key, project=project).update(sequence=val)
         if change:
             messages.success(
                 request, _("The project stage sequence has been successfully updated.")
@@ -1486,7 +1547,7 @@ def drag_and_drop_stage(request):
             }
         )
     messages.warning(request, _("You don't have permission."))
-    return JsonResponse({"type": change})
+    return JsonResponse({"change": False})
 
 
 # Time sheet views
@@ -1554,18 +1615,21 @@ def get_members(request):
             project = Project.objects.filter(id=project_id).first()
             task = Task.objects.filter(id=task_id).first()
             employee = Employee.objects.filter(id=request.user.employee_get.id)
-            if employee.first() in project.managers.all():
+            if not project or not task:
+                form.fields["employee_id"].queryset = Employee.objects.none()
+            elif employee.first() in project.managers.all():
                 members = (
                     employee
                     | project.members.all()
                     | task.task_managers.all()
                     | task.task_members.all()
                 ).distinct()
+                form.fields["employee_id"].queryset = members
             elif employee.first() in task.task_managers.all():
                 members = (employee | task.task_members.all()).distinct()
+                form.fields["employee_id"].queryset = members
             else:
-                members = employee
-            form.fields["employee_id"].queryset = members
+                form.fields["employee_id"].queryset = employee
     else:
         form.fields["employee_id"].queryset = Employee.objects.none()
 
@@ -1613,6 +1677,8 @@ def get_tasks_in_timesheet(request):
         # if the employee ids a member of task under the project
         elif Task.objects.filter(project=project_id, task_members=employee).exists():
             tasks = Task.objects.filter(project=project_id, task_members=employee)
+        else:
+            tasks = Task.objects.none()
         form.fields["task_id"].queryset = tasks
         form.fields["task_id"].choices = list(form.fields["task_id"].choices)
         if employee in project.managers.all() or request.user.is_superuser:
@@ -1679,6 +1745,10 @@ def time_sheet_project_creation(request):
         created project ID and name in case of successful creation,
         or the validation errors in case of an invalid form submission.
     """
+    if not (
+        request.user.is_superuser or request.user.has_perm("project.add_project")
+    ):
+        return JsonResponse({"error": "Permission denied"}, status=403)
     form = ProjectTimeSheetForm()
     if request.method == "POST":
         form = ProjectTimeSheetForm(request.POST, request.FILES)
@@ -1715,12 +1785,20 @@ def time_sheet_task_creation(request):
                 request, message=_("Missing required parameters: project_id")
             )
         project = Project.objects.get(id=project_id)
+        if not can_add_task_to_project(request, project):
+            messages.error(request, _("You don't have permission."))
+            return HorillaRedirect(request)
         stages = ProjectStage.objects.filter(project__id=project_id)
         task_form = TaskTimeSheetForm(initial={"project": project})
         task_form.fields["stage"].queryset = stages
 
     if request.method == "POST":
         task_form = TaskTimeSheetForm(request.POST, request.FILES)
+        project = None
+        if request.POST.get("project"):
+            project = Project.objects.filter(id=request.POST.get("project")).first()
+        if not can_add_task_to_project(request, project):
+            return JsonResponse({"error": "Permission denied"}, status=403)
         if task_form.is_valid():
             instance = task_form.save()
             return JsonResponse({"id": instance.id, "name": instance.title})
@@ -1882,6 +1960,11 @@ def personal_time_sheet(request):
         messages.error(request, _("Missing required parameters"))
         return JsonResponse({"error": "Missing required parameters"}, status=400)
 
+    emp = Employee.objects.filter(id=emp_id).first()
+    if not emp or not can_view_employee_timesheet(request, emp):
+        messages.error(request, _("You don't have permission."))
+        return JsonResponse({"error": "Permission denied"}, status=403)
+
     time_spent = []
     dataset = []
 
@@ -1969,6 +2052,9 @@ def personal_time_sheet_view(request, emp_id):
     if not emp:
         messages.error(request, _("Employee not found."))
         return HorillaRedirect(request)
+    if not can_view_employee_timesheet(request, emp):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
     context = {
         "emp_id": emp_id,
         "emp_name": emp.get_full_name(),
@@ -1994,6 +2080,9 @@ def time_sheet_single_view(request, time_sheet_id):
     if not timesheet:
         messages.error(request, _("Timesheet doesn't exist."))
         return HorillaRedirect(request)
+    if not can_view_employee_timesheet(request, timesheet.employee_id):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
     context = {"time_sheet": timesheet}
     return render(request, "time_sheet/time_sheet_single_view.html", context)
 
@@ -2012,7 +2101,11 @@ def time_sheet_bulk_delete(request):
     ids = json.loads(ids)
 
     for timesheet_id in ids:
-        timesheet = TimeSheet.objects.get(id=timesheet_id)
+        if not time_sheet_delete_permissions(request, timesheet_id):
+            continue
+        timesheet = TimeSheet.objects.filter(id=timesheet_id).first()
+        if not timesheet:
+            continue
         try:
             timesheet.delete()
             messages.success(

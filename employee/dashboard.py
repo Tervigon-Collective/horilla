@@ -5,7 +5,7 @@ Modern employee dashboard views — KPI summary + ApexCharts.
 from datetime import date, timedelta
 
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.utils.translation import gettext as _
@@ -27,6 +27,11 @@ def _parse_period(request):
     return from_date, to_date
 
 
+def _period_end(to_date):
+    """Last day of the selected period that is not in the future."""
+    return min(to_date, date.today())
+
+
 @login_required
 def employee_dashboard_view(request):
     return render(request, "employee/dashboard.html")
@@ -38,6 +43,7 @@ def employee_kpi_data(request):
 
     today = date.today()
     from_date, to_date = _parse_period(request)
+    period_end = _period_end(to_date)
 
     total = Employee.objects.count()
     active = Employee.objects.filter(is_active=True).count()
@@ -45,7 +51,7 @@ def employee_kpi_data(request):
 
     new_this_month = Employee.objects.filter(
         employee_work_info__date_joining__gte=from_date,
-        employee_work_info__date_joining__lte=to_date,
+        employee_work_info__date_joining__lte=period_end,
     ).count()
 
     on_leave = 0
@@ -55,11 +61,16 @@ def employee_kpi_data(request):
         if apps.is_installed("leave"):
             from leave.models import LeaveRequest
 
-            on_leave = LeaveRequest.objects.filter(
-                start_date__lte=today,
-                end_date__gte=today,
-                status="approved",
-            ).count()
+            on_leave = (
+                LeaveRequest.objects.filter(
+                    start_date__lte=today,
+                    status="approved",
+                )
+                .filter(Q(end_date__gte=today) | Q(end_date__isnull=True))
+                .values("employee_id")
+                .distinct()
+                .count()
+            )
     except Exception:
         pass
 
