@@ -362,6 +362,7 @@ SIDEBARS = [
     "onboarding",
     "offboarding",
     "pms",
+    "lms",
     "project",
     "asset",
     "helpdesk",
