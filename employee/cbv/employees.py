@@ -29,6 +29,7 @@ from employee.views import _check_reporting_manager
 from horilla.horilla_middlewares import _thread_locals
 from horilla.signals import post_generic_delete, post_generic_import
 from horilla_auth.models import HorillaUser
+from horilla.db import scheduled_job
 from horilla_views.cbv_methods import hx_request_required, login_required
 from horilla_views.forms import DynamicBulkUpdateForm
 from horilla_views.generic.cbv.views import (
@@ -682,7 +683,7 @@ def user_generic_import_or_update(sender, **kwargs):
                     f"{len(users_to_update)} user passwords were successfully updated."
                 )
 
-    thread = threading.Thread(target=_set_password, args=(records,))
+    thread = threading.Thread(target=scheduled_job(_set_password), args=(records,))
     thread.start()
 
 

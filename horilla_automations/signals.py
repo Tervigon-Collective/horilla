@@ -18,6 +18,7 @@ from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from base.methods import build_safe_template_request, sanitize_mail_template_body
+from horilla.db import scheduled_job
 from horilla.horilla_middlewares import _thread_locals
 from horilla.models import has_xss
 from horilla.signals import post_bulk_update, pre_bulk_update
@@ -274,6 +275,7 @@ def start_automation():
     start_connection()
 
 
+@scheduled_job
 def send_automated_mail(
     request,
     created,
@@ -534,13 +536,13 @@ def send_mail(request, automation, instance):
 
         if automation.delivery_channel != "notification":
             thread = threading.Thread(
-                target=lambda: _send_mail(email),
+                target=scheduled_job(lambda: _send_mail(email)),
             )
             thread.start()
 
         if automation.delivery_channel != "email":
             thread = threading.Thread(
-                target=lambda: _send_notification(plain_text),
+                target=scheduled_job(lambda: _send_notification(plain_text)),
             )
             thread.start()
         logger.info(

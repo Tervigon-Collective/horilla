@@ -6,6 +6,7 @@ from threading import Thread
 from django.contrib import messages
 from django.contrib.staticfiles import finders
 from django.core.mail import EmailMessage, EmailMultiAlternatives
+from django.db import close_old_connections
 from django.db.models import Q
 from django.template.loader import render_to_string
 from django.utils.translation import gettext as _
@@ -137,66 +138,70 @@ class LeaveMailSendThread(Thread):
             email.send()
 
     def run(self) -> None:
-        super().run()
-        if self.type == "request":
-            owner = self.leave_request.employee_id
-            reporting_manager = self.leave_request.employee_id.get_reporting_manager()
+        close_old_connections()
+        try:
+            super().run()
+            if self.type == "request":
+                owner = self.leave_request.employee_id
+                reporting_manager = self.leave_request.employee_id.get_reporting_manager()
 
-            content_manager = f"This is to inform you that a new leave request has been submitted by {owner}. Take the necessary actions for the leave request. Should you have any additional information or updates, please feel free to communicate directly with the {owner}."
-            subject_manager = f"Leave request has been submitted by {owner}"
+                content_manager = f"This is to inform you that a new leave request has been submitted by {owner}. Take the necessary actions for the leave request. Should you have any additional information or updates, please feel free to communicate directly with the {owner}."
+                subject_manager = f"Leave request has been submitted by {owner}"
 
-            self.send_email(
-                subject_manager,
-                content_manager,
-                [reporting_manager],
-                self.leave_request.id,
-            )
+                self.send_email(
+                    subject_manager,
+                    content_manager,
+                    [reporting_manager],
+                    self.leave_request.id,
+                )
 
-            content_owner = f"This is to inform you that the leave request you created has been successfully logged into our system. The manager will now take the necessary actions to address leave request. Should you have any additional information or updates, please feel free to communicate directly with the {reporting_manager}."
-            subject_owner = "Leave request created successfully"
+                content_owner = f"This is to inform you that the leave request you created has been successfully logged into our system. The manager will now take the necessary actions to address leave request. Should you have any additional information or updates, please feel free to communicate directly with the {reporting_manager}."
+                subject_owner = "Leave request created successfully"
 
-            self.send_email(
-                subject_owner, content_owner, [owner], self.leave_request.id
-            )
+                self.send_email(
+                    subject_owner, content_owner, [owner], self.leave_request.id
+                )
 
-        elif self.type == "approve":
-            owner = self.leave_request.employee_id
-            reporting_manager = self.leave_request.employee_id.get_reporting_manager()
+            elif self.type == "approve":
+                owner = self.leave_request.employee_id
+                reporting_manager = self.leave_request.employee_id.get_reporting_manager()
 
-            subject = "The Leave request has been successfully approved"
-            content = f"This is to inform you that the leave request has been approved. If you have any questions or require further information, feel free to reach out to the {reporting_manager}."
+                subject = "The Leave request has been successfully approved"
+                content = f"This is to inform you that the leave request has been approved. If you have any questions or require further information, feel free to reach out to the {reporting_manager}."
 
-            self.send_email(subject, content, [owner], self.leave_request.id)
+                self.send_email(subject, content, [owner], self.leave_request.id)
 
-        elif self.type == "reject":
-            owner = self.leave_request.employee_id
-            reporting_manager = self.leave_request.employee_id.get_reporting_manager()
+            elif self.type == "reject":
+                owner = self.leave_request.employee_id
+                reporting_manager = self.leave_request.employee_id.get_reporting_manager()
 
-            subject = "The Leave request has been rejected"
-            content = f"This is to inform you that the leave request has been rejected. If you have any questions or require further information, feel free to reach out to the {reporting_manager}."
+                subject = "The Leave request has been rejected"
+                content = f"This is to inform you that the leave request has been rejected. If you have any questions or require further information, feel free to reach out to the {reporting_manager}."
 
-            self.send_email(subject, content, [owner], self.leave_request.id)
+                self.send_email(subject, content, [owner], self.leave_request.id)
 
-        elif self.type == "cancel":
-            owner = self.leave_request.employee_id
-            reporting_manager = self.leave_request.employee_id.get_reporting_manager()
+            elif self.type == "cancel":
+                owner = self.leave_request.employee_id
+                reporting_manager = self.leave_request.employee_id.get_reporting_manager()
 
-            content_manager = f"This is to inform you that a leave request has been requested to cancel by {owner}. Take the necessary actions for the leave request. Should you have any additional information or updates, please feel free to communicate directly with the {owner}."
-            subject_manager = f"Leave request cancellation"
+                content_manager = f"This is to inform you that a leave request has been requested to cancel by {owner}. Take the necessary actions for the leave request. Should you have any additional information or updates, please feel free to communicate directly with the {owner}."
+                subject_manager = f"Leave request cancellation"
 
-            self.send_email(
-                subject_manager,
-                content_manager,
-                [reporting_manager],
-                self.leave_request.id,
-            )
+                self.send_email(
+                    subject_manager,
+                    content_manager,
+                    [reporting_manager],
+                    self.leave_request.id,
+                )
 
-            content_owner = f"This is to inform you that a cancellation request created for your leave request has been successfully logged into our system. The manager will now take the necessary actions to address the leave request. Should you have any additional information or updates, please feel free to communicate directly with the {reporting_manager}."
-            subject_owner = "Leave request cancellation requested"
+                content_owner = f"This is to inform you that a cancellation request created for your leave request has been successfully logged into our system. The manager will now take the necessary actions to address the leave request. Should you have any additional information or updates, please feel free to communicate directly with the {reporting_manager}."
+                subject_owner = "Leave request cancellation requested"
 
-            self.send_email(
-                subject_owner, content_owner, [owner], self.leave_request.id
-            )
+                self.send_email(
+                    subject_owner, content_owner, [owner], self.leave_request.id
+                )
+        finally:
+            close_old_connections()
 
         return
 
@@ -232,12 +237,16 @@ class LeaveClashThread(Thread):
     def run(self) -> None:
         from leave.models import LeaveRequest
 
-        super().run()
-        dates = self.leave_request.requested_dates()
-        leave_requests_to_update = LeaveRequest.objects.filter(
-            Q(start_date__in=dates) | Q(end_date__in=dates)
-        )
+        close_old_connections()
+        try:
+            super().run()
+            dates = self.leave_request.requested_dates()
+            leave_requests_to_update = LeaveRequest.objects.filter(
+                Q(start_date__in=dates) | Q(end_date__in=dates)
+            )
 
-        for leave_request in leave_requests_to_update:
-            leave_request.leave_clashes_count = self.count_leave_clashes()
-            leave_request.save()
+            for leave_request in leave_requests_to_update:
+                leave_request.leave_clashes_count = self.count_leave_clashes()
+                leave_request.save()
+        finally:
+            close_old_connections()

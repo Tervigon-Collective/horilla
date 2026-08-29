@@ -251,6 +251,7 @@ def calculate_payroll_run(
             continue
 
         try:
+            saved = False
             with transaction.atomic():
                 # Settle retro attendance arrears into this open month before calc
                 try:
@@ -279,44 +280,47 @@ def calculate_payroll_run(
                             "message": f"Could not calculate payroll for {employee}",
                         }
                     )
-                    continue
+                else:
+                    pay_data = json.loads(payslip_data["json_data"])
+                    from payroll.methods.annual_ctc import annual_ctc_for_employee
 
-                pay_data = json.loads(payslip_data["json_data"])
-                from payroll.methods.annual_ctc import annual_ctc_for_employee
+                    pay_data["structure_version"] = {
+                        "source": structure.get("source"),
+                        "version": structure.get("version"),
+                        "revision_id": structure.get("revision_id"),
+                        "basic": structure.get("basic"),
+                        "hra": structure.get("hra"),
+                        "special": structure.get("special"),
+                        "proration_method": run.proration_method,
+                        "payable_start": start_date.isoformat(),
+                        "payable_end": end_date.isoformat(),
+                        "attendance_locked": run.attendance_locked,
+                    }
+                    pay_data["annual_ctc"] = annual_ctc_for_employee(
+                        employee, as_of=end_date
+                    )
 
-                pay_data["structure_version"] = {
-                    "source": structure.get("source"),
-                    "version": structure.get("version"),
-                    "revision_id": structure.get("revision_id"),
-                    "basic": structure.get("basic"),
-                    "hra": structure.get("hra"),
-                    "special": structure.get("special"),
-                    "proration_method": run.proration_method,
-                    "payable_start": start_date.isoformat(),
-                    "payable_end": end_date.isoformat(),
-                    "attendance_locked": run.attendance_locked,
-                }
-                pay_data["annual_ctc"] = annual_ctc_for_employee(employee, as_of=end_date)
-
-                data = {
-                    "employee": employee,
-                    "group_name": run.group_name,
-                    "start_date": payslip_data["start_date"],
-                    "end_date": payslip_data["end_date"],
-                    "status": "draft",
-                    "contract_wage": payslip_data["contract_wage"],
-                    "basic_pay": payslip_data["basic_pay"],
-                    "gross_pay": payslip_data["gross_pay"],
-                    "deduction": payslip_data["total_deductions"],
-                    "net_pay": payslip_data["net_pay"],
-                    "pay_data": pay_data,
-                    "installments": payslip_data["installments"],
-                    "payroll_run": run,
-                    "force": True,
-                }
-                calculate_employer_contribution(data)
-                save_payslip(**data)
-            created += 1
+                    data = {
+                        "employee": employee,
+                        "group_name": run.group_name,
+                        "start_date": payslip_data["start_date"],
+                        "end_date": payslip_data["end_date"],
+                        "status": "draft",
+                        "contract_wage": payslip_data["contract_wage"],
+                        "basic_pay": payslip_data["basic_pay"],
+                        "gross_pay": payslip_data["gross_pay"],
+                        "deduction": payslip_data["total_deductions"],
+                        "net_pay": payslip_data["net_pay"],
+                        "pay_data": pay_data,
+                        "installments": payslip_data["installments"],
+                        "payroll_run": run,
+                        "force": True,
+                    }
+                    calculate_employer_contribution(data)
+                    save_payslip(**data)
+                    saved = True
+            if saved:
+                created += 1
         except Exception as exc:
             skipped += 1
             errors.append(
