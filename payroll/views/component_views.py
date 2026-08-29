@@ -117,22 +117,28 @@ operator_mapping = {
 }
 
 
-def payroll_calculation(employee, start_date, end_date):
+def payroll_calculation(employee, start_date, end_date, structure_override=None):
     """
     Calculate payroll components for the specified employee within the given date range.
-
 
     Args:
         employee (Employee): The employee for whom the payroll is calculated.
         start_date (date): The start date of the payroll period.
         end_date (date): The end date of the payroll period.
-
+        structure_override (dict|None): Optional structure-as-of snapshot
+            ({basic, hra, special, ...}) for historical replay.
 
     Returns:
         dict: A dictionary containing the calculated payroll components:
     """
 
-    basic_pay_details = compute_salary_on_period(employee, start_date, end_date)
+    wage_override = None
+    if structure_override and structure_override.get("basic") is not None:
+        wage_override = float(structure_override.get("basic") or 0)
+
+    basic_pay_details = compute_salary_on_period(
+        employee, start_date, end_date, wage=wage_override
+    )
     if not basic_pay_details:
         return None
     contract = basic_pay_details["contract"]
@@ -170,6 +176,13 @@ def payroll_calculation(employee, start_date, end_date):
     }
     # basic pay will be basic_pay = basic_pay - update_compensation_amount
     allowances = calculate_allowance(**kwargs)
+
+    if structure_override:
+        from payroll.methods.annual_ctc import apply_structure_to_allowance_lines
+
+        allowances["allowances"] = apply_structure_to_allowance_lines(
+            allowances["allowances"], structure_override
+        )
 
     # finding the total allowance
     total_allowance = sum(allowance["amount"] for allowance in allowances["allowances"])
@@ -940,10 +953,22 @@ def generate_payslip(request):
 
             group_name = form.cleaned_data["group_name"]
             emp_count = employees.count()
+            period_start = form.cleaned_data["start_date"]
+            period_end = form.cleaned_data["end_date"]
             for employee in employees:
+                start_date = period_start
+                end_date = period_end
                 contract = Contract.objects.filter(
                     employee_id=employee, contract_status="active"
                 ).first()
+                if not contract:
+                    messages.error(
+                        request,
+                        _("%(name)s has no active contract — payslip skipped.")
+                        % {"name": employee},
+                    )
+                    emp_count -= 1
+                    continue
                 if start_date < contract.contract_start_date:
                     start_date = contract.contract_start_date
 
@@ -963,7 +988,25 @@ def generate_payslip(request):
                     emp_count -= 1
                     continue
 
-                payslip = payroll_calculation(employee, start_date, end_date)
+                try:
+                    payslip = payroll_calculation(employee, start_date, end_date)
+                except Exception as exc:
+                    # Lock / calc failures should not abort the whole batch
+                    from payroll.methods.payroll_run_engine import PayrollRunLockedError
+
+                    if isinstance(exc, PayrollRunLockedError) or "locked" in str(exc).lower():
+                        messages.error(request, str(exc))
+                        emp_count -= 1
+                        continue
+                    raise
+                if not payslip:
+                    messages.error(
+                        request,
+                        _("Could not calculate payslip for %(name)s.")
+                        % {"name": employee},
+                    )
+                    emp_count -= 1
+                    continue
                 payslips.append(payslip)
                 json_data.append(payslip["json_data"])
 
@@ -982,7 +1025,16 @@ def generate_payslip(request):
                 data["pay_data"] = json.loads(payslip["json_data"])
                 calculate_employer_contribution(data)
                 data["installments"] = payslip["installments"]
-                instance = save_payslip(**data)
+                try:
+                    instance = save_payslip(**data)
+                except Exception as exc:
+                    from payroll.methods.payroll_run_engine import PayrollRunLockedError
+
+                    if isinstance(exc, PayrollRunLockedError):
+                        messages.error(request, str(exc))
+                        emp_count -= 1
+                        continue
+                    raise
                 instances.append(instance)
                 notify.send(
                     request.user.employee_get,
@@ -1112,6 +1164,16 @@ def create_payslip(request, new_post_data=None):
                         {"form": form},
                     )
                 payslip_data = payroll_calculation(employee, start_date, end_date)
+                if not payslip_data:
+                    messages.error(
+                        request,
+                        _("Could not calculate payslip — check active contract and dates."),
+                    )
+                    return render(
+                        request,
+                        "payroll/payslip/create_payslip.html",
+                        {"form": form},
+                    )
                 payslip_data["payslip"] = payslip
                 data = {}
                 data["employee"] = employee
@@ -1130,7 +1192,17 @@ def create_payslip(request, new_post_data=None):
                 data["pay_data"] = json.loads(payslip_data["json_data"])
                 calculate_employer_contribution(data)
                 data["installments"] = payslip_data["installments"]
-                payslip_data["instance"] = save_payslip(**data)
+                try:
+                    from payroll.methods.payroll_run_engine import PayrollRunLockedError
+
+                    payslip_data["instance"] = save_payslip(**data)
+                except PayrollRunLockedError as exc:
+                    messages.error(request, str(exc))
+                    return render(
+                        request,
+                        "payroll/payslip/create_payslip.html",
+                        {"form": form},
+                    )
                 form = forms.PayslipForm()
                 messages.success(request, _("Payslip Saved"))
                 payslip = payslip_data["instance"]
@@ -1622,7 +1694,13 @@ def view_loans(request):
     """
     This method is used to render template to disply all the loan records
     """
+    from base.methods import filter_own_and_subordinate_recordes, has_org_wide_perm
+
     records = LoanAccount.objects.all()
+    if not has_org_wide_perm(request.user, "payroll.view_loanaccount"):
+        records = filter_own_and_subordinate_recordes(
+            request, records, "payroll.view_loanaccount"
+        )
     loan = records.filter(type="loan")
     adv_salary = records.filter(type="advanced_salary")
     fine = records.filter(type="fine")
@@ -1652,12 +1730,21 @@ def view_loans(request):
 
 @login_required
 @hx_request_required
+@permission_required("payroll.add_loanaccount")
 def create_loan(request):
     """
     This method is used to create and update the loan instance
     """
+    from payroll.cbv.accessibility import is_payroll_admin
+
     instance_id = eval_validate(str(request.GET.get("instance_id")))
     instance = LoanAccount.objects.filter(id=instance_id).first()
+    if instance and not (
+        is_payroll_admin(request)
+        or request.user.has_perm("payroll.change_loanaccount")
+    ):
+        messages.error(request, _("You don't have permission."))
+        return HorillaRedirect(request)
     form = forms.LoanAccountForm(instance=instance)
     if request.method == "POST":
         form = forms.LoanAccountForm(request.POST, instance=instance)
@@ -2026,11 +2113,25 @@ def get_assigned_leaves(request):
 
 
 @login_required
-@permission_required("payroll.change_reimbursement")
 def approve_reimbursements(request):
     """
     This method is used to approve or reject the reimbursement request
     """
+    from payroll.cbv.accessibility import is_payroll_admin
+    from payroll.methods.reimbursement_actions import apply_reimbursement_status
+    from payroll.methods.reimbursement_approval import (
+        assert_can_approve_reimbursement_stage,
+        reimbursement_stages,
+    )
+
+    actor = getattr(request.user, "employee_get", None)
+    is_payroll_actor = (
+        request.user.is_superuser
+        or is_payroll_admin(request)
+        or request.user.has_perm("payroll.add_payslip")
+    )
+    # Only Django superuser may skip multi-level stages and finalize immediately
+    force_finalize = request.user.is_superuser
     ids = request.GET.getlist("ids")
     status = request.GET.get("status")
     if not status:
@@ -2044,15 +2145,41 @@ def approve_reimbursements(request):
     reimbursements = Reimbursement.objects.filter(id__in=ids)
     if status and len(status):
         for reimbursement in reimbursements:
-            if reimbursement.type == "leave_encashment":
-                reimbursement.amount = amount
-            elif reimbursement.type == "bonus_encashment":
-                reimbursement.amount = amount
+            stages = list(reimbursement_stages(reimbursement))
+            if stages and not force_finalize:
+                try:
+                    assert_can_approve_reimbursement_stage(
+                        reimbursement, actor, is_superuser=False
+                    )
+                except ValueError as exc:
+                    messages.error(request, str(exc))
+                    continue
+            elif not stages and not is_payroll_actor:
+                messages.error(request, _("You don't have permission."))
+                continue
 
             emp = reimbursement.employee_id
-            reimbursement.status = status
-            reimbursement.save()
-            if reimbursement.status == "requested":
+            try:
+                apply_reimbursement_status(
+                    reimbursement,
+                    status,
+                    amount=amount
+                    if reimbursement.type in ("leave_encashment", "bonus_encashment")
+                    else None,
+                    employee=actor,
+                    is_superuser=force_finalize,
+                )
+            except ValueError as exc:
+                messages.error(request, str(exc))
+                continue
+
+            reimbursement.refresh_from_db()
+            if reimbursement.status == "requested" and status == "approved":
+                messages.success(
+                    request,
+                    _("Approval recorded; waiting for next stage."),
+                )
+            elif reimbursement.status == "requested":
                 if not (messages.get_messages(request)._queued_messages):
                     messages.info(request, _("Please check the data you provided."))
             else:
@@ -2060,30 +2187,32 @@ def approve_reimbursements(request):
                     request,
                     _(f"Request {reimbursement.get_status_display()} successfully"),
                 )
-        if status == "rejected":
-            notify.send(
-                request.user.employee_get,
-                recipient=emp.employee_user_id,
-                verb="Your reimbursement request has been rejected.",
-                verb_ar="تم رفض طلب استرداد النفقات الخاص بك.",
-                verb_de="Ihr Erstattungsantrag wurde abgelehnt.",
-                verb_es="Su solicitud de reembolso ha sido rechazada.",
-                verb_fr="Votre demande de remboursement a été rejetée.",
-                redirect=reverse("view-reimbursement") + f"?id={reimbursement.id}",
-                icon="checkmark",
-            )
-        else:
-            notify.send(
-                request.user.employee_get,
-                recipient=emp.employee_user_id,
-                verb="Your reimbursement request has been approved.",
-                verb_ar="تمت الموافقة على طلب استرداد نفقاتك.",
-                verb_de="Ihr Rückerstattungsantrag wurde genehmigt.",
-                verb_es="Se ha aprobado tu solicitud de reembolso.",
-                verb_fr="Votre demande de remboursement a été approuvée.",
-                redirect=reverse("view-reimbursement") + f"?id={reimbursement.id}",
-                icon="checkmark",
-            )
+                if status == "rejected":
+                    notify.send(
+                        request.user.employee_get,
+                        recipient=emp.employee_user_id,
+                        verb="Your reimbursement request has been rejected.",
+                        verb_ar="تم رفض طلب استرداد النفقات الخاص بك.",
+                        verb_de="Ihr Erstattungsantrag wurde abgelehnt.",
+                        verb_es="Su solicitud de reembolso ha sido rechazada.",
+                        verb_fr="Votre demande de remboursement a été rejetée.",
+                        redirect=reverse("view-reimbursement")
+                        + f"?id={reimbursement.id}",
+                        icon="checkmark",
+                    )
+                elif reimbursement.status == "approved":
+                    notify.send(
+                        request.user.employee_get,
+                        recipient=emp.employee_user_id,
+                        verb="Your reimbursement request has been approved.",
+                        verb_ar="تمت الموافقة على طلب استرداد نفقاتك.",
+                        verb_de="Ihr Rückerstattungsantrag wurde genehmigt.",
+                        verb_es="Se ha aprobado tu solicitud de reembolso.",
+                        verb_fr="Votre demande de remboursement a été approuvée.",
+                        redirect=reverse("view-reimbursement")
+                        + f"?id={reimbursement.id}",
+                        icon="checkmark",
+                    )
     if request.headers.get("HX-Request"):
         response = HttpResponse("", status=200)
         response["HX-Trigger"] = json.dumps(

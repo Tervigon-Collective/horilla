@@ -896,6 +896,38 @@ class Allowance(HorillaModel):
         default=True,
         help_text=_("This field is used to calculate the taxable allowances"),
     )
+    include_in_gross = models.BooleanField(
+        default=True, verbose_name=_("Included in Gross")
+    )
+    include_in_ctc = models.BooleanField(
+        default=True, verbose_name=_("Included in CTC")
+    )
+    include_in_wage_definition = models.BooleanField(
+        default=False,
+        verbose_name=_("Included in statutory wage definition"),
+        help_text=_("Counts toward Code-on-Wages / PF wage components when set."),
+    )
+    pf_applicable = models.BooleanField(
+        default=False, verbose_name=_("PF applicable component")
+    )
+    esi_applicable = models.BooleanField(
+        default=False, verbose_name=_("ESI applicable component")
+    )
+    is_excluded_allowance = models.BooleanField(
+        default=False,
+        verbose_name=_("Excluded allowance (CoW 50% test)"),
+        help_text=_("HRA / special-style exclusions for statutory wage 50% rule."),
+    )
+    proratable = models.BooleanField(default=True, verbose_name=_("Proratable"))
+    payslip_visible = models.BooleanField(
+        default=True, verbose_name=_("Visible on payslip")
+    )
+    effective_from = models.DateField(
+        null=True, blank=True, verbose_name=_("Effective from")
+    )
+    effective_to = models.DateField(
+        null=True, blank=True, verbose_name=_("Effective to")
+    )
     is_condition_based = models.BooleanField(
         default=False,
         help_text=_(
@@ -1930,6 +1962,20 @@ class Payslip(HorillaModel):
         max_length=20, null=True, default="draft", choices=status_choices
     )
     sent_to_employee = models.BooleanField(null=True, default=False)
+    payroll_run = models.ForeignKey(
+        "payroll.PayrollRun",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="payslips",
+        verbose_name=_("Payroll run"),
+    )
+    snapshot_frozen = models.BooleanField(
+        default=False,
+        verbose_name=_("Snapshot frozen"),
+        help_text=_("True when the parent payroll run is locked — do not recalculate."),
+    )
+    published_at = models.DateTimeField(null=True, blank=True)
     objects = HorillaCompanyManager("employee_id__employee_work_info__company_id")
     installment_ids = models.ManyToManyField(Deduction, editable=False)
     history = HorillaAuditLog(
@@ -2399,10 +2445,15 @@ class Reimbursement(HorillaModel):
             else 1
         )
 
-        # Setting the created use if the used dont have the permission
-        has_perm = request.user.has_perm("payroll.change_reimbursement")
-        if not has_perm:
-            self.employee_id = request.user.employee_get
+        # Setting the created user if the user dont have the permission
+        from base.methods import has_org_wide_perm
+
+        if request is not None and getattr(request, "user", None) is not None:
+            has_perm = has_org_wide_perm(
+                request.user, "payroll.change_reimbursement"
+            )
+            if not has_perm and getattr(request.user, "employee_get", None):
+                self.employee_id = request.user.employee_get
         if self.type == "reimbursement" and self.attachment is None:
             raise ValidationError({"attachment": "This field is required"})
         if self.type == "travel" and self.attachment is None:
@@ -2531,21 +2582,50 @@ class Reimbursement(HorillaModel):
                     self.allowance_id = None
                     super().save(*args, **kwargs)
 
+        if self.status == "requested" and self.pk:
+            from base.multiple_approval import (
+                find_applicable_condition,
+                sync_approval_stages,
+            )
+
+            work_info = getattr(self.employee_id, "employee_work_info", None)
+            applicable = find_applicable_condition(
+                department=getattr(work_info, "department_id", None) if work_info else None,
+                company=getattr(work_info, "company_id", None) if work_info else None,
+                condition_field="reimbursement_amount",
+                value=self.amount or 0,
+            )
+            sync_approval_stages(
+                stage_model=ReimbursementConditionApproval,
+                fk_name="reimbursement_id",
+                request_obj=self,
+                employee=self.employee_id,
+                condition=applicable,
+            )
+
     def delete(self, *args, **kwargs):
         request = getattr(horilla_middlewares._thread_locals, "request", None)
         if self.status == "approved":
-            message = messages.info(
-                request,
-                _(
-                    f"{self.title} is in approved state,\
+            message = None
+            if request is not None:
+                message = messages.info(
+                    request,
+                    _(
+                        f"{self.title} is in approved state,\
                     it cannot be deleted"
-                ),
-            )
+                    ),
+                )
         else:
+            message = None
             if self.allowance_id:
                 self.allowance_id.delete()
                 super().delete(*args, **kwargs)
-                message = messages.success(request, _("Reimbursement deleted"))
+                if request is not None:
+                    message = messages.success(request, _("Reimbursement deleted"))
+            else:
+                super().delete(*args, **kwargs)
+                if request is not None:
+                    message = messages.success(request, _("Reimbursement deleted"))
 
         return message
 
@@ -2640,6 +2720,21 @@ class Reimbursement(HorillaModel):
         return url
 
 
+class ReimbursementConditionApproval(models.Model):
+    """Per-request multi-level approval stages for reimbursements."""
+
+    sequence = models.IntegerField()
+    is_approved = models.BooleanField(default=False)
+    is_rejected = models.BooleanField(default=False)
+    reimbursement_id = models.ForeignKey(
+        Reimbursement, on_delete=models.CASCADE, related_name="condition_approvals"
+    )
+    manager_id = models.ForeignKey(Employee, on_delete=models.CASCADE)
+
+    class Meta:
+        ordering = ["sequence"]
+
+
 class ReimbursementFile(models.Model):
     file = models.FileField(upload_to=upload_path)
     objects = models.Manager()
@@ -2669,12 +2764,40 @@ class PayrollGeneralSetting(models.Model):
     PayrollGeneralSetting
     """
 
+    ROUND_CHOICES = [
+        ("two_decimals", _("Two decimals")),
+        ("nearest_rupee", _("Nearest rupee")),
+        ("none", _("No extra rounding")),
+    ]
+
     notice_period = models.IntegerField(
         help_text=_("Notice period in days"),
         validators=[min_zero],
         default=30,
     )
     company_id = models.ForeignKey(Company, on_delete=models.CASCADE, null=True)
+    component_round_mode = models.CharField(
+        max_length=20,
+        choices=ROUND_CHOICES,
+        default="two_decimals",
+        verbose_name=_("Component rounding"),
+    )
+    component_decimals = models.PositiveSmallIntegerField(
+        default=2,
+        verbose_name=_("Component decimal places"),
+    )
+    net_pay_round_mode = models.CharField(
+        max_length=20,
+        choices=ROUND_CHOICES,
+        default="nearest_rupee",
+        verbose_name=_("Net pay rounding"),
+    )
+    statutory_round_mode = models.CharField(
+        max_length=20,
+        choices=ROUND_CHOICES,
+        default="two_decimals",
+        verbose_name=_("Statutory rounding"),
+    )
 
 
 class EncashmentGeneralSettings(models.Model):

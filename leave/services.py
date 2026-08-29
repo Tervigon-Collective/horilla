@@ -9,11 +9,14 @@ from django.db.models import Q, Sum
 from django.utils.translation import gettext_lazy as _
 
 
-def evaluate_leave_type_conditions(leave_type, employee):
+def evaluate_leave_type_conditions(leave_type, employee, *, for_assignment=True):
     """
     Evaluate all conditions configured on a LeaveType against an employee.
 
     Returns a (is_eligible, error_message) tuple.
+
+    for_assignment=True (default): enforce once_per_employment for assignment flows.
+    Leave requests must pass for_assignment=False so assigned maternity/etc. remain usable.
     """
     from datetime import date
 
@@ -31,6 +34,8 @@ def evaluate_leave_type_conditions(leave_type, employee):
                 ).format(gender=condition.value)
 
         elif ctype == "once_per_employment":
+            if not for_assignment:
+                continue
             already_assigned = AvailableLeave.objects.filter(
                 employee_id=employee,
                 leave_type_id=leave_type,
@@ -81,6 +86,20 @@ def evaluate_leave_type_conditions(leave_type, employee):
                 return False, _(
                     "This leave type is restricted to employees with employment type: {emp_type}."
                 ).format(emp_type=condition.value)
+
+        elif ctype == "employment_status":
+            work_info = getattr(employee, "employee_work_info", None)
+            emp_status = (
+                (getattr(work_info, "employment_status", None) or "").strip().lower()
+                if work_info
+                else ""
+            )
+            required_status = (condition.value or "").strip().lower()
+            # Treat blank status as not meeting a required status (e.g. confirmed)
+            if required_status and emp_status != required_status:
+                return False, _(
+                    "This leave type is available only when employment status is: {status}."
+                ).format(status=condition.value)
 
         elif ctype == "grade":
             grade = employee_job_grade(employee)
@@ -223,6 +242,9 @@ def has_sufficient_leave_balance(
     available_leave, requested_days, employee=None, leave_type=None, exclude_pk=None
 ) -> bool:
     """Check balance including other pending requests not yet reserved."""
+    lt = leave_type or getattr(available_leave, "leave_type_id", None)
+    if lt is not None and not getattr(lt, "limit_leave", True):
+        return True
     total = float(available_leave.available_days or 0) + float(
         available_leave.carryforward_days or 0
     )
@@ -263,6 +285,9 @@ def reserve_leave_balance(leave_request):
     if leave_request.status != "requested":
         return
     if leave_request.leave_type_id.require_approval == "no":
+        return
+    # Unlimited types (e.g. LWP) have no balance to hold
+    if not leave_request.leave_type_id.limit_leave:
         return
     if _reserved_total(leave_request) > 0:
         return
@@ -309,6 +334,13 @@ def confirm_leave_approval(leave_request, available_leave=None):
     """
     if available_leave is None:
         available_leave = get_available_leave_record(leave_request, for_update=True)
+
+    if not leave_request.leave_type_id.limit_leave:
+        leave_request.approved_available_days = 0
+        leave_request.approved_carryforward_days = 0
+        leave_request.reserved_available_days = 0
+        leave_request.reserved_carryforward_days = 0
+        return available_leave
 
     if _reserved_total(leave_request) > 0:
         leave_request.approved_available_days = leave_request.reserved_available_days
@@ -595,10 +627,18 @@ def accrue_monthly_balances(today_date=None):
     month_key = (today_date.year, today_date.month)
 
     for available in AvailableLeave.objects.select_related(
-        "leave_type_id", "employee_id"
-    ):
+        "leave_type_id", "employee_id", "employee_id__employee_work_info"
+    ).filter(leave_type_id__is_active=True, employee_id__is_active=True):
         leave_type = available.leave_type_id
         if not leave_type or not leave_type.monthly_accrual:
+            continue
+
+        employee = available.employee_id
+        # Re-check eligibility (e.g. CL requires confirmed)
+        is_eligible, _ = evaluate_leave_type_conditions(
+            leave_type, employee, for_assignment=False
+        )
+        if not is_eligible:
             continue
 
         if available.last_accrual_date:
@@ -609,24 +649,26 @@ def accrue_monthly_balances(today_date=None):
             if last_key >= month_key:
                 continue
 
-        annual = resolve_annual_leave_days(leave_type, available.employee_id)
+        annual = resolve_annual_leave_days(leave_type, employee)
         monthly_rate = annual / 12.0
         if monthly_rate <= 0:
             continue
 
-        employee = available.employee_id
         work = getattr(employee, "employee_work_info", None)
         doj = getattr(work, "date_joining", None) if work else None
         if doj and (doj.year, doj.month) == month_key and doj.day > 1:
             days_in_month = calendar.monthrange(today_date.year, today_date.month)[1]
             monthly_rate *= (days_in_month - doj.day + 1) / days_in_month
 
-        cap = annual
-        if leave_type.carryforward_max:
-            cap += float(leave_type.carryforward_max)
+        # Cap at annual entitlement within FY (no CF stack for monthly-accrual FY types)
+        current = float(available.available_days or 0)
+        if leave_type.carryforward_type == "no carryforward":
+            cap = annual
+        else:
+            cap = annual
+            if leave_type.carryforward_max:
+                cap += float(leave_type.carryforward_max)
 
-        available.available_days = min(
-            float(available.available_days or 0) + monthly_rate, cap
-        )
+        available.available_days = min(current + monthly_rate, cap)
         available.last_accrual_date = today_date
         available.save(update_fields=["available_days", "last_accrual_date"])

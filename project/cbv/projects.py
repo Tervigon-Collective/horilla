@@ -27,7 +27,7 @@ from horilla_views.generic.cbv.views import (
 from project.cbv.cbv_decorators import is_projectmanager_or_member_or_perms
 from project.filters import ProjectFilter
 from project.forms import ProjectForm
-from project.methods import any_project_manager, any_project_member
+from project.methods import any_project_manager, any_project_member, can_create_project
 from project.models import Project
 
 
@@ -67,48 +67,65 @@ class ProjectsNavView(HorillaNavView):
         #     ("members", _("Members")),
         # ]
         if self.request.user.has_perm("project.view_project"):
-            self.actions = [
-                {
-                    "action": _("Import"),
-                    "attrs": """
-                        id="importProject"
-                        data-toggle="oh-modal-toggle"
-                        data-target="#projectImport"
-                        style="cursor: pointer;"
-                    """,
-                },
-                {
-                    "action": _("Archive"),
-                    "attrs": """
-                        id="archiveProject"
-                        style="cursor: pointer;"
-                        onclick="validateProjectIds(event);"
-                        data-action="archive"
-                    """,
-                },
-                {
-                    "action": _("Un-archive"),
-                    "attrs": """
-                        id="unArchiveProject"
-                        style="cursor: pointer;"
-                        onclick="validateProjectIds(event);"
-                        data-action="unarchive"
-                    """,
-                },
-                {
-                    "action": _("Delete"),
-                    "attrs": """
-                        class="oh-dropdown__link--danger"
-                        data-action ="delete"
-                        id="deleteProject"
-                        onclick="validateProjectIds(event);"
-                        style="cursor: pointer; color:red !important"
-                    """,
-                },
-            ]
-            if has_export_access(self.request, Project):
-                self.actions.insert(
-                    1,
+            from project.methods import can_view_all_projects
+
+            # ESS has view_project for menu access — bulk import/archive/delete
+            # is org-wide / project-manager only.
+            if can_view_all_projects(self.request) or self.request.user.has_perm(
+                "project.delete_project"
+            ):
+                self.actions = [
+                    {
+                        "action": _("Import"),
+                        "attrs": """
+                            id="importProject"
+                            data-toggle="oh-modal-toggle"
+                            data-target="#projectImport"
+                            style="cursor: pointer;"
+                        """,
+                    },
+                    {
+                        "action": _("Archive"),
+                        "attrs": """
+                            id="archiveProject"
+                            style="cursor: pointer;"
+                            onclick="validateProjectIds(event);"
+                            data-action="archive"
+                        """,
+                    },
+                    {
+                        "action": _("Un-archive"),
+                        "attrs": """
+                            id="unArchiveProject"
+                            style="cursor: pointer;"
+                            onclick="validateProjectIds(event);"
+                            data-action="unarchive"
+                        """,
+                    },
+                    {
+                        "action": _("Delete"),
+                        "attrs": """
+                            class="oh-dropdown__link--danger"
+                            data-action ="delete"
+                            id="deleteProject"
+                            onclick="validateProjectIds(event);"
+                            style="cursor: pointer; color:red !important"
+                        """,
+                    },
+                ]
+                if has_export_access(self.request, Project):
+                    self.actions.insert(
+                        1,
+                        {
+                            "action": _("Export"),
+                            "attrs": """
+                                id="exportProject"
+                                style="cursor: pointer;"
+                            """,
+                        },
+                    )
+            elif has_export_access(self.request, Project):
+                self.actions = [
                     {
                         "action": _("Export"),
                         "attrs": """
@@ -116,7 +133,7 @@ class ProjectsNavView(HorillaNavView):
                             style="cursor: pointer;"
                         """,
                     },
-                )
+                ]
         self.view_types = [
             {
                 "type": "list",
@@ -135,7 +152,9 @@ class ProjectsNavView(HorillaNavView):
                 """,
             },
         ]
-        if self.request.user.has_perm("project.add_project"):
+        if self.request.user.has_perm("project.add_project") or can_create_project(
+            self.request
+        ):
             self.create_attrs = f"""
                 onclick = "event.stopPropagation();"
                 data-toggle="oh-modal-toggle"
@@ -167,13 +186,12 @@ class ProjectsList(HorillaListView):
             else False
         )
         queryset = queryset.filter(is_active=active)
-        if not self.request.user.has_perm("project.view_project"):
-            employee = self.request.user.employee_get
-            task_filter = queryset.filter(
-                Q(task__task_members=employee) | Q(task__task_managers=employee)
+        from project.methods import accessible_projects_queryset, can_view_all_projects
+
+        if not can_view_all_projects(self.request):
+            queryset = queryset.filter(
+                id__in=accessible_projects_queryset(self.request).values("id")
             )
-            project_filter = queryset.filter(Q(managers=employee) | Q(members=employee))
-            queryset = task_filter | project_filter
         return queryset.distinct()
 
     def __init__(self, **kwargs: Any) -> None:
@@ -291,9 +309,10 @@ class ProjectFormView(HorillaFormView):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         user = self.request.user
-
-        if not user.is_superuser and not user.has_perm("project.add_project"):
-            self.template_name = "decorator_404.html"
+        if not user.is_superuser and not can_create_project(self.request):
+            # Updates still go through form_valid permission checks.
+            if not self.kwargs.get("pk"):
+                self.template_name = "decorator_404.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -307,7 +326,8 @@ class ProjectFormView(HorillaFormView):
         from project.methods import can_mutate_project, is_project_manager_or_super_user
 
         if form.is_valid():
-            if form.instance.pk:
+            is_create = not bool(form.instance.pk)
+            if not is_create:
                 project = form.instance
                 if not (
                     self.request.user.has_perm("project.change_project")
@@ -325,14 +345,15 @@ class ProjectFormView(HorillaFormView):
                         "<script>window.location.reload()</script>"
                     )
             else:
-                if not (
-                    self.request.user.is_superuser
-                    or self.request.user.has_perm("project.add_project")
-                ):
+                if not can_create_project(self.request):
                     messages.error(self.request, _("You don't have permission."))
                     return self.HttpResponse()
                 message = _("New project created")
-            form.save()
+            project = form.save()
+            if is_create:
+                employee = getattr(self.request.user, "employee_get", None)
+                if employee:
+                    project.managers.add(employee)
             messages.success(self.request, _(message))
             return self.HttpResponse()
         return super().form_valid(form)
@@ -364,13 +385,12 @@ class ProjectCardView(HorillaCardView):
             else False
         )
         queryset = queryset.filter(is_active=active)
-        if not self.request.user.has_perm("project.view_project"):
-            employee = self.request.user.employee_get
-            task_filter = queryset.filter(
-                Q(task__task_members=employee) | Q(task__task_managers=employee)
+        from project.methods import accessible_projects_queryset, can_view_all_projects
+
+        if not can_view_all_projects(self.request):
+            queryset = queryset.filter(
+                id__in=accessible_projects_queryset(self.request).values("id")
             )
-            project_filter = queryset.filter(Q(managers=employee) | Q(members=employee))
-            queryset = task_filter | project_filter
         return queryset.distinct()
 
     def __init__(self, **kwargs):

@@ -1,0 +1,125 @@
+{% extends "index.html" %}
+{% load i18n static %}
+
+{% block content %}
+<style>
+.prob-page { margin: -24px; padding: 24px; min-height: calc(100vh - 80px); }
+.prob-head__title { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+.prob-head__desc { color: rgba(100,100,100,.85); margin: 0 0 16px; font-size: 13px; }
+.prob-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.prob-tabs a {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 8px; text-decoration: none;
+  border: 1px solid rgba(128,128,128,.2); color: inherit; font-size: 13px;
+}
+.prob-tabs a.is-active { background: #E54F38; color: #fff; border-color: #E54F38; }
+.prob-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px;
+  background: rgba(128,128,128,.12);
+}
+.prob-badge--overdue { background: rgba(220,38,38,.12); color: #dc2626; }
+.prob-badge--soon { background: rgba(217,119,6,.15); color: #d97706; }
+.prob-badge--ok { background: rgba(37,99,235,.12); color: #2563eb; }
+.prob-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+</style>
+
+<div class="prob-page">
+  <div class="prob-head">
+    <h1 class="prob-head__title">{% trans "Probation confirmation" %}</h1>
+    <p class="prob-head__desc">
+      {% trans "Confirm employees whose probation has ended or is ending soon. Confirmation assigns Casual Leave where configured." %}
+    </p>
+  </div>
+
+  <div class="prob-tabs">
+    <a href="?tab=all" class="{% if tab == 'all' %}is-active{% endif %}">
+      {% trans "All on probation" %} ({{ counts.all }})
+    </a>
+    <a href="?tab=due" class="{% if tab == 'due' %}is-active{% endif %}">
+      {% trans "Due ≤ 30 days" %} ({{ counts.due }})
+    </a>
+    <a href="?tab=soon" class="{% if tab == 'soon' %}is-active{% endif %}">
+      {% trans "Due ≤ 7 days" %} ({{ counts.soon }})
+    </a>
+    <a href="?tab=overdue" class="{% if tab == 'overdue' %}is-active{% endif %}">
+      {% trans "Overdue" %} ({{ counts.overdue }})
+    </a>
+  </div>
+
+  <form method="post" action="{% url 'probation-confirm-bulk' %}?tab={{ tab }}">
+    {% csrf_token %}
+    <div class="prob-actions" style="margin-bottom:12px;">
+      <button type="submit" class="oh-btn oh-btn--secondary oh-btn--sm">
+        {% trans "Confirm selected" %}
+      </button>
+    </div>
+
+    <div class="oh-sticky-table">
+      <table class="oh-table">
+        <thead>
+          <tr>
+            <th style="width:2rem;"><input type="checkbox" id="prob-select-all"></th>
+            <th>{% trans "Employee" %}</th>
+            <th>{% trans "Department" %}</th>
+            <th>{% trans "Joining" %}</th>
+            <th>{% trans "Probation end" %}</th>
+            <th>{% trans "Status" %}</th>
+            <th>{% trans "Action" %}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td><input type="checkbox" name="ids" value="{{ row.work_info.id }}"></td>
+            <td>
+              <a href="{% url 'employee-view-individual' row.employee.id %}">
+                {{ row.employee.get_full_name }}
+              </a>
+              {% if row.employee.badge_id %}
+              <div class="is-muted" style="font-size:12px;">{{ row.employee.badge_id }}</div>
+              {% endif %}
+            </td>
+            <td>{{ row.work_info.department_id|default:"—" }}</td>
+            <td>{{ row.work_info.date_joining|date:"d M Y"|default:"—" }}</td>
+            <td>{{ row.work_info.probation_end|date:"d M Y"|default:"—" }}</td>
+            <td>
+              {% if row.days is not None and row.days < 0 %}
+              <span class="prob-badge prob-badge--overdue">{{ row.status_label }} ({{ row.days }})</span>
+              {% elif row.days is not None and row.days <= 7 %}
+              <span class="prob-badge prob-badge--soon">{{ row.status_label }} ({{ row.days }}d)</span>
+              {% else %}
+              <span class="prob-badge prob-badge--ok">{{ row.status_label }}{% if row.days is not None %} ({{ row.days }}d){% endif %}</span>
+              {% endif %}
+            </td>
+            <td>
+              <a class="oh-btn oh-btn--success oh-btn--sm"
+                 href="{% url 'probation-confirm' row.work_info.id %}?tab={{ tab }}">
+                {% trans "Confirm" %}
+              </a>
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="7" style="text-align:center;padding:2rem;">
+              {% trans "No employees on probation for this filter." %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </form>
+</div>
+
+<script>
+(function () {
+  var all = document.getElementById('prob-select-all');
+  if (!all) return;
+  all.addEventListener('change', function () {
+    document.querySelectorAll('input[name="ids"]').forEach(function (el) {
+      el.checked = all.checked;
+    });
+  });
+})();
+</script>
+{% endblock %}

@@ -15,6 +15,8 @@ from employee import (
     policies,
     requests,
     views,
+    views_expiring_documents,
+    views_probation,
     work_schedules,
 )
 from employee.cbv import (
@@ -33,6 +35,26 @@ from employee.models import DisciplinaryAction, Employee, EmployeeTag
 from horilla_documents.models import DocumentRequest
 
 urlpatterns = [
+    path(
+        "probation/",
+        views_probation.probation_list,
+        name="probation-list",
+    ),
+    path(
+        "probation/confirm/<int:pk>/",
+        views_probation.probation_confirm,
+        name="probation-confirm",
+    ),
+    path(
+        "probation/confirm-bulk/",
+        views_probation.probation_confirm_bulk,
+        name="probation-confirm-bulk",
+    ),
+    path(
+        "expiring-documents/",
+        views_expiring_documents.expiring_documents_list,
+        name="expiring-documents-list",
+    ),
     path(
         "allocation-view/<int:pk>/",
         allocations.AllocationView.as_view(),

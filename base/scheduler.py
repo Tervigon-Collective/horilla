@@ -2,7 +2,7 @@ import calendar
 import sys
 from datetime import date, datetime, timedelta
 
-from apscheduler.schedulers.background import BackgroundScheduler
+from horilla.db import SafeBackgroundScheduler
 from django.urls import reverse
 
 from notifications.signals import notify
@@ -462,7 +462,7 @@ if not any(
     cmd in sys.argv
     for cmd in ["makemigrations", "migrate", "compilemessages", "flush", "shell"]
 ):
-    scheduler = BackgroundScheduler()
+    scheduler = SafeBackgroundScheduler()
 
     # Add jobs with next_run_time set to the end of the previous job
     try:

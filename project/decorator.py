@@ -48,24 +48,14 @@ def project_update_permission(function=None, *args, **kwargs):
         """
         This method is used to check the employee is project member or not
         """
+        from project.methods import can_mutate_project, can_view_all_projects
+
         project = Project.objects.filter(id=project_id).first()
         if not project:
             return HorillaRedirect(request, message=_("Project not found"))
-        employee = request.user.employee_get
-        if (
-            request.user.has_perm("project.change_project")
-            or employee in project.managers.all()
-            or employee in project.members.all()
-            or any(
-                employee in task.task_managers.all() for task in project.task_set.all()
-            )
-            or any(
-                employee in task.task_members.all() for task in project.task_set.all()
-            )
-        ):
+        if can_view_all_projects(request) or can_mutate_project(request, project):
             return function(request, *args, project_id=project_id, **kwargs)
         return HorillaRedirect(request, message=_("You don't have permission."))
-        # return function(request, *args, **kwargs)
 
     return check_project_member
 

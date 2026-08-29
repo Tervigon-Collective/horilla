@@ -22,9 +22,13 @@ from horilla.methods import handle_no_permission
 from notifications.signals import notify
 from project.methods import (
     can_add_task_to_project,
+    can_assign_timesheet_to,
+    can_create_project,
     can_delete_task,
+    can_log_timesheet_on_project,
     can_mutate_project,
     can_mutate_task,
+    can_view_all_projects,
     can_view_employee_timesheet,
     can_view_project,
     can_view_task,
@@ -744,18 +748,19 @@ def project_archive(request, project_id):
 
 
 @login_required
-@project_update_permission()
 def task_view(request, project_id, **kwargs):
     """
     For showing tasks
     """
+    project = Project.objects.filter(id=project_id).first()
+    if not project or not can_view_project(request, project):
+        return HorillaRedirect(request, message=_("You don't have permission."))
     form = TaskAllFilter().form
     for field, value in form.fields.items():
         if form.fields.get(field) and form.fields[field].widget.attrs.get("id"):
             del form.fields[field].widget.attrs["id"]
             form.fields[field].widget.attrs["class"] = "w-100 oh-select oh-select2"
     view_type = "card"
-    project = Project.objects.get(id=project_id)
     stages = ProjectStage.objects.filter(project=project).order_by("sequence")
     tasks = Task.objects.filter(project=project)
     form.fields["stage"].queryset = ProjectStage.objects.filter(project=project.id)
@@ -1042,9 +1047,7 @@ def task_timesheet(request, task_id):
 @login_required
 def create_timesheet_task(request, task_id):
     task = Task.objects.get(id=task_id)
-    if not can_mutate_task(request, task) and not request.user.has_perm(
-        "project.add_timesheet"
-    ):
+    if not can_log_timesheet_on_project(request, task.project):
         messages.error(request, _("You don't have permission."))
         return HorillaRedirect(request)
     project = task.project
@@ -1052,6 +1055,10 @@ def create_timesheet_task(request, task_id):
     if request.method == "POST":
         form = TimesheetInTaskForm(request.POST)
         if form.is_valid():
+            employee = form.cleaned_data.get("employee_id")
+            if not can_assign_timesheet_to(request, project, employee):
+                messages.error(request, _("You don't have permission."))
+                return HorillaRedirect(request)
             form.save()
             messages.success(request, _("Timesheet created"))
             response = render(
@@ -1177,7 +1184,9 @@ def task_all_create(request):
     For creating new task in task all view
     """
     if not (
-        request.user.is_superuser or request.user.has_perm("project.add_task")
+        request.user.is_superuser
+        or getattr(request.user, "employee_get", None)
+        or request.user.has_perm("project.add_task")
     ):
         messages.error(request, _("You don't have permission."))
         return HorillaRedirect(request)
@@ -1186,9 +1195,7 @@ def task_all_create(request):
         form = TaskAllForm(request.POST, request.FILES)
         if form.is_valid():
             project = form.cleaned_data.get("project")
-            if not can_add_task_to_project(request, project) and not request.user.has_perm(
-                "project.add_task"
-            ):
+            if not can_add_task_to_project(request, project):
                 messages.error(request, _("You don't have permission."))
                 return HorillaRedirect(request)
             form.save()
@@ -1610,28 +1617,36 @@ def get_members(request):
     project_id = request.GET.get("project_id")
     task_id = request.GET.get("task_id")
     form = TimeSheetForm()
-    if project_id and task_id:
+    actor = getattr(request.user, "employee_get", None)
+    if project_id and task_id and actor:
         if task_id != "dynamic_create" and project_id != "dynamic_create":
             project = Project.objects.filter(id=project_id).first()
             task = Task.objects.filter(id=task_id).first()
-            employee = Employee.objects.filter(id=request.user.employee_get.id)
-            if not project or not task:
+            employee = Employee.objects.filter(id=actor.id)
+            if (
+                not project
+                or not task
+                or not can_log_timesheet_on_project(request, project)
+            ):
                 form.fields["employee_id"].queryset = Employee.objects.none()
-            elif employee.first() in project.managers.all():
+            elif can_view_all_projects(request) or actor in project.managers.all():
                 members = (
                     employee
                     | project.members.all()
+                    | project.managers.all()
                     | task.task_managers.all()
                     | task.task_members.all()
                 ).distinct()
                 form.fields["employee_id"].queryset = members
-            elif employee.first() in task.task_managers.all():
+            elif actor in task.task_managers.all():
                 members = (employee | task.task_members.all()).distinct()
                 form.fields["employee_id"].queryset = members
             else:
                 form.fields["employee_id"].queryset = employee
     else:
-        form.fields["employee_id"].queryset = Employee.objects.none()
+        form.fields["employee_id"].queryset = (
+            Employee.objects.filter(id=actor.id) if actor else Employee.objects.none()
+        )
 
     employee_field_html = render_to_string(
         "cbv/timesheet/employee_field.html",
@@ -1652,40 +1667,38 @@ def get_tasks_in_timesheet(request):
     project_id = request.GET.get("project_id")
     form = TimeSheetForm()
     if project_id and project_id != "dynamic_create":
-        project = Project.objects.get(id=project_id)
-        employee = request.user.employee_get
-        all_tasks = Task.objects.filter(project=project)
-        # ie the employee is a project manager return all tasks
-        if (
-            employee in project.managers.all()
-            or employee in project.members.all()
-            or request.user.has_perm("project.add_timesheet")
-        ):
-            tasks = all_tasks
-        # if the employee is a task manager and task member
-        elif (
-            Task.objects.filter(project=project_id, task_managers=employee).exists()
-            and Task.objects.filter(project=project_id, task_members=employee).exists()
-        ):
-            tasks = (
-                Task.objects.filter(project=project_id, task_managers=employee)
-                | Task.objects.filter(project=project_id, task_members=employee)
-            ).distinct()
-        # if the employee is manager of a task under the project
-        elif Task.objects.filter(project=project_id, task_managers=employee).exists():
-            tasks = Task.objects.filter(project=project_id, task_managers=employee)
-        # if the employee ids a member of task under the project
-        elif Task.objects.filter(project=project_id, task_members=employee).exists():
-            tasks = Task.objects.filter(project=project_id, task_members=employee)
+        project = Project.objects.filter(id=project_id).first()
+        if not project or not can_log_timesheet_on_project(request, project):
+            form.fields["task_id"].queryset = Task.objects.none()
         else:
-            tasks = Task.objects.none()
-        form.fields["task_id"].queryset = tasks
-        form.fields["task_id"].choices = list(form.fields["task_id"].choices)
-        if employee in project.managers.all() or request.user.is_superuser:
-            form.fields["task_id"].choices.append(("dynamic_create", "Dynamic create"))
-        task_id = request.GET.get("task_id")
-        if task_id:
-            form.fields["task_id"].initial = task_id
+            employee = getattr(request.user, "employee_get", None)
+            all_tasks = Task.objects.filter(project=project)
+            # Project managers/members (and org-wide) see all tasks on the project
+            if (
+                can_view_all_projects(request)
+                or (employee and employee in project.managers.all())
+                or (employee and employee in project.members.all())
+            ):
+                tasks = all_tasks
+            elif employee and (
+                Task.objects.filter(project=project, task_managers=employee).exists()
+                or Task.objects.filter(project=project, task_members=employee).exists()
+            ):
+                tasks = (
+                    Task.objects.filter(project=project, task_managers=employee)
+                    | Task.objects.filter(project=project, task_members=employee)
+                ).distinct()
+            else:
+                tasks = Task.objects.none()
+            form.fields["task_id"].queryset = tasks
+            form.fields["task_id"].choices = list(form.fields["task_id"].choices)
+            if can_add_task_to_project(request, project):
+                form.fields["task_id"].choices.append(
+                    ("dynamic_create", "Dynamic create")
+                )
+            task_id = request.GET.get("task_id")
+            if task_id:
+                form.fields["task_id"].initial = task_id
     else:
         form.fields["task_id"].queryset = Task.objects.none()
 
@@ -1721,6 +1734,11 @@ def time_sheet_creation(request):
     if request.method == "POST":
         form = TimeSheetForm(request.POST, request.FILES, request=request)
         if form.is_valid():
+            project = form.cleaned_data.get("project_id")
+            employee = form.cleaned_data.get("employee_id")
+            if not can_assign_timesheet_to(request, project, employee):
+                messages.error(request, _("You don't have permission."))
+                return HorillaRedirect(request)
             form.save()
             messages.success(request, _("Time sheet created"))
             response = render(
@@ -1745,15 +1763,16 @@ def time_sheet_project_creation(request):
         created project ID and name in case of successful creation,
         or the validation errors in case of an invalid form submission.
     """
-    if not (
-        request.user.is_superuser or request.user.has_perm("project.add_project")
-    ):
+    if not can_create_project(request):
         return JsonResponse({"error": "Permission denied"}, status=403)
     form = ProjectTimeSheetForm()
     if request.method == "POST":
         form = ProjectTimeSheetForm(request.POST, request.FILES)
         if form.is_valid():
             instance = form.save()
+            employee = getattr(request.user, "employee_get", None)
+            if employee:
+                instance.managers.add(employee)
             return JsonResponse({"id": instance.id, "name": instance.title})
         errors = form.errors.as_json()
         return JsonResponse({"errors": errors})
@@ -1939,7 +1958,11 @@ def time_sheet_initial(request):
         messages.error(request, _("Missing required parameters: project_id."))
         return JsonResponse({"error": "Missing required parameters: project_id."})
 
-    tasks = Task.objects.filter(project=project_id).values("title", "id")
+    project = Project.objects.filter(id=project_id).first()
+    if not project or not can_log_timesheet_on_project(request, project):
+        return JsonResponse({"error": "Permission denied"}, status=403)
+
+    tasks = Task.objects.filter(project=project).values("title", "id")
     return JsonResponse({"data": list(tasks)})
 
 

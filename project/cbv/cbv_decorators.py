@@ -8,6 +8,7 @@ from project.methods import (
     any_project_member,
     any_task_manager,
     any_task_member,
+    can_create_project,
     has_subordinates,
 )
 
@@ -37,6 +38,7 @@ def is_projectmanager_or_member_or_perms(function, perm):
             or any_project_member(user)
             or any_task_manager(user)
             or any_task_member(user)
+            or can_create_project(request)
         ):
             return function(self, *args, **kwargs)
         messages.info(request, _("You don't have permission."))

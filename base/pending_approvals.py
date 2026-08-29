@@ -73,15 +73,11 @@ def _iso_date(value) -> str | None:
 
 def pending_leave_queryset(request):
     from leave.models import LeaveRequest
+    from leave.methods import leave_requests_awaiting_approval
 
     ctx = get_approval_context(request.user)
     if ctx["can_approve"]:
-        if ctx["has_leave_perm"]:
-            return LeaveRequest.objects.filter(status="requested")
-        from base.methods import filtersubordinates
-
-        qs = LeaveRequest.objects.filter(status="requested")
-        return filtersubordinates(request, qs, "leave.change_leaverequest")
+        return leave_requests_awaiting_approval(request)
     employee = ctx["employee"]
     if not employee:
         return LeaveRequest.objects.none()
@@ -158,35 +154,25 @@ def pending_work_type_queryset(request):
 
 
 def pending_reimbursement_queryset(request):
-    from payroll.models.models import Reimbursement
+    from payroll.methods.reimbursement_approval import reimbursements_awaiting_approval
 
-    ctx = get_approval_context(request.user)
-    if ctx["can_approve"] and ctx["has_reimb_perm"]:
-        return Reimbursement.objects.filter(status="requested")
-    employee = ctx["employee"]
-    if not employee:
+    try:
+        return reimbursements_awaiting_approval(request)
+    except Exception:
+        from payroll.models.models import Reimbursement
+
         return Reimbursement.objects.none()
-    return Reimbursement.objects.filter(employee_id=employee, status="requested")
 
 
 def pending_overtime_queryset(request):
-    from attendance.models import Attendance
+    from attendance.methods.overtime_approval import overtime_awaiting_approval
 
-    ctx = get_approval_context(request.user)
-    base = Attendance.objects.filter(
-        attendance_overtime_approve=False,
-        overtime_second__gt=0,
-    )
-    if ctx["can_approve"]:
-        if ctx["has_ot_perm"] or ctx["has_attendance_perm"]:
-            return base
-        from base.methods import filtersubordinates
+    try:
+        return overtime_awaiting_approval(request)
+    except Exception:
+        from attendance.models import Attendance
 
-        return filtersubordinates(request, base, "attendance.change_attendance")
-    employee = ctx["employee"]
-    if not employee:
         return Attendance.objects.none()
-    return base.filter(employee_id=employee)
 
 
 def _can_act_on_type(ctx: dict[str, Any], item_type: str) -> bool:
@@ -225,22 +211,41 @@ def _inbox_item(
 
 
 def _serialize_leave(obj, ctx):
+    from leave.methods import leave_approval_progress
+
     leave_type = getattr(obj.leave_type_id, "name", str(obj.leave_type_id))
-    return _inbox_item(
+    progress = leave_approval_progress(obj)
+    actor = ctx.get("employee")
+    your_turn = False
+    if progress.get("is_multi_level") and actor:
+        your_turn = progress.get("pending_manager_id") == actor.id
+        progress["your_turn"] = your_turn
+    summary = f"{leave_type} · {obj.requested_days} days"
+    if progress.get("is_multi_level") and progress.get("total_levels"):
+        summary = (
+            f"{summary} · L{progress.get('approved_count', 0) + (1 if your_turn else 0)}"
+            f"/{progress['total_levels']}"
+        )
+    detail = {
+        "leave_type": leave_type,
+        "start_date": _iso_date(obj.start_date),
+        "end_date": _iso_date(obj.end_date),
+        "requested_days": obj.requested_days,
+        "description": obj.description,
+        "status": obj.status,
+        **progress,
+    }
+    item = _inbox_item(
         "leave",
         obj,
-        summary=f"{leave_type} · {obj.requested_days} days",
+        summary=summary,
         requested_at=obj.requested_date or obj.start_date,
-        detail={
-            "leave_type": leave_type,
-            "start_date": _iso_date(obj.start_date),
-            "end_date": _iso_date(obj.end_date),
-            "requested_days": obj.requested_days,
-            "description": obj.description,
-            "status": obj.status,
-        },
+        detail=detail,
         ctx=ctx,
     )
+    if your_turn:
+        item["can_act"] = True
+    return item
 
 
 def _serialize_attendance(obj, ctx):
@@ -313,10 +318,24 @@ def _serialize_work_type(obj, ctx):
 
 
 def _serialize_reimbursement(obj, ctx):
-    return _inbox_item(
+    from payroll.methods.reimbursement_approval import reimbursement_approval_progress
+
+    progress = reimbursement_approval_progress(obj)
+    actor = ctx.get("employee")
+    your_turn = False
+    if progress.get("is_multi_level") and actor:
+        your_turn = progress.get("pending_manager_id") == actor.id
+        progress["your_turn"] = your_turn
+    summary = f"{obj.get_type_display()} · {obj.title}"
+    if progress.get("is_multi_level") and progress.get("total_levels"):
+        summary = (
+            f"{summary} · L{progress.get('approved_count', 0) + (1 if your_turn else 0)}"
+            f"/{progress['total_levels']}"
+        )
+    item = _inbox_item(
         "reimbursement",
         obj,
-        summary=f"{obj.get_type_display()} · {obj.title}",
+        summary=summary,
         requested_at=obj.allowance_on,
         detail={
             "title": obj.title,
@@ -324,25 +343,47 @@ def _serialize_reimbursement(obj, ctx):
             "amount": float(obj.amount or 0),
             "allowance_on": _iso_date(obj.allowance_on),
             "status": obj.status,
+            **progress,
         },
         ctx=ctx,
     )
+    if your_turn:
+        item["can_act"] = True
+    return item
 
 
 def _serialize_overtime(obj, ctx):
+    from attendance.methods.overtime_approval import overtime_approval_progress
+
     hours = round(float(obj.overtime_second or 0) / 3600.0, 2)
-    return _inbox_item(
+    progress = overtime_approval_progress(obj)
+    actor = ctx.get("employee")
+    your_turn = False
+    if progress.get("is_multi_level") and actor:
+        your_turn = progress.get("pending_manager_id") == actor.id
+        progress["your_turn"] = your_turn
+    summary = f"Overtime · {obj.attendance_date} · {hours}h"
+    if progress.get("is_multi_level") and progress.get("total_levels"):
+        summary = (
+            f"{summary} · L{progress.get('approved_count', 0) + (1 if your_turn else 0)}"
+            f"/{progress['total_levels']}"
+        )
+    item = _inbox_item(
         "overtime",
         obj,
-        summary=f"Overtime · {obj.attendance_date} · {hours}h",
+        summary=summary,
         requested_at=obj.attendance_date,
         detail={
             "attendance_date": _iso_date(obj.attendance_date),
             "overtime_hours": hours,
             "overtime_second": obj.overtime_second,
+            **progress,
         },
         ctx=ctx,
     )
+    if your_turn:
+        item["can_act"] = True
+    return item
 
 
 INBOX_SOURCES = [
@@ -448,7 +489,53 @@ def execute_pending_action(
 
     ctx = get_approval_context(request.user)
     if not _can_act_on_type(ctx, item_type):
-        return Response({"error": _("You do not have permission to act on this item.")}, status=status.HTTP_403_FORBIDDEN)
+        # Current-stage managers may still act on multi-level items without org-wide perm
+        stage_ok = False
+        if item_type == "leave" and ctx.get("employee"):
+            from leave.methods import assert_can_approve_leave_stage
+            from leave.models import LeaveRequest
+
+            try:
+                obj = LeaveRequest.objects.get(pk=item_id)
+                assert_can_approve_leave_stage(
+                    obj, ctx["employee"], is_superuser=False
+                )
+                stage_ok = True
+            except Exception:
+                stage_ok = False
+        elif item_type == "reimbursement" and ctx.get("employee"):
+            from payroll.methods.reimbursement_approval import (
+                assert_can_approve_reimbursement_stage,
+            )
+            from payroll.models.models import Reimbursement
+
+            try:
+                obj = Reimbursement.objects.get(pk=item_id)
+                assert_can_approve_reimbursement_stage(
+                    obj, ctx["employee"], is_superuser=False
+                )
+                stage_ok = True
+            except Exception:
+                stage_ok = False
+        elif item_type == "overtime" and ctx.get("employee"):
+            from attendance.methods.overtime_approval import (
+                assert_can_approve_overtime_stage,
+            )
+            from attendance.models import Attendance
+
+            try:
+                obj = Attendance.objects.get(pk=item_id)
+                assert_can_approve_overtime_stage(
+                    obj, ctx["employee"], is_superuser=False
+                )
+                stage_ok = True
+            except Exception:
+                stage_ok = False
+        if not stage_ok:
+            return Response(
+                {"error": _("You do not have permission to act on this item.")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     payload = payload or {}
 
@@ -474,21 +561,50 @@ def execute_pending_action(
 
     if item_type == "reimbursement":
         from payroll.methods.reimbursement_actions import apply_reimbursement_status
+        from payroll.methods.reimbursement_approval import (
+            assert_can_approve_reimbursement_stage,
+            reimbursement_stages,
+        )
         from payroll.models.models import Reimbursement
 
-        if not request.user.has_perm("payroll.change_reimbursement"):
-            return Response(
-                {"error": _("You do not have permission to act on this item.")},
-                status=status.HTTP_403_FORBIDDEN,
-            )
         try:
             reimbursement = Reimbursement.objects.get(id=item_id)
         except Reimbursement.DoesNotExist:
             return Response({"error": _("Not found.")}, status=status.HTTP_404_NOT_FOUND)
 
+        actor = ctx.get("employee")
+        force_finalize = request.user.is_superuser
+        stages = list(reimbursement_stages(reimbursement))
+        if stages and not force_finalize:
+            try:
+                assert_can_approve_reimbursement_stage(
+                    reimbursement, actor, is_superuser=False
+                )
+            except ValueError as exc:
+                return Response(
+                    {"error": str(exc)}, status=status.HTTP_403_FORBIDDEN
+                )
+        elif not stages and not (
+            force_finalize or request.user.has_perm("payroll.change_reimbursement")
+        ):
+            return Response(
+                {"error": _("You do not have permission to act on this item.")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         amount = payload.get("amount")
         status_val = "approved" if action == "approve" else "rejected"
-        apply_reimbursement_status(reimbursement, status_val, amount=amount)
+        try:
+            apply_reimbursement_status(
+                reimbursement,
+                status_val,
+                amount=amount,
+                employee=actor,
+                is_superuser=force_finalize,
+            )
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        reimbursement.refresh_from_db()
         return Response({"status": reimbursement.status}, status=status.HTTP_200_OK)
 
     if item_type == "shift":
@@ -533,20 +649,39 @@ def execute_pending_action(
         return AssetRejectAPIView().put(request, pk=item_id)
 
     if item_type == "overtime":
+        from attendance.methods.overtime_approval import (
+            apply_overtime_approval,
+            apply_overtime_rejection,
+        )
         from attendance.models import Attendance
 
         try:
             attendance = Attendance.objects.get(pk=item_id)
         except Attendance.DoesNotExist:
             return Response({"error": _("Not found.")}, status=status.HTTP_404_NOT_FOUND)
-        if action == "approve":
-            from horilla_api.api_views.attendance.views import OvertimeApproveView
-
-            return OvertimeApproveView().put(request, pk=item_id)
-        # Reject: clear OT seconds so it won't pay / reappear
-        attendance.overtime_second = 0
-        attendance.attendance_overtime_approve = False
-        attendance.save(update_fields=["overtime_second", "attendance_overtime_approve"])
+        actor = ctx.get("employee")
+        try:
+            if action == "approve":
+                fully = apply_overtime_approval(
+                    attendance,
+                    employee=actor,
+                    is_superuser=request.user.is_superuser,
+                )
+                return Response(
+                    {
+                        "status": "approved" if fully else "stage_approved",
+                        "attendance_overtime_approve": attendance.attendance_overtime_approve,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            apply_overtime_rejection(
+                attendance,
+                employee=actor,
+                is_superuser=request.user.is_superuser,
+            )
+            return Response({"status": "rejected"}, status=status.HTTP_200_OK)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_403_FORBIDDEN)
         return Response({"status": "rejected"}, status=status.HTTP_200_OK)
 
     return Response({"error": _("Unsupported type.")}, status=status.HTTP_400_BAD_REQUEST)

@@ -11,12 +11,19 @@ from project.models import Project, Task
 def task_crud_accessibility(
     request, instance: object = None, user_perms: PermWrapper = [], *args, **kwargs
 ) -> bool:
-    """
-    to access crud operations
-    """
-    from project.methods import can_delete_task, can_mutate_task
+    """Edit / update task (includes project members)."""
+    from project.methods import can_mutate_task
 
-    return can_mutate_task(request, instance) or can_delete_task(request, instance)
+    return can_mutate_task(request, instance)
+
+
+def task_delete_accessibility(
+    request, instance: object = None, user_perms: PermWrapper = [], *args, **kwargs
+) -> bool:
+    """Archive / delete task — managers only, not plain project members."""
+    from project.methods import can_delete_task
+
+    return can_delete_task(request, instance)
 
 
 def project_manager_accessibility(

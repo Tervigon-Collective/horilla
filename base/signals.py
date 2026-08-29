@@ -211,6 +211,7 @@ _DEFAULT_HRMS_GROUPS = {
             "horilla_documents",
             "helpdesk",
             "pms",
+            "project",
         ),
         "actions": ("add", "view", "change", "delete"),
     },

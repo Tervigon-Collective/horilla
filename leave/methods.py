@@ -180,31 +180,135 @@ def attendance_days(employee, attendances):
 
 def filter_conditional_leave_request(request):
     """
-    Filters and returns LeaveRequest objects that have been conditionally approved by the previous sequence of approvals.
+    Leave requests where the current user is the approver for the *current*
+    pending stage (previous stage approved, this stage not yet approved/rejected).
     """
     approval_manager = Employee.objects.filter(employee_user_id=request.user).first()
-    leave_request_ids = []
-    if apps.is_installed("leave"):
-        from leave.models import LeaveRequest, LeaveRequestConditionApproval
+    if not approval_manager or not apps.is_installed("leave"):
+        from leave.models import LeaveRequest
 
-        multiple_approval_requests = LeaveRequestConditionApproval.objects.filter(
-            manager_id=approval_manager
+        return LeaveRequest.objects.none()
+
+    from leave.models import LeaveRequest, LeaveRequestConditionApproval
+
+    pending_for_me = LeaveRequestConditionApproval.objects.filter(
+        manager_id=approval_manager,
+        is_approved=False,
+        is_rejected=False,
+        leave_request_id__status="requested",
+    ).select_related("leave_request_id")
+
+    leave_request_ids = []
+    for instance in pending_for_me:
+        if instance.sequence > 1:
+            prev_ok = LeaveRequestConditionApproval.objects.filter(
+                leave_request_id=instance.leave_request_id,
+                sequence=instance.sequence - 1,
+                is_approved=True,
+            ).exists()
+            if not prev_ok:
+                continue
+        leave_request_ids.append(instance.leave_request_id_id)
+
+    return LeaveRequest.objects.filter(pk__in=leave_request_ids)
+
+
+def leave_requests_awaiting_approval(request):
+    """
+    Union of:
+    - Normal requested leaves in the user's subordinate scope (excluding
+      those currently in a multi-approval chain), and
+    - Multi-approval leaves that are at the user's current sequence.
+    """
+    from base.methods import filtersubordinates, has_org_wide_perm
+    from leave.models import LeaveRequest, LeaveRequestConditionApproval
+
+    base_qs = LeaveRequest.objects.filter(status="requested")
+    multiple_approvals = filter_conditional_leave_request(request).distinct()
+
+    if has_org_wide_perm(request.user, "leave.change_leaverequest") or request.user.is_superuser:
+        normal_requests = base_qs
+    else:
+        normal_requests = filtersubordinates(
+            request, base_qs, "leave.change_leaverequest"
         )
 
-    else:
-        multiple_approval_requests = None
-    for instance in multiple_approval_requests:
-        if instance.sequence > 1:
-            pre_sequence = instance.sequence - 1
-            leave_request_id = instance.leave_request_id
-            instance = LeaveRequestConditionApproval.objects.filter(
-                leave_request_id=leave_request_id, sequence=pre_sequence
-            ).first()
-            if instance and instance.is_approved:
-                leave_request_ids.append(instance.leave_request_id.id)
-        else:
-            leave_request_ids.append(instance.leave_request_id.id)
-    return LeaveRequest.objects.filter(pk__in=leave_request_ids)
+    if not request.user.is_superuser:
+        # Exclude leaves stuck in a multi-approval chain from the "normal" bucket
+        # so only the current-stage approver (via multiple_approvals) sees them.
+        multi_ids = list(
+            LeaveRequestConditionApproval.objects.filter(
+                is_approved=False,
+                is_rejected=False,
+                leave_request_id__status="requested",
+            ).values_list("leave_request_id_id", flat=True)
+        )
+        if multi_ids:
+            normal_requests = normal_requests.exclude(id__in=multi_ids)
+
+    return (normal_requests | multiple_approvals).distinct()
+
+
+def leave_approval_progress(leave_request) -> dict:
+    """Progress payload for inbox / API: levels and whether it's the actor's turn."""
+    from leave.models import LeaveRequestConditionApproval
+
+    stages = list(
+        LeaveRequestConditionApproval.objects.filter(
+            leave_request_id=leave_request
+        ).order_by("sequence")
+    )
+    if not stages:
+        return {
+            "is_multi_level": False,
+            "approval_level": None,
+            "approved_count": 0,
+            "total_levels": 0,
+            "your_turn": False,
+        }
+    approved_count = sum(1 for s in stages if s.is_approved)
+    pending = next((s for s in stages if not s.is_approved and not s.is_rejected), None)
+    return {
+        "is_multi_level": True,
+        "approval_level": pending.sequence if pending else None,
+        "approved_count": approved_count,
+        "total_levels": len(stages),
+        "your_turn": False,  # filled by caller with actor
+        "pending_manager_id": pending.manager_id_id if pending else None,
+    }
+
+
+def assert_can_approve_leave_stage(leave_request, employee, *, is_superuser=False):
+    """
+    Return the LeaveRequestConditionApproval row to approve, or None for
+    single-level leave. Raises ValueError if out of order / wrong approver.
+    """
+    from leave.models import LeaveRequestConditionApproval
+
+    stages = list(
+        LeaveRequestConditionApproval.objects.filter(
+            leave_request_id=leave_request
+        ).order_by("sequence")
+    )
+    if not stages:
+        return None
+    if is_superuser:
+        return stages[-1]
+
+    pending = next((s for s in stages if not s.is_approved and not s.is_rejected), None)
+    if pending is None:
+        raise ValueError("All approval stages are already complete.")
+    if not employee or pending.manager_id_id != employee.id:
+        raise ValueError("You are not the current-stage approver for this leave request.")
+    if pending.sequence > 1:
+        prev_ok = LeaveRequestConditionApproval.objects.filter(
+            leave_request_id=leave_request,
+            sequence=pending.sequence - 1,
+            is_approved=True,
+        ).exists()
+        if not prev_ok:
+            raise ValueError("Previous approval stage is not complete yet.")
+    return pending
 
 
 def parse_excel_date(value):

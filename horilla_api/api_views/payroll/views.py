@@ -385,7 +385,17 @@ class ReimbusementApproveRejectView(APIView):
 
         amount = request.data.get("amount")
         amount = eval_validate(amount) if amount not in (None, "") else None
-        apply_reimbursement_status(reimbursement, status_val, amount=amount)
+        try:
+            apply_reimbursement_status(
+                reimbursement,
+                status_val,
+                amount=amount,
+                employee=getattr(request.user, "employee_get", None),
+                is_superuser=request.user.is_superuser,
+            )
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=403)
+        reimbursement.refresh_from_db()
         return Response({"status": reimbursement.status}, status=200)
 
 
@@ -531,8 +541,8 @@ class PayslipPDFAPIView(APIView):
         start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
         end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
 
-        month_start_name = start_date.strftime("%B %d, %Y")
-        month_end_name = end_date.strftime("%B %d, %Y")
+        month_start_name = start_date.strftime("%b %Y")
+        month_end_name = end_date.strftime("%b %Y")
 
         # formatted date for chosen company format (safe default if not found)
         formatted_start_date = start_date.strftime(

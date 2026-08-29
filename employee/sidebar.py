@@ -32,6 +32,16 @@ SUBMENUS = [
         "match_prefixes": ["/employee/employee-view-new/"],
     },
     {
+        "menu": _("Probation"),
+        "redirect": reverse_lazy("probation-list"),
+        "accessibility": "employee.sidebar.employee_accessibility",
+    },
+    {
+        "menu": _("Expiring Documents"),
+        "redirect": reverse_lazy("expiring-documents-list"),
+        "accessibility": "employee.sidebar.document_accessibility",
+    },
+    {
         "menu": _("Organization Chart"),
         "redirect": reverse_lazy("organisation-chart"),
     },
@@ -58,9 +68,11 @@ SUBMENUS = [
 
 
 def document_accessibility(request, submenu, user_perms, *args, **kwargs):
-    return request.user.has_perm(
-        "horilla_documents.view_documentrequest"
-    ) or is_reportingmanager(request.user)
+    return (
+        request.user.has_perm("horilla_documents.view_documentrequest")
+        or request.user.has_perm("horilla_documents.view_document")
+        or is_reportingmanager(request.user)
+    )
 
 
 def requests_accessibility(request, submenu, user_perms, *args, **kwargs):

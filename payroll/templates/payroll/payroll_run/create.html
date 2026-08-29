@@ -1,0 +1,29 @@
+{% load i18n %}
+<div class="oh-wrapper">
+  <h3>{% trans "Create payroll run" %}</h3>
+  <p>{% trans "Company" %}: {{ company }}</p>
+  <form method="post" class="oh-profile-section">
+    {% csrf_token %}
+    <div class="oh-input-group">
+      <label>{% trans "Year" %}</label>
+      <input class="oh-input" type="number" name="year" value="{{ year }}" required>
+    </div>
+    <div class="oh-input-group">
+      <label>{% trans "Month" %}</label>
+      <input class="oh-input" type="number" name="month" min="1" max="12" value="{{ month }}" required>
+    </div>
+    <div class="oh-input-group">
+      <label>{% trans "Proration method" %}</label>
+      <select class="oh-select" name="proration_method">
+        <option value="calendar">{% trans "Calendar-day" %}</option>
+        <option value="working_day">{% trans "Working-day" %}</option>
+      </select>
+    </div>
+    <div class="oh-input-group">
+      <label>{% trans "Notes" %}</label>
+      <textarea class="oh-input" name="notes" rows="2"></textarea>
+    </div>
+    <button type="submit" class="oh-btn oh-btn--secondary mt-2">{% trans "Create / open run" %}</button>
+    <a href="{% url 'payroll-run-list' %}" class="oh-btn oh-btn--light mt-2">{% trans "Cancel" %}</a>
+  </form>
+</div>

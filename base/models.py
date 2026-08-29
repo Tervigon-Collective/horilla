@@ -2139,6 +2139,8 @@ class DynamicEmailConfiguration(HorillaModel):
 FIELD_CHOICE = [
     ("", "---------"),
     ("requested_days", _("Leave Requested Days")),
+    ("reimbursement_amount", _("Reimbursement Amount")),
+    ("overtime_hours", _("Overtime Hours")),
 ]
 CONDITION_CHOICE = [
     ("equal", _("Equal (==)")),

@@ -21,6 +21,11 @@ urlpatterns = [
         name="form16-view",
     ),
     path(
+        "india-statutory/tax-computation/<int:emp_id>/",
+        views.tax_computation_view,
+        name="tax-computation-view",
+    ),
+    path(
         "india-statutory/form16/",
         views.form16_list,
         name="form16-list",
@@ -69,6 +74,16 @@ urlpatterns = [
         "india-statutory/traces/challan/",
         views.oltas_challan_download,
         name="oltas-challan-download",
+    ),
+    path(
+        "india-statutory/epf-ecr/",
+        views.epf_ecr_list,
+        name="epf-ecr-list",
+    ),
+    path(
+        "india-statutory/epf-ecr/download/",
+        views.epf_ecr_download,
+        name="epf-ecr-download",
     ),
     path(
         "india-statutory/accounting-export/",

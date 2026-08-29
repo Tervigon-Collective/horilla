@@ -81,16 +81,21 @@
     <div class="is-section__head"><h2 class="is-section__title">{% trans "Enrollments" %}</h2></div>
     <div class="is-section__body is-section__body--flush">
       <table class="is-table">
-        <thead><tr><th>{% trans "Employee" %}</th><th>{% trans "Status" %}</th><th>{% trans "Progress" %}</th></tr></thead>
+        <thead><tr><th>{% trans "Employee" %}</th><th>{% trans "Status" %}</th><th>{% trans "Progress" %}</th><th></th></tr></thead>
         <tbody>
           {% for e in enrollments %}
           <tr>
             <td>{{ e.employee_id.get_full_name }}</td>
             <td>{{ e.get_status_display }}</td>
             <td>{{ e.progress_percent }}%</td>
+            <td>
+              {% if e.status == "completed" %}
+              <a href="{% url 'lms-certificate-pdf' enrollment_id=e.id %}" class="oh-btn oh-btn--secondary oh-btn--sm">{% trans "Certificate" %}</a>
+              {% else %}—{% endif %}
+            </td>
           </tr>
           {% empty %}
-          <tr><td colspan="3" class="is-muted">{% trans "No enrollments." %}</td></tr>
+          <tr><td colspan="4" class="is-muted">{% trans "No enrollments." %}</td></tr>
           {% endfor %}
         </tbody>
       </table>

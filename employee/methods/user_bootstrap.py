@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 
 from django.contrib.auth.models import Group, Permission
 from django.db import transaction
@@ -33,14 +34,15 @@ ESS_PERMISSION_CODENAMES = (
     "view_payslip",
     "view_reimbursement",
     "add_reimbursement",
-    "change_reimbursement",
+    # No change_reimbursement — that is approve/reject (HR/payroll only)
     "view_loanaccount",
+    # No add/change_loanaccount — create/edit loans is HR/payroll only
     "add_ticket",
     "view_ticket",
     "add_assetrequest",
     "view_assetrequest",
     "view_employeeobjective",
-    "change_employeeobjective",
+    # No change_employeeobjective — edit others' OKRs is manager/HR only
     "view_announcement",
     "view_rotatingworktypeassign",
     "view_rotatingshiftassign",
@@ -48,6 +50,14 @@ ESS_PERMISSION_CODENAMES = (
     "add_shiftrequest",
     "view_worktyperequest",
     "add_worktyperequest",
+    # Project self-service (lists stay scoped to own/team; Admin/HR/PM see all)
+    "view_project",
+    "add_project",
+    "view_task",
+    "add_task",
+    "view_timesheet",
+    "add_timesheet",
+    "change_timesheet",
 )
 
 
@@ -104,7 +114,7 @@ def ensure_employee_user(employee):
         )
         return None
 
-    password = str(employee.phone or "123456").strip() or "123456"
+    password = secrets.token_urlsafe(12)
     user = HorillaUser.objects.filter(username=username).first()
     if not user:
         email = (employee.email or "").strip()

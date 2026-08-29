@@ -42,17 +42,13 @@ class ProjectsDueInMonth(HorillaListView):
         queryset = queryset.filter(
             Q(end_date__gte=first_day) & Q(end_date__lte=last_day_of_month)
         ).exclude(status="expired")
-        if not self.request.user.has_perm("project.view_project"):
-            employee = self.request.user.employee_get
-            task_filter = queryset.filter(
-                Q(task__task_members=employee)
-                | Q(task__task_managers=employee)
+        from project.methods import accessible_projects_queryset, can_view_all_projects
+
+        if not can_view_all_projects(self.request):
+            queryset = queryset.filter(
+                id__in=accessible_projects_queryset(self.request).values("id")
             )
-            project_filter = queryset.filter(
-                Q(managers=employee) | Q(members=employee)
-            )
-            queryset = (task_filter | project_filter).distinct()
-        return queryset
+        return queryset.distinct()
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -87,11 +83,9 @@ class ProjectDetailView(HorillaDetailedView):
         instance_id = resolve(self.request.path_info).kwargs.get("pk")
         employee = self.request.user.employee_get
         project = Project.objects.get(id=instance_id)
-        if (
-            employee in project.managers.all()
-            or employee in project.members.all()
-            or self.request.user.has_perm("project.view_project")
-        ):
+        from project.methods import can_view_project
+
+        if can_view_project(self.request, project):
             self.actions = [
                 {
                     "action": _("View Project"),

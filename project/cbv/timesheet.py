@@ -96,7 +96,7 @@ class TimeSheetNavView(HorillaNavView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        url = f"{reverse('personal-time-sheet-view',kwargs={'emp_id': self.request.user.employee_get.id})}"
+        actor = getattr(self.request.user, "employee_get", None)
         self.view_types = [
             {
                 "type": "list",
@@ -114,15 +114,21 @@ class TimeSheetNavView(HorillaNavView):
                           title ='{_("Card")}'
                           """,
             },
-            {
-                "type": "graph",
-                "icon": "bar-chart",
-                "url": url,
-                "attrs": f"""
+        ]
+        if actor:
+            url = reverse(
+                "personal-time-sheet-view", kwargs={"emp_id": actor.id}
+            )
+            self.view_types.append(
+                {
+                    "type": "graph",
+                    "icon": "bar-chart",
+                    "url": url,
+                    "attrs": """
                           title ='Graph'
                           """,
-            },
-        ]
+                }
+            )
         context["view_types"] = self.view_types
         return context
 
@@ -142,13 +148,12 @@ class TimeSheetList(HorillaListView):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        if not self.request.user.has_perm("project.view_timesheet"):
-            employee = self.request.user.employee_get
+        from project.methods import accessible_timesheets_queryset, can_view_all_projects
+
+        if not can_view_all_projects(self.request):
             queryset = queryset.filter(
-                Q(task_id__task_managers=employee)
-                | Q(project_id__managers=employee)
-                | Q(employee_id=employee)
-            ).distinct()
+                id__in=accessible_timesheets_queryset(self.request).values("id")
+            )
         return queryset
 
     def __init__(self, **kwargs: Any) -> None:
@@ -258,12 +263,15 @@ class TaskTimeSheet(TimeSheetList):
         task = Task.objects.filter(id=task_id).first()
         if not task:
             return queryset.none()
+        from project.methods import can_view_all_projects, can_view_task
+
+        if not can_view_task(self.request, task):
+            return queryset.none()
         queryset = TimeSheet.objects.filter(task_id=task_id)
-        actor = self.request.user.employee_get
-        # Managers / perm holders see all timesheets on the task; others only own.
+        actor = getattr(self.request.user, "employee_get", None)
+        # Org-wide / project or task managers see all; others only own.
         is_manager = (
-            self.request.user.is_superuser
-            or self.request.user.has_perm("project.view_timesheet")
+            can_view_all_projects(self.request)
             or (actor and actor in task.task_managers.all())
             or (actor and task.project and actor in task.project.managers.all())
         )
@@ -292,10 +300,12 @@ class TimeSheetFormView(HorillaFormView):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        from project.methods import can_create_project
+
         self.dynamic_create_fields = [
             ("task_id", DynamicTaskCreateFormView),
         ]
-        if self.request.user.has_perm("project.add_project"):
+        if can_create_project(self.request):
             self.dynamic_create_fields.append(
                 ("project_id", DynamicProjectCreationFormView)
             )
@@ -319,48 +329,58 @@ class TimeSheetFormView(HorillaFormView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        from project.methods import can_add_task_to_project, can_view_all_projects
+
         task_id = self.kwargs.get("task_id")
-        user_employee_id = self.request.user.employee_get.id
+        actor = getattr(self.request.user, "employee_get", None)
+        if not actor and not self.request.user.is_superuser:
+            return context
+        user_employee_id = actor.id if actor else None
         project = None
+        task = None
+        employee = (
+            Employee.objects.filter(id=user_employee_id)
+            if user_employee_id
+            else Employee.objects.none()
+        )
         if task_id:
-            task = Task.objects.get(id=task_id)
+            task = Task.objects.filter(id=task_id).first()
+            if not task:
+                return context
             project = task.project
-            employee = Employee.objects.filter(id=user_employee_id)
 
         if self.form.instance.pk:
-            task_id = self.form.instance.task_id.id
-            project = self.form.instance.project_id
-            tasks = Task.objects.filter(project=project)
-            employee = Employee.objects.filter(id=user_employee_id)
-            task = Task.objects.get(id=task_id)
-            self.form.fields["task_id"].queryset = tasks
-            self.form.fields["task_id"].choices = [
-                (item.id, item.title) for item in tasks
-            ]
-            self.form.fields["task_id"].choices.append(
-                ("dynamic_create", "Dynamic create")
-            )
-            task_id = self.request.GET.get("task_id")
+            ts = self.form.instance
+            project = ts.project_id
+            task = ts.task_id
+            if project:
+                tasks = Task.objects.filter(project=project)
+                self.form.fields["task_id"].queryset = tasks
+                self.form.fields["task_id"].choices = [
+                    (item.id, item.title) for item in tasks
+                ]
+                if project and can_add_task_to_project(self.request, project):
+                    self.form.fields["task_id"].choices.append(
+                        ("dynamic_create", "Dynamic create")
+                    )
             self.form_class.verbose_name = _("Update Timesheet")
         # If the timesheet create from task or project
-        if project:
-            if self.request.user.is_superuser or self.request.user.has_perm(
-                "project.add_project"
-            ):
+        if project and task:
+            if can_view_all_projects(self.request):
                 members = (
                     project.managers.all()
                     | project.members.all()
                     | task.task_members.all()
                     | task.task_managers.all()
                 ).distinct()
-            elif employee.first() in project.managers.all():
+            elif actor and actor in project.managers.all():
                 members = (
                     employee
                     | project.members.all()
                     | task.task_members.all()
                     | task.task_managers.all()
                 ).distinct()
-            elif employee.first() in task.task_managers.all():
+            elif actor and actor in task.task_managers.all():
                 members = (employee | task.task_members.all()).distinct()
             else:
                 members = employee
@@ -371,29 +391,20 @@ class TimeSheetFormView(HorillaFormView):
 
         # If the timesheet create directly
         else:
-            employee = self.request.user.employee_get
-            if self.request.user.has_perm("project.add_timesheet"):
+            from project.methods import accessible_projects_queryset
+
+            if can_view_all_projects(self.request):
                 projects = Project.objects.all()
             else:
-                projects = (
-                    Project.objects.filter(managers=employee)
-                    | Project.objects.filter(members=employee)
-                    | Project.objects.filter(
-                        id__in=Task.objects.filter(task_managers=employee).values_list(
-                            "project", flat=True
-                        )
-                    )
-                    | Project.objects.filter(
-                        id__in=Task.objects.filter(task_members=employee).values_list(
-                            "project", flat=True
-                        )
-                    )
-                ).distinct()
+                projects = accessible_projects_queryset(self.request)
             self.form.fields["project_id"].queryset = projects
         return context
 
     def form_valid(self, form: TimeSheetForm) -> HttpResponse:
-        from project.methods import time_sheet_update_permissions
+        from project.methods import (
+            can_assign_timesheet_to,
+            time_sheet_update_permissions,
+        )
 
         if form.is_valid():
             if form.instance.pk and not time_sheet_update_permissions(
@@ -401,10 +412,15 @@ class TimeSheetFormView(HorillaFormView):
             ):
                 messages.error(self.request, _("You don't have permission."))
                 return self.HttpResponse()
-            if form.instance.pk:
-                message = _(f"{self.form.instance} Updated")
-            else:
+            if not form.instance.pk:
+                project = form.cleaned_data.get("project_id")
+                employee = form.cleaned_data.get("employee_id")
+                if not can_assign_timesheet_to(self.request, project, employee):
+                    messages.error(self.request, _("You don't have permission."))
+                    return self.HttpResponse()
                 message = _("New timesheet created")
+            else:
+                message = _(f"{self.form.instance} Updated")
             form.save()
             messages.success(self.request, _(message))
             return self.HttpResponse()
@@ -425,13 +441,12 @@ class TimeSheetCardView(HorillaCardView):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        if not self.request.user.has_perm("project.view_timesheet"):
-            employee = self.request.user.employee_get
+        from project.methods import accessible_timesheets_queryset, can_view_all_projects
+
+        if not can_view_all_projects(self.request):
             queryset = queryset.filter(
-                Q(task_id__task_managers=employee)
-                | Q(project_id__managers=employee)
-                | Q(employee_id=employee)
-            ).distinct()
+                id__in=accessible_timesheets_queryset(self.request).values("id")
+            )
         return queryset
 
     def __init__(self, **kwargs: Any) -> None:

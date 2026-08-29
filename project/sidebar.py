@@ -12,6 +12,7 @@ from project.methods import (
     any_project_member,
     any_task_manager,
     any_task_member,
+    can_create_project,
     get_all_project_members_and_managers,
     has_subordinates,
 )
@@ -55,6 +56,7 @@ def menu_accessibilty(
         or any_project_member(user)
         or any_task_manager(user)
         or any_task_member(user)
+        or can_create_project(request)
     )
 
 
@@ -81,6 +83,7 @@ def project_accessibility(request, submenu, user_perms, *args, **kwargs):
         or any_project_member(user)
         or any_task_manager(user)
         or any_task_member(user)
+        or can_create_project(request)
     ):
         return True
     else:
@@ -96,6 +99,7 @@ def task_accessibility(request, submenu, user_perms, *args, **kwargs):
         or any_project_member(user)
         or any_task_manager(user)
         or any_task_member(user)
+        or can_create_project(request)
     ):
         return True
     else:
@@ -111,6 +115,7 @@ def timesheet_accessibility(request, submenu, user_perms, *args, **kwargs):
         or any_project_member(user)
         or any_task_manager(user)
         or any_task_member(user)
+        or can_create_project(request)
     ):
         return True
     else:

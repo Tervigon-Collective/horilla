@@ -36,8 +36,9 @@
                                 </span>
                             </div>
                         </span>
-                        {% if request.user|is_project_manager:stage.project %}
+                        {% if request.user|is_project_manager:stage.project or request.user|can_add_project_task:stage.project %}
                             <div class="oh-kanban__head-actions oh-kanban__dropdown" onclick="event.stopPropagation()">
+                                {% if request.user|is_project_manager:stage.project %}
                                 <button class="oh-btn oh-btn--small oh-btn--transparent oh-kanban__btn oh-kanban__dropdown-toggle">
                                     <ion-icon
                                         name="ellipsis-vertical-sharp"
@@ -71,6 +72,8 @@
                                         </ul>
                                     </div>
                                 </div>
+                                {% endif %}
+                                {% if request.user|can_add_project_task:stage.project %}
                                 <button
                                     class="oh-btn oh-btn--small oh-btn--transparent oh-kanban__btn oh-kanban__add-card-btn"
                                     title="{% trans 'Add task' %}"
@@ -84,6 +87,7 @@
                                         aria-label="{% trans 'add sharp' %}"
                                     ></ion-icon>
                                 </button>
+                                {% endif %}
                             </div>
                         {% endif %}
                     </div>

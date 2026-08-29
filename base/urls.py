@@ -134,6 +134,11 @@ urlpatterns = [
         name="dashboard-pending-approvals",
     ),
     path(
+        "dashboard/api/hr-alerts/",
+        dashboard_module.dashboard_hr_alerts,
+        name="dashboard-hr-alerts",
+    ),
+    path(
         "approvals/inbox/",
         approval_inbox_views.approval_inbox,
         name="approval-inbox",

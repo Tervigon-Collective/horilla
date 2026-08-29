@@ -1,0 +1,116 @@
+{% load i18n %}
+{% include "payroll/india_statutory/_statutory_pdf_styles.html" %}
+<div class="doc">
+    <table class="doc-top">
+        <tr>
+            <td class="doc-co">{{ company.company|default:company }}</td>
+            <td class="doc-kind">{% trans "Income tax computation" %}</td>
+        </tr>
+    </table>
+    <div class="doc-meta">
+        {{ employee.get_full_name }}
+        {% if employee.badge_id %}· {{ employee.badge_id }}{% endif %}
+        · FY {{ financial_year }}
+        · {{ regime|title }} regime
+    </div>
+    <hr class="doc-line">
+
+    <table class="doc-2col">
+        <tr>
+            <td>
+                <div class="doc-sec">{% trans "Annual projection" %}</div>
+                <table class="doc-fig">
+                    <tr>
+                        <td class="k">{% trans "Gross salary (YTD)" %}</td>
+                        <td class="v">₹ {{ totals.gross_salary|floatformat:2 }}</td>
+                    </tr>
+                    <tr>
+                        <td class="k">{% trans "Projected taxable income" %}</td>
+                        <td class="v">₹ {{ projection.taxable_income|floatformat:2 }}</td>
+                    </tr>
+                    <tr>
+                        <td class="k">{% trans "Projected tax liability" %}</td>
+                        <td class="v">₹ {{ projection.annual_tax|floatformat:2 }}</td>
+                    </tr>
+                    <tr>
+                        <td class="k">{% trans "TDS deducted (YTD)" %}</td>
+                        <td class="v">₹ {{ totals.tds|floatformat:2 }}</td>
+                    </tr>
+                    <tr class="strong">
+                        <td class="k">{% trans "Balance tax / (excess)" %}</td>
+                        <td class="v">₹ {{ projection.balance_tax|floatformat:2 }}</td>
+                    </tr>
+                </table>
+            </td>
+            <td>
+                <div class="doc-sec">{% trans "Statutory deductions (YTD)" %}</div>
+                <table class="doc-fig">
+                    <tr>
+                        <td class="k">{% trans "PF (employee)" %}</td>
+                        <td class="v">₹ {{ totals.pf_employee|floatformat:2 }}</td>
+                    </tr>
+                    <tr>
+                        <td class="k">{% trans "ESI (employee)" %}</td>
+                        <td class="v">₹ {{ totals.esi_employee|floatformat:2 }}</td>
+                    </tr>
+                    <tr>
+                        <td class="k">{% trans "Professional tax" %}</td>
+                        <td class="v">₹ {{ totals.pt|floatformat:2 }}</td>
+                    </tr>
+                    <tr class="strong">
+                        <td class="k">{% trans "Net salary paid" %}</td>
+                        <td class="v">₹ {{ totals.net_salary|floatformat:2 }}</td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+
+    {% if months %}
+    <div class="doc-sec">{% trans "Month-wise computation" %}</div>
+    <table class="doc-tbl">
+        <thead>
+            <tr>
+                <th>{% trans "Period" %}</th>
+                <th class="r">{% trans "Gross" %}</th>
+                <th class="r">{% trans "Basic" %}</th>
+                <th class="r">{% trans "PF" %}</th>
+                <th class="r">{% trans "ESI" %}</th>
+                <th class="r">{% trans "PT" %}</th>
+                <th class="r">{% trans "TDS" %}</th>
+                <th class="r">{% trans "Net" %}</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in months %}
+            <tr>
+                <td>{{ m.period }}</td>
+                <td class="r">{{ m.gross|floatformat:2 }}</td>
+                <td class="r">{{ m.basic|floatformat:2 }}</td>
+                <td class="r">{{ m.pf|floatformat:2 }}</td>
+                <td class="r">{{ m.esi|floatformat:2 }}</td>
+                <td class="r">{{ m.pt|floatformat:2 }}</td>
+                <td class="r">{{ m.tds|floatformat:2 }}</td>
+                <td class="r">{{ m.net|floatformat:2 }}</td>
+            </tr>
+            {% endfor %}
+            <tr class="tot">
+                <td>{% trans "Total" %}</td>
+                <td class="r">{{ totals.gross_salary|floatformat:2 }}</td>
+                <td class="r">{{ totals.basic_salary|default:0|floatformat:2 }}</td>
+                <td class="r">{{ totals.pf_employee|floatformat:2 }}</td>
+                <td class="r">{{ totals.esi_employee|floatformat:2 }}</td>
+                <td class="r">{{ totals.pt|floatformat:2 }}</td>
+                <td class="r">{{ totals.tds|floatformat:2 }}</td>
+                <td class="r">{{ totals.net_salary|floatformat:2 }}</td>
+            </tr>
+        </tbody>
+    </table>
+    {% endif %}
+
+    <div class="doc-foot">
+        Indicative for payroll review using the {{ regime|title }} regime engine.
+        Final liability depends on Form 16 / ITR and CA certification.
+        {% if generated_on %}Generated {{ generated_on }}.{% endif %}
+    </div>
+</div>

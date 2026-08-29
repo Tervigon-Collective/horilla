@@ -5,7 +5,7 @@ This page handles the cbv methods for Biometric app
 from typing import Any
 from venv import logger
 
-from apscheduler.schedulers.background import BackgroundScheduler
+from horilla.db import SafeBackgroundScheduler
 from django.conf import settings
 from django.contrib import messages
 from django.http import HttpResponse
@@ -267,7 +267,7 @@ class BiometricSheduleForm(HorillaFormView):
                         device.is_scheduler = True
                         device.is_live = False
                         device.save()
-                        scheduler = BackgroundScheduler()
+                        scheduler = SafeBackgroundScheduler()
                         scheduler.add_job(
                             lambda: zk_biometric_attendance_scheduler(device.id),
                             "interval",
@@ -300,7 +300,7 @@ class BiometricSheduleForm(HorillaFormView):
                     device.is_scheduler = True
                     device.scheduler_duration = duration
                     device.save()
-                    scheduler = BackgroundScheduler()
+                    scheduler = SafeBackgroundScheduler()
                     scheduler.add_job(
                         lambda: anviz_biometric_attendance_scheduler(device.id),
                         "interval",
@@ -314,7 +314,7 @@ class BiometricSheduleForm(HorillaFormView):
                     device.is_live = False
                     device.scheduler_duration = duration
                     device.save()
-                    scheduler = BackgroundScheduler()
+                    scheduler = SafeBackgroundScheduler()
                     existing_thread = settings.BIO_DEVICE_THREADS.get(device.id)
                     if existing_thread:
                         existing_thread.stop()

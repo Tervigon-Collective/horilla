@@ -3,7 +3,7 @@ import sys
 from datetime import timedelta
 
 import pytz
-from apscheduler.schedulers.background import BackgroundScheduler
+from horilla.db import SafeBackgroundScheduler
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
@@ -251,7 +251,7 @@ if not any(
     """
     Initializes and starts background tasks using APScheduler when the server is running.
     """
-    scheduler = BackgroundScheduler(timezone=pytz.timezone(settings.TIME_ZONE))
+    scheduler = SafeBackgroundScheduler(timezone=pytz.timezone(settings.TIME_ZONE))
 
     scheduler.add_job(
         create_work_record, "interval", minutes=30, misfire_grace_time=3600 * 3

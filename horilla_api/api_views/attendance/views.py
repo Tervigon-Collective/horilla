@@ -502,6 +502,7 @@ class OvertimeApproveView(APIView):
 
     @method_decorator(manager_permission_required("attendance.change_attendance"))
     def put(self, request, pk):
+        from attendance.methods.overtime_approval import apply_overtime_approval
         from employee.cbv.accessibility import can_manage_employee_action
 
         try:
@@ -512,8 +513,19 @@ class OvertimeApproveView(APIView):
                 request, attendance.employee_id, "attendance.change_attendance"
             ):
                 return Response({"detail": "Permission denied"}, status=403)
-            attendance.attendance_overtime_approve = True
-            attendance.save()
+            try:
+                fully = apply_overtime_approval(
+                    attendance,
+                    employee=getattr(request.user, "employee_get", None),
+                    is_superuser=request.user.is_superuser,
+                )
+            except ValueError as exc:
+                return Response({"error": str(exc)}, status=403)
+            if not fully:
+                return Response(
+                    {"status": "stage_approved", "detail": "Waiting for next stage."},
+                    status=200,
+                )
         except Exception as E:
             return Response({"error": str(E)}, status=400)
 
@@ -1111,10 +1123,16 @@ class ConvertedMailTemplateConvert(APIView):
     permission_classes = [IsAuthenticated]
 
     def put(self, request):
+        from employee.cbv.accessibility import can_access_employee_record
+
         template_id = request.data.get("template_id", None)
         employee_id = request.data.get("employee_id", None)
         employee = Employee.objects.filter(id=employee_id).first()
+        if not employee or not can_access_employee_record(request, employee):
+            return Response({"detail": "Permission denied"}, status=403)
         bdy = HorillaMailTemplate.objects.filter(id=template_id).first()
+        if not bdy:
+            return Response({"detail": "Template not found"}, status=404)
         template_bdy = template.Template(bdy.body)
         context = template.Context(
             {"instance": employee, "self": request.user.employee_get}
@@ -1134,16 +1152,20 @@ class OfflineEmployeeMailsend(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        from employee.cbv.accessibility import can_access_employee_record
+
         employee_id = request.POST.get("employee_id")
         subject = request.POST.get("subject", "")
         bdy = request.POST.get("body", "")
+        employee = Employee.objects.filter(id=employee_id).first()
+        if not employee or not can_access_employee_record(request, employee):
+            return Response({"detail": "Permission denied"}, status=403)
         other_attachments = request.FILES.getlist("other_attachments")
         attachments = [
             (file.name, file.read(), file.content_type) for file in other_attachments
         ]
         email_backend = ConfiguredEmailBackend()
         host = email_backend.dynamic_username
-        employee = Employee.objects.get(id=employee_id)
         template_attachment_ids = request.POST.getlist("template_attachments")
         bodys = list(
             HorillaMailTemplate.objects.filter(

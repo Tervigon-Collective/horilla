@@ -1,7 +1,7 @@
 import sys
 from datetime import datetime
 
-from apscheduler.schedulers.background import BackgroundScheduler
+from horilla.db import SafeBackgroundScheduler
 
 from horilla.signals import post_scheduler, pre_scheduler
 
@@ -66,7 +66,7 @@ if not any(
     """
     Initializes and starts background tasks using APScheduler when the server is running.
     """
-    scheduler = BackgroundScheduler()
+    scheduler = SafeBackgroundScheduler()
     scheduler.add_job(leave_reset, "interval", hours=4)
 
     scheduler.start()

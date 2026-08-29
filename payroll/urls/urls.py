@@ -12,11 +12,72 @@ from payroll.cbv import contracts, dashboard, payslip_automation, settings_tabs
 from payroll.models.models import Contract, Payslip
 from payroll.views import views
 from payroll.views import ctc_views
+from payroll.views import payroll_run_views
 
 urlpatterns = [
     path("", include("payroll.urls.component_urls")),
     path("", include("payroll.urls.tax_urls")),
     path("", include("payroll.urls.india_statutory_urls")),
+    path(
+        "payroll-runs/",
+        payroll_run_views.payroll_run_list,
+        name="payroll-run-list",
+    ),
+    path(
+        "payroll-runs/create/",
+        payroll_run_views.payroll_run_create,
+        name="payroll-run-create",
+    ),
+    path(
+        "payroll-runs/<int:run_id>/",
+        payroll_run_views.payroll_run_detail,
+        name="payroll-run-detail",
+    ),
+    path(
+        "payroll-runs/<int:run_id>/calculate/",
+        payroll_run_views.payroll_run_calculate,
+        name="payroll-run-calculate",
+    ),
+    path(
+        "payroll-runs/<int:run_id>/validate/",
+        payroll_run_views.payroll_run_validate,
+        name="payroll-run-validate",
+    ),
+    path(
+        "payroll-runs/<int:run_id>/transition/",
+        payroll_run_views.payroll_run_transition,
+        name="payroll-run-transition",
+    ),
+    path(
+        "payroll-runs/<int:run_id>/reopen/",
+        payroll_run_views.payroll_run_reopen,
+        name="payroll-run-reopen",
+    ),
+    path(
+        "payroll-runs/<int:run_id>/lock-attendance/",
+        payroll_run_views.payroll_run_lock_attendance,
+        name="payroll-run-lock-attendance",
+    ),
+    path(
+        "payslip/<int:payslip_id>/override/",
+        payroll_run_views.payslip_override_create,
+        name="payslip-override-create",
+    ),
+    path(
+        "payroll-runs/<int:run_id>/bank-file/",
+        payroll_run_views.payroll_run_bank_file,
+        name="payroll-run-bank-file",
+    ),
+    path(
+        "attendance-arrears/",
+        payroll_run_views.attendance_arrear_list,
+        name="attendance-arrear-list",
+    ),
+    path(
+        "attendance-arrears/create/",
+        payroll_run_views.attendance_arrear_create,
+        name="attendance-arrear-create",
+    ),
     path("contract-create/", views.contract_create, name="contract-create"),
     path(
         "update-contract/<int:contract_id>/",
@@ -214,6 +275,11 @@ urlpatterns = [
         "initial-notice-period/",
         views.initial_notice_period,
         name="initial-notice-period",
+    ),
+    path(
+        "payroll-rounding-settings/",
+        views.payroll_rounding_settings,
+        name="payroll-rounding-settings",
     ),
     path("view-contract/", contracts.ContractsView.as_view(), name="view-contract"),
     path("contract-filter/", contracts.ContractsList.as_view(), name="contract-filter"),

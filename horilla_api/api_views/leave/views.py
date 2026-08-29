@@ -724,6 +724,9 @@ class LeaveRequestApproveAPIView(APIView):
         return result
 
     def leave_multiple_approve(self, request, leave_request, available_leave):
+        from leave.methods import assert_can_approve_leave_stage
+        from leave.models import LeaveRequestConditionApproval
+
         if request.user.is_superuser:
             LeaveRequestConditionApproval.objects.filter(
                 leave_request_id=leave_request
@@ -731,24 +734,31 @@ class LeaveRequestApproveAPIView(APIView):
             self.leave_approve_calculation(leave_request, available_leave)
             leave_request.status = "approved"
             leave_request.save()
-        else:
-            conditional_requests = leave_request.multiple_approvals()
-            approver = [
-                manager
-                for manager in conditional_requests["managers"]
-                if manager.employee_user_id == request.user
-            ]
-            if not approver:
-                return
-            condition_approval = LeaveRequestConditionApproval.objects.filter(
-                manager_id=approver[0], leave_request_id=leave_request
-            ).first()
-            condition_approval.is_approved = True
-            condition_approval.save()
-            if approver[0] == conditional_requests["managers"][-1]:
-                self.leave_approve_calculation(leave_request, available_leave)
-                leave_request.status = "approved"
-                leave_request.save()
+            return
+
+        try:
+            condition_approval = assert_can_approve_leave_stage(
+                leave_request,
+                getattr(request.user, "employee_get", None),
+                is_superuser=False,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+        if condition_approval is None:
+            return
+
+        condition_approval.is_approved = True
+        condition_approval.save()
+        remaining = LeaveRequestConditionApproval.objects.filter(
+            leave_request_id=leave_request,
+            is_approved=False,
+            is_rejected=False,
+        ).exists()
+        if not remaining:
+            self.leave_approve_calculation(leave_request, available_leave)
+            leave_request.status = "approved"
+            leave_request.save()
 
     @manager_permission_required("leave.change_leaverequest")
     def put(self, request, pk):

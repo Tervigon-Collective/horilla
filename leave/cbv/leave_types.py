@@ -374,7 +374,7 @@ class LeaveTypeAssignForm(HorillaFormView):
                             leave_type_id=leave_type, employee_id=employee
                         ).exists():
                             is_eligible, error_msg = evaluate_leave_type_conditions(
-                                leave_type, employee
+                                leave_type, employee, for_assignment=True
                             )
                             if not is_eligible:
                                 messages.warning(
@@ -389,9 +389,13 @@ class LeaveTypeAssignForm(HorillaFormView):
                                 f"leave_days_{employee_id}"
                             )
                             try:
-                                leave_days = int(leave_days)
+                                leave_days = float(leave_days)
                             except (TypeError, ValueError):
-                                leave_days = int(leave_type.total_days)
+                                leave_days = (
+                                    0.0
+                                    if getattr(leave_type, "monthly_accrual", False)
+                                    else float(leave_type.total_days or 0)
+                                )
                             AvailableLeave(
                                 leave_type_id=leave_type,
                                 employee_id=employee,

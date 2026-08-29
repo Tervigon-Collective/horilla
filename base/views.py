@@ -4190,7 +4190,9 @@ def work_type_request_view(request):
     """
     previous_data = request.GET.urlencode()
     employee = Employee.objects.filter(employee_user_id=request.user).first()
-    if request.user.has_perm("base.view_worktyperequest"):
+    from base.methods import has_org_wide_perm
+
+    if has_org_wide_perm(request.user, "base.view_worktyperequest"):
         work_type_requests = WorkTypeRequest.objects.all()
     else:
         work_type_requests = filtersubordinates(
@@ -4264,9 +4266,10 @@ def work_type_request_search(request):
     previous_data = request.GET.urlencode()
     field = request.GET.get("field")
     f = WorkTypeRequestFilter(request.GET)
+    from base.methods import has_org_wide_perm
     work_typ_requests = (
         filtersubordinates(request, f.qs, "base.add_worktyperequest")
-        if not request.user.has_perm("base.view_worktyperequest")
+        if not has_org_wide_perm(request.user, "base.view_worktyperequest")
         else f.qs
     )
     employee_work_requests = list(WorkTypeRequest.objects.filter(employee_id=employee))
@@ -4989,7 +4992,8 @@ def shift_request_view(request):
         "base.view_shiftrequest",
     )
     allocated_requests = ShiftRequest.objects.filter(reallocate_to__isnull=False)
-    if not request.user.has_perm("base.view_shiftrequest"):
+    from base.methods import has_org_wide_perm
+    if not has_org_wide_perm(request.user, "base.view_shiftrequest"):
         allocated_requests = allocated_requests.filter(
             Q(reallocate_to=employee) | Q(employee_id=employee)
         )
@@ -5085,7 +5089,8 @@ def shift_request_search(request):
     allocated_shift_requests = filtersubordinates(
         request, f.filter(reallocate_to__isnull=False), "base.add_shiftrequest"
     )
-    if not request.user.has_perm("base.view_shiftrequest"):
+    from base.methods import has_org_wide_perm
+    if not has_org_wide_perm(request.user, "base.view_shiftrequest"):
         allocated_shift_requests = allocated_shift_requests | f.filter(
             Q(reallocate_to=employee) | Q(employee_id=employee)
         )
@@ -6561,7 +6566,8 @@ def shift_select(request):
     shifts = ShiftRequest.objects.none()
 
     if page_number == "all":
-        if request.user.has_perm("base.view_shiftrequest"):
+        from base.methods import has_org_wide_perm
+        if has_org_wide_perm(request.user, "base.view_shiftrequest"):
             shifts = ShiftRequest.objects.all()
         else:
             shifts = ShiftRequest.objects.filter(
@@ -6607,7 +6613,8 @@ def work_type_select(request):
     work_types = WorkTypeRequest.objects.none()
 
     if page_number == "all":
-        if request.user.has_perm("base.view_worktyperequest"):
+        from base.methods import has_org_wide_perm
+        if has_org_wide_perm(request.user, "base.view_worktyperequest"):
             work_types = WorkTypeRequest.objects.all()
         else:
             work_types = WorkTypeRequest.objects.filter(

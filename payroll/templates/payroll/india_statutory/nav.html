@@ -50,6 +50,11 @@
         <ion-icon name="navigate-outline"></ion-icon>
         {% trans "TRACES" %}
     </a>
+    <a href="{% url 'epf-ecr-list' %}"
+       class="is-tabs__link {% if active_tab == 'ecr' %}is-tabs__link--active{% endif %}">
+        <ion-icon name="document-attach-outline"></ion-icon>
+        {% trans "EPF ECR" %}
+    </a>
     <a href="{% url 'statutory-excel-hub' %}"
        class="is-tabs__link {% if active_tab == 'excel' %}is-tabs__link--active{% endif %}">
         <ion-icon name="cloud-upload-outline"></ion-icon>

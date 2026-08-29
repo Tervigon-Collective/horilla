@@ -265,15 +265,14 @@ class RotatingShiftAssignIndividualDetailView(RotatingShiftDetailview):
         pk = self.kwargs.get("pk")
         obj = queryset.get(pk=pk)
         employee_id = obj.employee_id
-        if is_reportingmanager(self.request):
-            queryset = filtersubordinates(
-                self.request, queryset, "base.view_rotatingshiftassign"
-            ) | queryset.filter(employee_id=self.request.user.employee_get)
-        elif self.request.user.has_perm("base.view_rotatingshiftassign"):
-            queryset = queryset.filter(employee_id=employee_id)
-        else:
-            queryset = queryset.filter(employee_id=self.request.user.employee_get)
-        return queryset
+        from base.methods import has_org_wide_perm
+        from employee.cbv.accessibility import can_access_employee_record
+
+        if has_org_wide_perm(self.request.user, "base.view_rotatingshiftassign"):
+            return queryset.filter(employee_id=employee_id)
+        if can_access_employee_record(self.request, employee_id):
+            return queryset.filter(employee_id=employee_id)
+        return queryset.filter(employee_id=self.request.user.employee_get)
 
 
 @method_decorator(login_required, name="dispatch")
@@ -291,14 +290,11 @@ class DetailViewChild(RotatingWorkDetailView):
         pk = self.kwargs.get("pk")
         obj = queryset.get(pk=pk)
         emp_id = obj.employee_id
-        # queryset = queryset.filter(employee_id=emp_id)
-        if is_reportingmanager(self.request):
-            queryset = filtersubordinates(
-                self.request, queryset, "base.view_rotatingworktypeassign"
-            ) | queryset.filter(employee_id=self.request.user.employee_get)
-        elif self.request.user.has_perm("base.view_rotatingworktypeassign"):
-            queryset = queryset.filter(employee_id=emp_id)
-        else:
-            queryset = queryset.filter(employee_id=self.request.user.employee_get)
+        from base.methods import has_org_wide_perm
+        from employee.cbv.accessibility import can_access_employee_record
 
-        return queryset
+        if has_org_wide_perm(self.request.user, "base.view_rotatingworktypeassign"):
+            return queryset.filter(employee_id=emp_id)
+        if can_access_employee_record(self.request, emp_id):
+            return queryset.filter(employee_id=emp_id)
+        return queryset.filter(employee_id=self.request.user.employee_get)

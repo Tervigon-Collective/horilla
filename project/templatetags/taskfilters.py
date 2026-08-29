@@ -63,6 +63,46 @@ def is_project_manager(user, project):
     return Project.objects.filter(id=project.id, managers=employee).exists()
 
 
+@register.filter(name="can_add_project_task")
+def can_add_project_task(user, project):
+    """
+    True if the user may create tasks on this project (manager or member).
+    """
+    if user.is_superuser:
+        return True
+    try:
+        from project.methods import can_view_all_projects
+
+        # Build a minimal request-like object is awkward in filters; check groups/perms.
+        if user.has_perm("project.change_project") or user.groups.filter(
+            name__in=("Admin", "HR Manager", "Project Manager")
+        ).exists():
+            return True
+        employee = user.employee_get
+        return (
+            Project.objects.filter(id=project.id, managers=employee).exists()
+            or Project.objects.filter(id=project.id, members=employee).exists()
+        )
+    except Exception:
+        return False
+
+
+@register.filter(name="can_delete_this_task")
+def can_delete_this_task(user, task):
+    """
+    True if the user may archive/delete this task (not plain project members).
+    """
+    if user.is_superuser or user.has_perm("project.delete_task"):
+        return True
+    try:
+        employee = user.employee_get
+        if employee in task.task_managers.all():
+            return True
+        return bool(task.project and employee in task.project.managers.all())
+    except Exception:
+        return False
+
+
 @register.filter(name="is_task_manager")
 def is_task_manager(user, task):
     """

@@ -500,12 +500,26 @@ def update_payslip_status(request, payslip_id):
     payslip = Payslip.objects.filter(id=payslip_id).first()
     if not payslip:
         return HorillaRedirect(request, message=_("Payslip not found."))
-    if payslip:
-        payslip.status = status
-        payslip.save()
-        messages.success(request, _("Payslip status updated"))
+    allowed = {c[0] for c in Payslip.status_choices}
+    if status not in allowed:
+        messages.error(request, _("Invalid payslip status."))
+    elif payslip.snapshot_frozen or (
+        payslip.payroll_run_id
+        and getattr(payslip.payroll_run, "is_immutable", False)
+    ):
+        messages.error(
+            request,
+            _(
+                "This payslip is locked with its payroll run. "
+                "Reopen the payroll period to make changes."
+            ),
+        )
+    elif payslip.status == "paid" and status != "paid":
+        messages.error(request, _("Paid payslips cannot be moved back without reopening payroll."))
     else:
-        messages.error(request, _("Payslip not found"))
+        payslip.status = status
+        payslip.save(update_fields=["status"])
+        messages.success(request, _("Payslip status updated"))
     if view:
         from .component_views import filter_payslip
 
@@ -532,12 +546,30 @@ def update_payslip_status_no_id(request):
         ids_json = request.POST["ids"]
         ids = json.loads(ids_json)
         status = request.POST["status"]
+        allowed = {c[0] for c in Payslip.status_choices}
+        if status not in allowed:
+            return JsonResponse(
+                {"type": "danger", "message": "Invalid payslip status."}
+            )
         slips = Payslip.objects.filter(id__in=ids)
-        slips.update(status=status)
-        message = {
-            "type": "success",
-            "message": f"{slips.count()} Payslips status updated.",
-        }
+        mutable = slips.filter(snapshot_frozen=False).exclude(
+            payroll_run__status__in=["locked", "paid", "published"]
+        )
+        blocked = slips.count() - mutable.count()
+        mutable.update(status=status)
+        if blocked:
+            message = {
+                "type": "warning",
+                "message": (
+                    f"{mutable.count()} Payslips updated; "
+                    f"{blocked} skipped (locked payroll)."
+                ),
+            }
+        else:
+            message = {
+                "type": "success",
+                "message": f"{mutable.count()} Payslips status updated.",
+            }
     return JsonResponse(message)
 
 
@@ -574,8 +606,8 @@ def view_payslip_pdf(request, payslip_id):
             if end_date_str:
                 end_date = datetime.strptime(str(end_date_str), "%Y-%m-%d").date()
 
-            month_start_name = start_date.strftime("%B %d, %Y")
-            month_end_name = end_date.strftime("%B %d, %Y")
+            month_start_name = start_date.strftime("%b %Y")
+            month_end_name = end_date.strftime("%b %Y")
             formatted_start_date = start_date.strftime("%b. %d, %Y")
             formatted_end_date = end_date.strftime("%b. %d, %Y")
             # Formatted date for each format
@@ -652,8 +684,20 @@ def delete_payslip(request, payslip_id):
     from .component_views import filter_payslip
 
     try:
-        Payslip.objects.get(id=payslip_id).delete()
-        messages.success(request, _("Payslip deleted"))
+        payslip = Payslip.objects.get(id=payslip_id)
+        if payslip.snapshot_frozen or (
+            payslip.payroll_run_id
+            and getattr(payslip.payroll_run, "is_immutable", False)
+        ):
+            messages.error(
+                request,
+                _("Cannot delete a payslip from a locked payroll run."),
+            )
+        elif payslip.status == "paid":
+            messages.error(request, _("Cannot delete a paid payslip."))
+        else:
+            payslip.delete()
+            messages.success(request, _("Payslip deleted"))
     except Payslip.DoesNotExist:
         messages.error(request, _("Payslip not found."))
     except ProtectedError:
@@ -1583,8 +1627,8 @@ def payslip_pdf(request, id):
             # Prepare context for the template
             data.update(
                 {
-                    "month_start_name": start_date.strftime("%B %d, %Y"),
-                    "month_end_name": end_date.strftime("%B %d, %Y"),
+                    "month_start_name": start_date.strftime("%b %Y"),
+                    "month_end_name": end_date.strftime("%b %Y"),
                     "formatted_start_date": formatted_start_date,
                     "formatted_end_date": formatted_end_date,
                     "employee": payslip.employee_id,
@@ -1615,6 +1659,28 @@ def payslip_pdf(request, id):
             equalize_lists_length(data["allowances"], data["all_deductions"])
             data["zipped_data"] = zip(data["allowances"], data["all_deductions"])
             data["request"] = request
+            try:
+                from payroll.methods.india_statutory import (
+                    aggregate_form16,
+                    aggregate_tax_computation,
+                    financial_year_bounds,
+                )
+
+                emp = payslip.employee_id
+                _, _, fy_start, _ = financial_year_bounds(payslip.start_date)
+                tax_ctx = aggregate_tax_computation(emp, fy_start)
+                form16_ctx = aggregate_form16(emp, fy_start)
+                company_obj = form16_ctx.get("company") or emp.get_company()
+                statutory_settings = getattr(
+                    company_obj, "india_statutory_settings", None
+                )
+                tax_ctx["statutory_settings"] = statutory_settings
+                form16_ctx["statutory_settings"] = statutory_settings
+                data["tax_computation"] = tax_ctx
+                data["form16_pack"] = form16_ctx
+            except Exception:
+                data["tax_computation"] = None
+                data["form16_pack"] = None
             template_path = "payroll/payslip/payslip_pdf.html"
 
             return generate_payslip_pdf(template_path, context=data, html=False)
@@ -1962,6 +2028,30 @@ def initial_notice_period(request):
     )
     if request.META.get("HTTP_HX_REQUEST"):
         return HttpResponse()
+    return HorillaRedirect(request)
+
+
+@login_required
+@permission_required("payroll.add_payrollgeneralsetting")
+def payroll_rounding_settings(request):
+    """Save org-wide payroll rounding policy."""
+    from payroll.methods.rounding import get_rounding_settings
+
+    if request.method != "POST":
+        return HorillaRedirect(request)
+    settings = PayrollGeneralSetting.objects.first() or PayrollGeneralSetting()
+    allowed = {"two_decimals", "nearest_rupee", "none"}
+    component = request.POST.get("component_round_mode") or "two_decimals"
+    net_pay = request.POST.get("net_pay_round_mode") or "nearest_rupee"
+    statutory = request.POST.get("statutory_round_mode") or "two_decimals"
+    if component in allowed:
+        settings.component_round_mode = component
+    if net_pay in allowed:
+        settings.net_pay_round_mode = net_pay
+    if statutory in allowed:
+        settings.statutory_round_mode = statutory
+    settings.save()
+    messages.success(request, _("Payroll rounding policy updated."))
     return HorillaRedirect(request)
 
 

@@ -83,6 +83,14 @@ class IndiaStatutorySettings(HorillaModel):
         default=True,
         verbose_name=_("Payment of Gratuity Act (F&F / register)"),
     )
+    enable_code_on_wages_50pct = models.BooleanField(
+        default=False,
+        verbose_name=_("Code on Wages 50% rule (statutory wage)"),
+        help_text=_(
+            "When enabled, excluded allowances above 50% of remuneration are "
+            "added back into the PF statutory wage base."
+        ),
+    )
     pf_wage_ceiling = models.FloatField(
         default=15000.0,
         verbose_name=_("PF wage ceiling (₹)"),
@@ -210,6 +218,43 @@ class EmployeeStatutoryProfile(HorillaModel):
         default=0.0,
         validators=[MinValueValidator(0), MaxValueValidator(100)],
         verbose_name=_("VPF extra (%) on PF wages"),
+    )
+    contribute_pf_on_actual_wage = models.BooleanField(
+        default=False,
+        verbose_name=_("Contribute PF on actual wage (ignore ceiling)"),
+    )
+    previous_employer_income = models.FloatField(
+        default=0.0,
+        verbose_name=_("Previous employer taxable income (FY, ₹)"),
+    )
+    previous_employer_tds = models.FloatField(
+        default=0.0,
+        verbose_name=_("Previous employer TDS already deducted (FY, ₹)"),
+    )
+    other_income_annual = models.FloatField(
+        default=0.0,
+        verbose_name=_("Declared other income (annual, ₹)"),
+    )
+    proof_submission_status = models.CharField(
+        max_length=20,
+        choices=[
+            ("pending", _("Pending")),
+            ("submitted", _("Submitted")),
+            ("verified", _("Verified")),
+            ("rejected", _("Rejected")),
+        ],
+        default="pending",
+        verbose_name=_("Investment proof status"),
+    )
+    payroll_status = models.CharField(
+        max_length=20,
+        choices=[
+            ("included", _("Included")),
+            ("on_hold", _("On Hold")),
+            ("excluded", _("Excluded")),
+        ],
+        default="included",
+        verbose_name=_("Payroll status"),
     )
 
     objects = HorillaCompanyManager("employee_id__employee_work_info__company_id")

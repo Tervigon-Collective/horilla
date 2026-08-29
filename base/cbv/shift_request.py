@@ -228,7 +228,8 @@ class AllocatedShift(ShiftList):
             "base.view_shiftrequest",
         )
         allocated_requests = b.filter(reallocate_to__isnull=False)
-        if not self.request.user.has_perm("base.view_shiftrequest"):
+        from base.methods import has_org_wide_perm
+        if not has_org_wide_perm(self.request.user, "base.view_shiftrequest"):
             allocated_requests = allocated_requests.filter(
                 Q(reallocate_to=employee) | Q(employee_id=employee)
             )

@@ -12,6 +12,33 @@
 
     <div class="is-section">
         <div class="is-section__header">
+            <span class="is-section__icon"><ion-icon name="layers-outline"></ion-icon></span>
+            <div>
+                <h3 class="is-section__title">{% trans "Reference salary packs" %}</h3>
+                <p class="is-section__desc">{% trans "Apply org sample structures A–D (exact Basic/HRA/Special)." %}</p>
+            </div>
+        </div>
+        <div class="is-section__body">
+            <div class="is-form-grid">
+                {% for pack in salary_packs %}
+                <form method="post" class="is-field" style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;">
+                    {% csrf_token %}
+                    <input type="hidden" name="pack_code" value="{{ pack.code }}">
+                    <input type="hidden" name="effective_date" value="{{ today }}">
+                    <strong>Pack {{ pack.code }} — {{ pack.name }}</strong>
+                    <p style="margin:6px 0;font-size:13px;">
+                        Basic {{ pack.basic }} · HRA {{ pack.hra }} · Special {{ pack.special }} · Gross {{ pack.gross }}
+                    </p>
+                    <p style="margin:0 0 8px;font-size:12px;opacity:.75;">{{ pack.note }}</p>
+                    <button type="submit" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Apply pack" %}</button>
+                </form>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="is-section">
+        <div class="is-section__header">
             <span class="is-section__icon"><ion-icon name="calculator-outline"></ion-icon></span>
             <div>
                 <h3 class="is-section__title">{% trans "Split monthly CTC" %}</h3>

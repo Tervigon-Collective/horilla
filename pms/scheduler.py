@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from apscheduler.schedulers.background import BackgroundScheduler
+from horilla.db import SafeBackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from notifications.signals import notify
@@ -43,7 +43,7 @@ def cyclic_feedback_creation():
     return
 
 
-scheduler = BackgroundScheduler()
+scheduler = SafeBackgroundScheduler()
 cron_trigger = CronTrigger(hour=8)
 grace_time_seconds = int(timedelta(days=1).total_seconds())
 scheduler.add_job(

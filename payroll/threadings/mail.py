@@ -8,6 +8,7 @@ import logging
 from threading import Thread
 
 from django.core.mail import EmailMessage
+from django.db import close_old_connections
 from django.template.loader import render_to_string
 
 from base.backends import ConfiguredEmailBackend
@@ -32,51 +33,55 @@ class MailSendThread(Thread):
         self.protocol = "https" if request.is_secure() else "http"
 
     def run(self) -> None:
-        super().run()
-        for record in list(self.result_dict.values()):
-            html_message = render_to_string(
-                "payroll/mail_templates/default.html",
-                {
-                    "record": record,
-                    "host": self.host,
-                    "protocol": self.protocol,
-                },
-                request=self.request,
-            )
-            attachments = []
-            for instance in record["instances"]:
-                response = payslip_pdf(self.request, instance.id)
-                attachments.append(
-                    (
-                        f"{instance.get_payslip_title()}.pdf",
-                        response.content,
-                        "application/pdf",
-                    )
+        close_old_connections()
+        try:
+            super().run()
+            for record in list(self.result_dict.values()):
+                html_message = render_to_string(
+                    "payroll/mail_templates/default.html",
+                    {
+                        "record": record,
+                        "host": self.host,
+                        "protocol": self.protocol,
+                    },
+                    request=self.request,
                 )
-            employee = record["instances"][0].employee_id
-            email_backend = ConfiguredEmailBackend()
-            display_email_name = email_backend.dynamic_from_email_with_display_name
-            if self.request:
+                attachments = []
+                for instance in record["instances"]:
+                    response = payslip_pdf(self.request, instance.id)
+                    attachments.append(
+                        (
+                            f"{instance.get_payslip_title()}.pdf",
+                            response.content,
+                            "application/pdf",
+                        )
+                    )
+                employee = record["instances"][0].employee_id
+                email_backend = ConfiguredEmailBackend()
+                display_email_name = email_backend.dynamic_from_email_with_display_name
+                if self.request:
+                    try:
+                        display_email_name = f"{self.request.user.employee_get.get_full_name()} <{self.request.user.employee_get.email}>"
+                    except:
+                        logger.error(Exception)
+
+                email = EmailMessage(
+                    f"Hello, {record['instances'][0].get_name()} Your Payslips is Ready!",
+                    html_message,
+                    display_email_name,
+                    [employee.get_mail()],
+                    reply_to=[display_email_name],
+                )
+                email.attachments = attachments
+
+                # Send the email
+                email.content_subtype = "html"
                 try:
-                    display_email_name = f"{self.request.user.employee_get.get_full_name()} <{self.request.user.employee_get.email}>"
-                except:
-                    logger.error(Exception)
-
-            email = EmailMessage(
-                f"Hello, {record['instances'][0].get_name()} Your Payslips is Ready!",
-                html_message,
-                display_email_name,
-                [employee.get_mail()],
-                reply_to=[display_email_name],
-            )
-            email.attachments = attachments
-
-            # Send the email
-            email.content_subtype = "html"
-            try:
-                email.send()
-                Payslip.objects.filter(id__in=self.ids).update(sent_to_employee=True)
-            except Exception as e:
-                logger.exception(e)
+                    email.send()
+                    Payslip.objects.filter(id__in=self.ids).update(sent_to_employee=True)
+                except Exception as e:
+                    logger.exception(e)
+        finally:
+            close_old_connections()
 
         return

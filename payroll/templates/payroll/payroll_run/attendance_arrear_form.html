@@ -1,0 +1,33 @@
+{% load i18n %}
+<div class="oh-wrapper">
+  <h3>{% trans "Create attendance arrear" %}</h3>
+  <form method="post">
+    {% csrf_token %}
+    <div class="oh-input-group">
+      <label>{% trans "Employee" %}</label>
+      <select class="oh-select" name="employee_id" required>
+        {% for e in employees %}
+        <option value="{{ e.id }}">{{ e }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="oh-input-group">
+      <label>{% trans "Source period start" %}</label>
+      <input class="oh-input" type="date" name="source_period_start" required>
+    </div>
+    <div class="oh-input-group">
+      <label>{% trans "Source period end" %}</label>
+      <input class="oh-input" type="date" name="source_period_end" required>
+    </div>
+    <div class="oh-input-group">
+      <label>{% trans "Days (+ paid / − recovery)" %}</label>
+      <input class="oh-input" type="number" step="0.5" name="days" required>
+    </div>
+    <div class="oh-input-group">
+      <label>{% trans "Reason" %}</label>
+      <input class="oh-input" name="reason">
+    </div>
+    <button class="oh-btn oh-btn--secondary mt-2" type="submit">{% trans "Create" %}</button>
+    <a class="oh-btn oh-btn--light mt-2" href="{% url 'attendance-arrear-list' %}">{% trans "Cancel" %}</a>
+  </form>
+</div>

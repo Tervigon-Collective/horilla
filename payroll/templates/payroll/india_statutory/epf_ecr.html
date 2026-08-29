@@ -1,0 +1,110 @@
+{% extends "index.html" %}
+{% load i18n horillafilters static %}
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+
+<div class="is-page">
+{% include "payroll/india_statutory/nav.html" with active_tab="ecr" company=company settings=settings %}
+
+<div class="is-page__content">
+    <div class="is-toolbar">
+        <form method="get" class="is-toolbar__form">
+            <label class="oh-label">{% trans "Wage month" %}</label>
+            <select name="month" id="month" class="oh-select oh-select-2">
+                {% for opt in month_options %}
+                <option value="{{ opt.value }}" {% if opt.value == selected_month %}selected{% endif %}>{{ opt.label }}</option>
+                {% endfor %}
+            </select>
+            <select name="year" class="oh-select oh-select-2">
+                {% for y in year_options %}
+                <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="oh-btn oh-btn--light oh-btn--sm">{% trans "Apply" %}</button>
+        </form>
+    </div>
+
+    <div class="is-section">
+        <div class="is-section__header">
+            <span class="is-section__icon"><ion-icon name="document-attach-outline"></ion-icon></span>
+            <div>
+                <h3 class="is-section__title">{% trans "EPF ECR 2.0" %}</h3>
+                <p class="is-section__desc">
+                    {% trans "EPFO monthly Electronic Challan-cum-Return (#~# text). Upload on unifiedportal.epfindia.gov.in after validating UANs." %}
+                    {% if establishment_code %}
+                    · {% trans "Establishment" %}: <strong>{{ establishment_code }}</strong>
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+        <div class="is-section__body">
+            <div class="is-io-panel">
+                <div class="is-io-panel__block">
+                    <div class="is-io-panel__title">
+                        {% trans "Download ECR text" %}
+                        <span class="is-io-panel__badge">TXT</span>
+                    </div>
+                    <p class="is-muted" style="font-size:.85rem;margin-bottom:0.75rem;">
+                        {% blocktrans with ok=ecr.included|length bad=ecr.issues|length %}
+                        {{ ok }} valid member row(s) ready · {{ bad }} blocked (missing UAN / name)
+                        {% endblocktrans %}
+                    </p>
+                    <div class="is-io-panel__actions">
+                        <a href="{{ download_url }}" class="is-io-btn is-io-btn--download {% if not ecr.included %}disabled{% endif %}">
+                            <ion-icon name="download-outline"></ion-icon>
+                            <span>{% trans "Download ECR (.txt)" %}</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            {% if ecr.issues %}
+            <div class="oh-alert oh-alert--base oh-alert--warning" style="margin:1rem 0;">
+                <strong>{% trans "Fix before EPFO upload" %}</strong>
+                <ul style="margin:0.5rem 0 0;padding-left:1.25rem;">
+                    {% for issue in ecr.issues %}
+                    <li>
+                        {{ issue.badge_id|default:"—" }} · {{ issue.name|default:"(no name)" }} —
+                        {{ issue.issue }}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            <div class="oh-sticky-table" style="margin-top:1rem;">
+                <table class="oh-table">
+                    <thead>
+                        <tr>
+                            <th>{% trans "UAN" %}</th>
+                            <th>{% trans "Member" %}</th>
+                            <th>{% trans "Badge" %}</th>
+                            <th>{% trans "EPF wages" %}</th>
+                            <th>{% trans "EE PF" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in ecr.included %}
+                        <tr>
+                            <td>{{ row.uan }}</td>
+                            <td>{{ row.name }}</td>
+                            <td>{{ row.badge_id }}</td>
+                            <td>{{ row.pf_wages }}</td>
+                            <td>{{ row.pf_employee }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="5" class="text-center">
+                                {% trans "No PF contributions in confirmed/paid payslips for this month." %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+</div>
+{% endblock %}

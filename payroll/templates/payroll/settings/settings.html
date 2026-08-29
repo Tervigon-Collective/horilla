@@ -15,4 +15,36 @@
         {% trans "Save Changes" %}
     </button>
 </form>
+
+<div class="oh-inner-sidebar-content__header mt-4">
+    <h2 class="oh-inner-sidebar-content__title">{% trans 'Rounding policy' %}</h2>
+</div>
+<form method="post" action="{% url 'payroll-rounding-settings' %}">
+    {% csrf_token %}
+    <div class="oh-label__info">
+        <label class="oh-label">{% trans "Component rounding" %}</label>
+    </div>
+    <select class="oh-select w-25" name="component_round_mode">
+        <option value="two_decimals" {% if rounding.component_mode == "two_decimals" %}selected{% endif %}>{% trans "Two decimals" %}</option>
+        <option value="nearest_rupee" {% if rounding.component_mode == "nearest_rupee" %}selected{% endif %}>{% trans "Nearest rupee" %}</option>
+        <option value="none" {% if rounding.component_mode == "none" %}selected{% endif %}>{% trans "None" %}</option>
+    </select>
+    <div class="oh-label__info mt-2">
+        <label class="oh-label">{% trans "Net pay rounding" %}</label>
+    </div>
+    <select class="oh-select w-25" name="net_pay_round_mode">
+        <option value="nearest_rupee" {% if rounding.net_pay_mode == "nearest_rupee" %}selected{% endif %}>{% trans "Nearest rupee" %}</option>
+        <option value="two_decimals" {% if rounding.net_pay_mode == "two_decimals" %}selected{% endif %}>{% trans "Two decimals" %}</option>
+        <option value="none" {% if rounding.net_pay_mode == "none" %}selected{% endif %}>{% trans "None" %}</option>
+    </select>
+    <div class="oh-label__info mt-2">
+        <label class="oh-label">{% trans "Statutory rounding" %}</label>
+    </div>
+    <select class="oh-select w-25" name="statutory_round_mode">
+        <option value="two_decimals" {% if rounding.statutory_mode == "two_decimals" %}selected{% endif %}>{% trans "Two decimals" %}</option>
+        <option value="nearest_rupee" {% if rounding.statutory_mode == "nearest_rupee" %}selected{% endif %}>{% trans "Nearest rupee" %}</option>
+        <option value="none" {% if rounding.statutory_mode == "none" %}selected{% endif %}>{% trans "None" %}</option>
+    </select>
+    <button type="submit" class="oh-btn oh-btn--secondary mt-2 ml-2">{% trans "Save rounding" %}</button>
+</form>
 <div class="oh-inner-sidebar-content__footer"></div>

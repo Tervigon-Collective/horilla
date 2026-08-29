@@ -2,8 +2,8 @@
 
 **Deployment:** Tervigon / Seleric — `hrms.seleric.com`  
 **Source:** `/var/jenkins_apps/horilla-src/`  
-**Last updated:** 24 August 2026  
-**Purpose:** Track what Horilla has today, what is partial, and what is missing compared to leading Indian HRMS products.
+**Last updated:** 25 August 2026  
+**Purpose:** Track what Horilla has today, what is partial, and what is missing compared to leading Indian HRMS products — including the **organization-wide payroll architecture** blueprint (Aug 25).
 
 ---
 
@@ -15,12 +15,68 @@ The largest **remaining** gaps vs Keka / greytHR / Zoho People:
 
 | Gap area | Severity | Status (Aug 2026) |
 |----------|----------|-------------------|
-| Indian statutory payroll (PF, ESI, PT, TDS, Form 16) | Critical | **Partial — engine, challans, Form 24Q CSV, TRACES text files live** |
+| Indian statutory payroll (PF, ESI, PT, TDS, Form 16) | Critical | **Partial — engine, challans, Form 24Q, TRACES, EPF ECR live** |
+| **Versioned payroll run + lock + snapshot payslips** | Critical | **Done** — `/payroll/payroll-runs/` |
+| **Configurable proration + statutory wage (50% Code on Wages)** | Critical | **Done** |
 | Attendance → payroll LOP | Critical | **Done** |
 | Leave accrual, sandwich, balance hold | High | **Done — FIFO + reservation + accrual + sandwich** |
 | Unified approvals + mobile API parity | High | **Done — web inbox + mobile inbox/actions (incl. OT)** |
-| Expense / travel, F&F settlement, LMS | Medium | **Partial — travel + mileage/limits + F&F + LMS MVP live** |
+| Expense / travel, F&F settlement, LMS | Medium | **Partial — travel + mileage/limits + F&F + LMS MVP + probation confirm live** |
 
+---
+
+## Organization-Wide Payroll Architecture (target)
+
+**Source:** HR/Finance recommended blueprint (Aug 25 2026) — 40-section production payroll model.  
+**Principle:** Payroll is a **versioned financial transaction system**, not a spreadsheet formula. Never overwrite history; never hard-code statutory ₹ amounts; never silently recalculate locked months.
+
+### Sample CTC packs (reference — configure via CTC wizard / allowances)
+
+| Pack | Basic | HRA | Special | Gross | EE PF | Net | ER PF | ESI EE/ER | Monthly CTC |
+|------|------:|----:|--------:|------:|------:|----:|------:|----------:|------------:|
+| A | 30,000 | 18,000 | 12,000 | 60,000 | 1,800 | 58,200 | 1,800 | — | 61,800 |
+| B | 22,500 | 13,500 | 9,000 | 45,000 | 1,800 | 43,200 | 1,800 | — | 46,800 (+TDS notes) |
+| C | 14,100 | 8,460 | 5,640 | 28,200 | 1,800 | 26,400 | 1,800 | — | 30,000 |
+| D | 20,000 | 0 | 0 | 20,000 | 1,800 | 18,050 | 1,800 | 150 / 650 | 22,450 |
+
+> PF ₹1,800 = min(PF wage, ₹15,000) × 12% — **must stay config-driven** (`pf_wage_ceiling` + rates). Never hard-code 1800 in UI or reports as a constant.
+
+### Blueprint vs Horilla today
+
+| # | Layer | Status | Notes / path |
+|---|--------|--------|--------------|
+| 1 | Config masters + effective dating | ✅ Done | Allowance effective_from/to + component flags; statutory/tax masters dated via settings |
+| 2 | Employee master (statutory + bank + payroll status) | ✅ Done | `EmployeeStatutoryProfile.payroll_status` Included/On Hold/Excluded + TDS proofs |
+| 3 | Salary Component Master (reusable, flags) | ✅ Done | Gross/CTC/wage/PF/ESI/excluded/proratable/payslip_visible on `Allowance` |
+| 4 | Employee salary structure **versions** | ✅ Done | Version/status/effective_to; close V1 on new apply; `structure_as_of` replay |
+| 5 | Payroll period + workflow statuses | ✅ Done | `/payroll/payroll-runs/` full status machine |
+| 6 | Eligibility engine (DOJ/LWD/hold) | ✅ Done | Payable window + payroll_status + salary hold |
+| 7 | Attendance input (locked finalized days) | ✅ Done | Must lock attendance before Calculate |
+| 8 | Proration engine (calendar / working day) | ✅ Done | Policy on run + join/exit window |
+| 9 | Gross earnings stack | ✅ Done | Fixed + variables + arrears + structure replay |
+| 10 | Statutory wage engine (50% CoW rule) | ✅ Done | Flag-aware 50% rule → PF base |
+| 11 | PF engine (rates, ceiling, VPF, EPS/EDLI) | ✅ Done | Ceiling + optional actual-wage contribution |
+| 12 | ESI engine (ceiling + contribution period) | ✅ Done | Ceiling + once-covered continuity |
+| 13 | PT by state + slab + month | ✅ Done | State slabs + location resolve |
+| 14 | TDS annual projection engine | ✅ Done | Prev employer + other income + proofs + remaining months |
+| 15–18 | Variable / reimbursement / loan / other deductions | ✅ Done | Bound into run calculate / one-time settle |
+| 19–22 | Net / employer cost / CTC | ✅ Done | Net + employer lines + `annual_ctc_for_employee` |
+| 23 | Validation engine (errors / warnings) | ✅ Done | Run validate + MoM variance |
+| 24 | Manual override with audit | ✅ Done | `PayslipOverride` |
+| 25–27 | Approval → lock → versioning | ✅ Done | Lock + reopen new version |
+| 28–29 | Payslip from **locked snapshot** + publish gate | ✅ Done | `snapshot_frozen` + `PayrollRunSnapshot` archive |
+| 30–32 | Reports / variance / dashboard | ✅ Done | Run variance + bank transfer CSV |
+| 33–36 | Join / FnF / arrears / retro attendance | ✅ Done | FnF + revision arrears + `AttendanceArrear` |
+| 37 | Org-wide rounding policy | ✅ Done | Settings + `save_payslip` |
+| 38 | Calculation order (34 steps) | ✅ Done | Orchestrated via payroll run engine |
+| 39 | Master / transaction / snapshot tables | ✅ Done | Run + snapshot + arrear tables |
+| 40 | Never overwrite locked payroll | ✅ Done | Guards on save/delete/status + freeze |
+
+### Phased build
+
+| Phase | Focus | Outcome |
+|-------|--------|---------|
+| **P0–P6** | Full org payroll architecture | ✅ **Complete** Aug 25 2026 |
 ---
 
 ## Aug 2026 delivery log (Tervigon / Seleric)
@@ -42,6 +98,7 @@ The largest **remaining** gaps vs Keka / greytHR / Zoho People:
 | Sidebar, dashboard panel, employee contract links | ✅ Live | `payroll/sidebar.py`, `payroll/dashboard.py`, `employee/templates/tabs/contract-tab.html` |
 | Migrations + Tervigon enable (PT = Delhi) | ✅ Applied | `payroll/migrations/0008`–`0011` |
 | TRACES 24Q + OLTAS challan text files | ✅ Live Aug 24 | `/payroll/india-statutory/traces/` |
+| EPF ECR 2.0 text export | ✅ Live Aug 26 | `/payroll/india-statutory/epf-ecr/` |
 | WhatsApp payslip/leave notifications | ✅ Live Aug 24 | `whatsapp/views.py` receiver on `notify.send(...)` |
 | LWF + Bonus Act + Gratuity | ✅ Live Aug 24 | Registers + F&F; LWF/Bonus opt-in on Settings |
 | Salary revision increment letters | ✅ Live Aug 24 | `/payroll/salary-revisions/`, CTC wizard PDF |
@@ -54,6 +111,8 @@ The largest **remaining** gaps vs Keka / greytHR / Zoho People:
 | Missing punch → regularization | ✅ Live Aug 24 | Dashboard **Regularize** → attendance request (`request_type=missing_punch`) |
 | Expense mileage + claim limits | ✅ Live Aug 24 | Encashment settings + travel km × rate; cap via `max_claim_amount` |
 | Probation on employee work info | ✅ Live Aug 24 | `probation_end` + `employment_status`; copied from candidate on hire |
+| Probation confirmation inbox | ✅ Live Aug 26 | `/employee/probation/` due/overdue + confirm (triggers CL) |
+| Leave policy FY 2026-27 (Tervigon) | ✅ Live Aug 25 | CL/SL 12/FY monthly accrual + FY lapse; CL confirmed-only; Eid/LWP/LOA/Voting/Maternity shells; no EL/Half-day type |
 | Unit tests (calc only) | ✅ | `payroll/tests/test_india_statutory.py` |
 
 **Not yet compliance-grade:**
@@ -174,7 +233,7 @@ Core: `employee`, `attendance`, `leave`, `payroll`, `recruitment`, `onboarding`,
 | Unified FIFO deduction | ✅ | All main paths including comp-off + allocation reject |
 | Carry forward expiry | ✅ | ✅ Fixed Aug 24 — CF-only expiry; available_days preserved |
 | Leave encashment in payroll run | ✅ | ✅ Reimbursement type + FIFO deduct/restore on approve/reject |
-| Half-day consistent | ✅ | ⚠️ Partially fixed Aug 2026 |
+| Half-day consistent | ✅ | ✅ Fixed Aug 26 — no double half-day LOP subtract |
 
 ### 4–10. Other modules
 
@@ -221,6 +280,10 @@ Core: `employee`, `attendance`, `leave`, `payroll`, `recruitment`, `onboarding`,
 | Payroll | Statutory Excel hub (profiles, CTC, Form 16 bulk, reports export) | ✅ Aug 22 |
 | Payroll | Accounting / Form 24Q toolbar HTML layout fix | ✅ Aug 22 |
 | Base | Approval inbox badge ID uses Employee.badge_id | ✅ Aug 22 |
+| Payroll | Half-day LOP no longer double-subtracted | ✅ Aug 26 |
+| Payroll | Reimbursement.save/delete safe when request is None | ✅ Aug 26 |
+| Payroll | Multi-level reimb: only superuser skips stages | ✅ Aug 26 |
+| Leave | Inbox `can_act` + stage bypass for current-stage managers | ✅ Aug 26 |
 
 ### Remaining P0 (recommended next)
 
@@ -248,7 +311,7 @@ Core: `employee`, `attendance`, `leave`, `payroll`, `recruitment`, `onboarding`,
 These remain **intentionally open** after the Aug 24 gap close. Do not treat them as done:
 
 - Naukri / Indeed ATS integrations, resume parsing AI, public career portal, offer e-sign
-- Full LMS: SCORM, quizzes, certificates, learning paths (MVP catalog/progress only)
+- Full LMS: SCORM, quizzes, learning paths (MVP catalog/progress + **completion certificates** live)
 - Expense OCR and a full travel-booking module (mileage + claim cap is live)
 - Break / multi-punch attendance rules
 - 360° review cycle + calibration + compensation-linked increments
@@ -263,6 +326,21 @@ Grant HR `lms.add_course` (and `lms.add_lesson`, `lms.add_courseenrollment`) to 
 
 ## Priority roadmap (Tervigon)
 
+### Phase 0 — Organization-wide payroll architecture (next)
+
+Aligned to the Aug 25 blueprint (see section above). Wrap existing PF/ESI/PT/TDS — do not rewrite.
+
+| # | Item | Status |
+|---|------|--------|
+| P0 | Payroll run model + statuses through **LOCKED** | ✅ **Done** — `/payroll/payroll-runs/` |
+| P1 | Payslip publish only from **locked snapshot** | ✅ **Done** — freeze + `PayrollRunSnapshot` archive |
+| P2 | Org proration policy + DOJ/LWD eligibility service | ✅ **Done** |
+| P3 | Statutory wage base (Code on Wages 50% rule) → PF/ESI | ✅ **Done** |
+| P4 | Validation engine + MoM variance before Finance approve | ✅ **Done** |
+| P5 | Salary structure versioning (close V1 / activate V2) | ✅ **Done** |
+| P6 | Rounding policy + override audit trail | ✅ **Done** |
+| — | CTC packs A–D / attendance lock / bank file / attendance arrears | ✅ **Done** |
+
 ### Phase 1 — Must-have (3–6 months)
 
 | # | Item | Status |
@@ -271,7 +349,9 @@ Grant HR `lms.add_course` (and `lms.add_lesson`, `lms.add_courseenrollment`) to 
 | 2 | Attendance-linked LOP | ✅ **Done** |
 | 3 | Leave accrual + pending balance hold | ✅ **Done Aug 22** |
 | 4 | Mobile API: monthly summary, approvals, payslip | ✅ **Done Aug 22** |
-| 5 | Unified approval inbox + multi-level | ⚠️ **Inbox done; multi-level partial** |
+| 5 | Unified approval inbox + multi-level | ✅ **Done — leave + reimbursement + OT sequential** |
+
+
 
 **Phase 1 next engineering:**
 
@@ -287,7 +367,14 @@ Grant HR `lms.add_course` (and `lms.add_lesson`, `lms.add_courseenrollment`) to 
 - ~~Travel expense type on reimbursement~~ ✅ + mileage + claim cap
 - ~~EPS/EDLI PF split + PF/ESI/PT registers~~ ✅ `/payroll/india-statutory/registers/`
 - ~~TRACES e-filing integration~~ ✅ `/payroll/india-statutory/traces/`
-- ~~LMS module~~ ✅ MVP `/lms/` (catalog, enroll, lessons — not SCORM/certificates)
+- ~~LMS module~~ ✅ MVP `/lms/` (catalog, enroll, lessons + **completion certificates**)
+- ~~Leave multi-level sequential approval~~ ✅ inbox/count parity + stage gate (web + API); balance deducted only on final stage
+- ~~Reimbursement + OT multi-level~~ ✅ `reimbursement_amount` / `overtime_hours` on Multiple Approval Condition; stages + inbox Lx/N; allowance/OT flag only on final stage
+- ~~EPF ECR 2.0 text export~~ ✅ `/payroll/india-statutory/epf-ecr/` (`#~#` UAN rows + missing-UAN validation)
+- ~~Probation confirmation workflow~~ ✅ `/employee/probation/` (due/overdue tabs + confirm → CL assignment)
+- ~~LMS completion certificates~~ ✅ `/lms/enrollments/<id>/certificate/` PDF (`LMS-000123`); My Learning + course enrollments
+- ~~Expiring documents~~ ✅ `/employee/expiring-documents/` + fixed scheduler notify/deactivate
+- ~~Dashboard HR alerts widget~~ ✅ probation + expiring-doc counts on home (`/dashboard/api/hr-alerts/`)
 
 ### Phase 2 progress (Aug 22)
 
@@ -312,7 +399,7 @@ Grant HR `lms.add_course` (and `lms.add_lesson`, `lms.add_courseenrollment`) to 
 ### Phase 3 — Keka parity (12+ months)
 
 11. Travel & expense module — **partial** (travel type + mileage + limits; no OCR / booking)
-12. 360° + calibration — **open**; LMS — **MVP live** `/lms/`
+12. 360° + calibration — **open**; LMS — **MVP live** `/lms/` (+ certificates)
 13. Resume AI, career portal, Naukri integration — **open**
 14. Advanced analytics & compliance registers — registers live; scheduled analytics **open**
 

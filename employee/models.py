@@ -941,8 +941,55 @@ class EmployeeWorkInformation(models.Model):
         return f"{self.employee_id} - {self.job_position_id}"
 
     def save(self, *args, **kwargs):
+        # Default probation window: 6 months from DOJ. Never auto-confirm on date alone.
+        previous_status = None
+        if self.pk:
+            previous_status = (
+                type(self)
+                .objects.filter(pk=self.pk)
+                .values_list("employment_status", flat=True)
+                .first()
+            )
+        if self.date_joining and not self.probation_end:
+            from dateutil.relativedelta import relativedelta
+
+            self.probation_end = self.date_joining + relativedelta(months=6)
+        # New work-info rows with a joining date start on probation unless HR set notice.
+        if self.pk is None and self.date_joining:
+            from datetime import date as _date
+
+            if self.employment_status in (None, "", "confirmed"):
+                if not self.probation_end or self.probation_end >= _date.today():
+                    self.employment_status = "probation"
         self.full_clean()
         super().save(*args, **kwargs)
+        # On formal confirmation, ensure Casual Leave is assigned (accrual starts via scheduler)
+        if (
+            previous_status
+            and previous_status != "confirmed"
+            and self.employment_status == "confirmed"
+            and self.employee_id_id
+            and self.company_id_id
+        ):
+            try:
+                from leave.models import AvailableLeave, LeaveType
+
+                cl = LeaveType.objects.filter(
+                    name="Casual Leave",
+                    company_id=self.company_id,
+                    is_active=True,
+                ).first()
+                if cl:
+                    AvailableLeave.objects.get_or_create(
+                        employee_id=self.employee_id,
+                        leave_type_id=cl,
+                        defaults={
+                            "available_days": 0,
+                            "carryforward_days": 0,
+                        },
+                    )
+            except Exception:
+                pass
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

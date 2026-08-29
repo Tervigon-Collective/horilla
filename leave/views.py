@@ -566,21 +566,17 @@ def leave_request_view(request):
     normal_requests = filtersubordinates(request, queryset, "leave.view_leaverequest")
 
     if not request.user.is_superuser:
-        multi_approve_requests = LeaveRequestConditionApproval.objects.filter(
-            is_approved=False, is_rejected=False
+        multi_ids = list(
+            LeaveRequestConditionApproval.objects.filter(
+                is_approved=False,
+                is_rejected=False,
+                leave_request_id__status="requested",
+            ).values_list("leave_request_id_id", flat=True)
         )
+        if multi_ids:
+            normal_requests = normal_requests.exclude(id__in=multi_ids)
 
-        multi_ids = [request.leave_request_id.id for request in multi_approve_requests]
-
-        # Create a new list excluding leave requests with IDs in multi_ids
-        normal_requests = [
-            leave.id for leave in normal_requests if leave.id not in multi_ids
-        ]
-
-        # Convert the list of IDs back to a queryset
-        normal_requests = LeaveRequest.objects.filter(id__in=normal_requests).distinct()
-
-    queryset = normal_requests | multiple_approvals
+    queryset = (normal_requests | multiple_approvals).distinct()
     page_number = request.GET.get("page")
     page_obj = paginator_qry(queryset, page_number)
     leave_request_filter = LeaveRequestFilter()
@@ -971,9 +967,14 @@ def leave_request_delete(request, id):
     Returns:
     GET : return leave request view template
     """
+    from leave.cbv.accessibility import can_manage_leave_request
+
     previous_data = request.GET.urlencode()
     try:
         leave_request = LeaveRequest.objects.get(id=id)
+        if not can_manage_leave_request(request, leave_request):
+            messages.error(request, _("You don't have permission."))
+            return HorillaRedirect(request)
         messages.success(request, _("Leave request deleted successfully.."))
         leave_request.delete()
     except (LeaveRequest.DoesNotExist, OverflowError, ValueError):
@@ -1069,69 +1070,77 @@ def leave_request_approve(request, id, emp_id=None):
         if has_reserved or has_sufficient_leave_balance(
             available_leave, leave_request.requested_days
         ):
-            if confirm_leave_approval(leave_request, available_leave) is None:
-                error_message = str(
-                    _("Does not have sufficient leave balance for the requested dates.")
-                )
-                messages.error(request, error_message)
-            else:
-                leave_request.status = "approved"
-                if not leave_request.multiple_approvals():
+            from leave.methods import assert_can_approve_leave_stage
+
+            is_multi = bool(leave_request.multiple_approvals())
+            finalize = True
+            condition_approval = None
+
+            if is_multi and not request.user.is_superuser:
+                try:
+                    condition_approval = assert_can_approve_leave_stage(
+                        leave_request,
+                        request.user.employee_get,
+                        is_superuser=False,
+                    )
+                except ValueError as exc:
+                    messages.error(request, str(exc))
+                    condition_approval = False  # sentinel: blocked
+                if condition_approval is False:
+                    finalize = False
+                elif condition_approval is not None:
+                    # Intermediate stages only flip the stage row; balance/status stay pending
+                    condition_approval.is_approved = True
+                    condition_approval.save()
+                    remaining = LeaveRequestConditionApproval.objects.filter(
+                        leave_request_id=leave_request,
+                        is_approved=False,
+                        is_rejected=False,
+                    ).exists()
+                    finalize = not remaining
+                    if remaining:
+                        approved = True
+                        conditional_requests = leave_request.multiple_approvals()
+                        managers = [
+                            manager.employee_user_id
+                            for manager in conditional_requests["managers"]
+                        ]
+                        if len(managers) > condition_approval.sequence:
+                            with contextlib.suppress(Exception):
+                                notify.send(
+                                    request.user.employee_get,
+                                    recipient=managers[condition_approval.sequence],
+                                    verb="You have a new leave request to validate.",
+                                    verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
+                                    verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
+                                    verb_es="Tiene una nueva solicitud de permiso que debe validar.",
+                                    verb_fr="Vous avez une nouvelle demande de congé à valider.",
+                                    icon="people-circle",
+                                    redirect=f"/leave/request-view?id={leave_request.id}",
+                                )
+                        messages.success(
+                            request,
+                            _("Approval recorded; waiting for next stage."),
+                        )
+
+            if finalize:
+                if confirm_leave_approval(leave_request, available_leave) is None:
+                    error_message = str(
+                        _(
+                            "Does not have sufficient leave balance for the requested dates."
+                        )
+                    )
+                    messages.error(request, error_message)
+                else:
+                    leave_request.status = "approved"
+                    if is_multi:
+                        LeaveRequestConditionApproval.objects.filter(
+                            leave_request_id=leave_request
+                        ).update(is_approved=True, is_rejected=False)
                     leave_request.save()
                     available_leave.save()
                     send_notification = True
                     approved = True
-                else:
-                    if request.user.is_superuser:
-                        LeaveRequestConditionApproval.objects.filter(
-                            leave_request_id=leave_request
-                        ).update(is_approved=True)
-                        leave_request.save()
-                        available_leave.save()
-                        send_notification = True
-                        approved = True
-                    else:
-                        conditional_requests = leave_request.multiple_approvals()
-                        approver = next(
-                            (
-                                manager
-                                for manager in conditional_requests["managers"]
-                                if manager == request.user.employee_get
-                            ),
-                            None,
-                        )
-                        condition_approval = LeaveRequestConditionApproval.objects.filter(
-                            manager_id=approver, leave_request_id=leave_request
-                        ).first()
-                        if condition_approval is None:
-                            error_message = str(
-                                _("You are not an approver for this leave request.")
-                            )
-                            messages.error(request, error_message)
-                        else:
-                            condition_approval.is_approved = True
-                            managers = []
-                            for manager in conditional_requests["managers"]:
-                                managers.append(manager.employee_user_id)
-                            if len(managers) > condition_approval.sequence:
-                                with contextlib.suppress(Exception):
-                                    notify.send(
-                                        request.user.employee_get,
-                                        recipient=managers[condition_approval.sequence],
-                                        verb="You have a new leave request to validate.",
-                                        verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
-                                        verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
-                                        verb_es="Tiene una nueva solicitud de permiso que debe validar.",
-                                        verb_fr="Vous avez une nouvelle demande de congé à valider.",
-                                        icon="people-circle",
-                                        redirect=f"/leave/request-view?id={leave_request.id}",
-                                    )
-                            condition_approval.save()
-                            approved = True
-                            if approver == conditional_requests["managers"][-1]:
-                                leave_request.save()
-                                available_leave.save()
-                                send_notification = True
                 if approved:
                     messages.success(request, _("Leave request approved successfully.."))
                     if send_notification:
@@ -1333,22 +1342,23 @@ def leave_request_cancel(request, id, emp_id=None):
                 leave_request.leave_clashes_count = 0
 
                 if leave_request.multiple_approvals() and not request.user.is_superuser:
-                    conditional_requests = leave_request.multiple_approvals()
-                    approver = [
-                        manager
-                        for manager in conditional_requests["managers"]
-                        if manager.employee_user_id == request.user
-                    ]
-                    if approver:
-                        condition_approval = (
-                            LeaveRequestConditionApproval.objects.filter(
-                                manager_id=approver[0], leave_request_id=leave_request
-                            ).first()
+                    from leave.methods import assert_can_approve_leave_stage
+
+                    try:
+                        condition_approval = assert_can_approve_leave_stage(
+                            leave_request,
+                            request.user.employee_get,
+                            is_superuser=False,
                         )
-                        if condition_approval:
-                            condition_approval.is_approved = False
-                            condition_approval.is_rejected = True
-                            condition_approval.save()
+                    except ValueError as exc:
+                        messages.error(request, str(exc))
+                        if emp_id is not None:
+                            return redirect(f"/employee/employee-view/{emp_id}/")
+                        return HorillaRedirect(request)
+                    if condition_approval is not None:
+                        condition_approval.is_approved = False
+                        condition_approval.is_rejected = True
+                        condition_approval.save()
 
                 leave_request.reject_reason = form.cleaned_data["reason"]
                 leave_request.save()
@@ -1543,7 +1553,7 @@ def leave_assign_one(request, obj_id):
         eligible_employees = []
         for employee in new_employees_qs:
             is_eligible, error_msg = evaluate_leave_type_conditions(
-                leave_type, employee
+                leave_type, employee, for_assignment=True
             )
             if is_eligible:
                 eligible_employees.append(employee)
@@ -1560,10 +1570,15 @@ def leave_assign_one(request, obj_id):
         if eligible_employees:
             available_leaves = []
             for employee in eligible_employees:
+                opening_days = (
+                    0
+                    if getattr(leave_type, "monthly_accrual", False)
+                    else leave_type.total_days
+                )
                 leave = AvailableLeave(
                     leave_type_id=leave_type,
                     employee_id=employee,
-                    available_days=leave_type.total_days,
+                    available_days=opening_days,
                 )
                 if leave.reset_date is None:
                     if leave_type.reset:
@@ -1797,7 +1812,7 @@ def leave_assign(request):
                     if assignment_key not in existing_assignments:
                         # Evaluate conditions before creating the assignment
                         is_eligible, error_msg = evaluate_leave_type_conditions(
-                            leave_type, employee
+                            leave_type, employee, for_assignment=True
                         )
                         if not is_eligible:
                             messages.warning(
@@ -1809,10 +1824,15 @@ def leave_assign(request):
                                 ),
                             )
                             continue
+                        opening_days = (
+                            0
+                            if getattr(leave_type, "monthly_accrual", False)
+                            else leave_type.total_days
+                        )
                         new_assignment = AvailableLeave(
                             leave_type_id=leave_type,
                             employee_id=employee,
-                            available_days=leave_type.total_days,
+                            available_days=opening_days,
                         )
                         new_assignments.append(new_assignment)
                         new_assignment.pre_save_processing()
@@ -4006,12 +4026,20 @@ def leave_request_bulk_delete(request):
     """
     This method is used to delete a bulk of leave requests.
     """
+    from leave.cbv.accessibility import can_manage_leave_request
+
     ids = request.POST["ids"]
     ids = json.loads(ids)
     count = 0  # To track the number of successfully deleted requests
     for leave_request_id in ids:
         try:
             leave_request = LeaveRequest.objects.get(id=leave_request_id)
+            if not can_manage_leave_request(request, leave_request):
+                messages.error(
+                    request,
+                    _("You don't have permission to delete this leave request."),
+                )
+                continue
             employee = leave_request.employee_id
             if leave_request.status == "requested":
                 leave_request.delete()

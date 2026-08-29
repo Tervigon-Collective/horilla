@@ -172,7 +172,7 @@ class TaskAllForm(ModelForm):
 
     def __init__(self, *args, request=None, **kwargs):
         super(TaskAllForm, self).__init__(*args, **kwargs)
-        request = getattr(_thread_locals, "request")
+        request = getattr(_thread_locals, "request", None)
 
         self.fields["stage"].widget.attrs.update({"id": "project_stage"})
         self.fields["project"].widget.attrs.update(
@@ -186,24 +186,31 @@ class TaskAllForm(ModelForm):
             }
         )
 
-        request = getattr(_thread_locals, "request", None)
-        employee = request.user.employee_get
+        if not request or not getattr(request.user, "is_authenticated", False):
+            self.fields["project"].queryset = Project.objects.none()
+            return
+        employee = getattr(request.user, "employee_get", None)
         if not self.instance.pk:
-            if request.user.is_superuser or request.user.has_perm("project.add_task"):
+            from project.methods import (
+                accessible_projects_queryset,
+                can_view_all_projects,
+            )
+
+            if can_view_all_projects(request):
                 projects = Project.objects.all()
-            elif Project.objects.filter(managers=employee).exists():
-                projects = Project.objects.filter(managers=employee)
             else:
-                projects = Project.objects.none()
+                projects = accessible_projects_queryset(request)
             self.fields["project"].queryset = projects
 
         else:
             task = self.instance
-            if request.user.is_superuser:
+            if not task.project_id:
+                projects = Project.objects.none()
+            elif request.user.is_superuser:
                 projects = Project.objects.all()
-            elif employee in task.project.managers.all():
+            elif employee and employee in task.project.managers.all():
                 projects = Project.objects.filter(managers=employee)
-            elif employee in task.task_managers.all():
+            elif employee and employee in task.task_managers.all():
                 # Limit fields accessible to task managers
                 projects = Project.objects.filter(id=self.instance.project.id)
                 self.fields["project"].disabled = True
@@ -236,7 +243,6 @@ class TimeSheetForm(ModelForm):
     def __init__(self, *args, request=None, **kwargs):
         super(TimeSheetForm, self).__init__(*args, **kwargs)
         request = getattr(_thread_locals, "request", None)
-        employee = request.user.employee_get
         hx_trigger_value = "change" if self.instance.id else "load,change"
         if not self.initial.get("project_id") == "dynamic_create":
             self.fields["project_id"].widget.attrs.update(
@@ -258,14 +264,12 @@ class TimeSheetForm(ModelForm):
             }
         )
 
-        if not request.user.has_perm("project.add_timesheet"):
-            projects = Project.objects.filter(
-                Q(managers=employee)
-                | Q(members=employee)
-                | Q(task__task_members=employee)
-                | Q(task__task_managers=employee)
-            ).distinct()
-            self.fields["project_id"].queryset = projects
+        from project.methods import accessible_projects_queryset, can_view_all_projects
+
+        if not request or not getattr(request.user, "is_authenticated", False):
+            self.fields["project_id"].queryset = Project.objects.none()
+        elif not can_view_all_projects(request):
+            self.fields["project_id"].queryset = accessible_projects_queryset(request)
 
 
 class TimesheetInTaskForm(ModelForm):

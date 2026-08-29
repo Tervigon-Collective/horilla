@@ -382,9 +382,14 @@ def resolve_pt_state(settings, employee) -> str:
     return (settings.pt_state or "DL").upper()
 
 
-def _pf_wages(basic_pay: float, settings) -> float:
-    ceiling = float(_setting(settings, "pf_wage_ceiling", "pf_wage_ceiling", default=15000) or 15000)
-    return min(max(0.0, basic_pay), ceiling)
+def _pf_wages(basic_pay: float, settings, profile=None) -> float:
+    wage = max(0.0, float(basic_pay or 0))
+    if profile and getattr(profile, "contribute_pf_on_actual_wage", False):
+        return wage
+    ceiling = float(
+        _setting(settings, "pf_wage_ceiling", "pf_wage_ceiling", default=15000) or 15000
+    )
+    return min(wage, ceiling)
 
 
 def _empty_pf() -> dict[str, float]:
@@ -405,7 +410,7 @@ def calculate_pf(basic_pay: float, settings, profile) -> dict[str, float]:
         profile and not profile.pf_applicable
     ):
         return _empty_pf()
-    pf_wages = _pf_wages(basic_pay, settings)
+    pf_wages = _pf_wages(basic_pay, settings, profile)
     ee_rate = float(_setting(settings, "pf_employee_rate", "pf_employee_rate", default=12) or 12)
     er_rate = float(_setting(settings, "pf_employer_rate", "pf_employer_rate", default=12) or 12)
     employee_pf = pf_wages * ee_rate / 100.0
@@ -551,14 +556,22 @@ def calculate_monthly_tds(
         return {
             "tds": 0.0,
             "annual_tax": 0.0,
-            "regime": _setting(settings, "default_tds_regime", "default_tds_regime", default="new"),
+            "regime": _setting(
+                settings, "default_tds_regime", "default_tds_regime", default="new"
+            ),
+            "remaining_months": 0,
+            "remaining_tax": 0.0,
+            "ytd_tds": 0.0,
+            "previous_employer_tds": 0.0,
+            "previous_employer_income": 0.0,
+            "other_income": 0.0,
+            "proof_status": getattr(profile, "proof_submission_status", None)
+            if profile
+            else None,
         }
 
     fy_start, fy_end, fy_sy, _fy_ey = financial_year_bounds(period_end)
-    days_in_period = (period_end - period_start).days + 1
-    days_in_fy = (fy_end - fy_start).days + 1
 
-    # YTD gross from payslips + current period
     from payroll.models.models import Payslip
 
     ytd_gross = 0.0
@@ -569,47 +582,69 @@ def calculate_monthly_tds(
         status__in=["confirmed", "paid"],
     ):
         ytd_gross += float(slip.gross_pay or 0)
-    ytd_gross += gross_pay
+    ytd_gross += float(gross_pay or 0)
 
-    # Project annual gross if partial year remaining
+    prev_income = float(getattr(profile, "previous_employer_income", 0) or 0) if profile else 0.0
+    prev_tds = float(getattr(profile, "previous_employer_tds", 0) or 0) if profile else 0.0
+    other_income = float(getattr(profile, "other_income_annual", 0) or 0) if profile else 0.0
+
+    # Project annual current-employer income from YTD run-rate
     elapsed_days = (period_end - fy_start).days + 1
+    days_in_fy = (fy_end - fy_start).days + 1
     if elapsed_days > 0 and ytd_gross > 0:
-        daily_avg = ytd_gross / elapsed_days
-        annual_gross = daily_avg * days_in_fy
+        annual_current = (ytd_gross / elapsed_days) * days_in_fy
     else:
-        annual_gross = gross_pay * 12
+        annual_current = float(gross_pay or 0) * 12
+
+    annual_gross = annual_current + prev_income + other_income
 
     regime = _setting(settings, "default_tds_regime", "default_tds_regime", default="new")
     if profile and profile.tds_regime:
         regime = profile.tds_regime
+
+    # Use declared deductions only when proofs verified/submitted; else conservative 0
+    # for old-regime Chapter VI-A beyond standard deduction (except always-count PF).
+    proof = getattr(profile, "proof_submission_status", "pending") if profile else "pending"
+    allow_declared = proof in ("submitted", "verified")
+    section_80c = float(profile.section_80c_annual or 0) if profile and allow_declared else 0.0
+    section_80d = float(profile.section_80d_annual or 0) if profile and allow_declared else 0.0
+    other_vi_a = float(profile.other_chapter_vi_a or 0) if profile and allow_declared else 0.0
 
     std_ded = (
         settings.standard_deduction_old_regime
         if regime == "old"
         else settings.standard_deduction_annual
     )
-    pf_annual = pf_employee * 12
-    tax_info = calculate_annual_tds(
-        annual_gross=annual_gross,
-        regime=regime,
-        standard_deduction=std_ded,
-        section_80c=(profile.section_80c_annual if profile else 0),
-        section_80d=(profile.section_80d_annual if profile else 0),
-        other_vi_a=(profile.other_chapter_vi_a if profile else 0),
-        pf_employee_annual=pf_annual if regime == "old" else 0,
-    )
-    annual_tax = tax_info["annual_tax"]
-    ytd_tds = _ytd_tds_from_payslips(employee, fy_start, period_start)
-    remaining_months = max(
-        1,
-        12 - period_end.month + (3 if period_end.month >= 4 else 12 + period_end.month - 3),
-    )
-    # Simpler: spread remaining tax over months left in FY
     months_left = max(
         1,
         (fy_end.year - period_end.year) * 12 + fy_end.month - period_end.month + 1,
     )
-    remaining_tax = max(0.0, annual_tax - ytd_tds)
+    pf_annual = float(pf_employee or 0) * months_left  # remaining PF estimate
+    # Better PF annual: YTD PF + remaining months × current
+    ytd_pf = 0.0
+    for slip in Payslip.objects.filter(
+        employee_id=employee,
+        start_date__lt=period_start,
+        end_date__gte=fy_start,
+        status__in=["confirmed", "paid"],
+    ):
+        india = (slip.pay_head_data or {}).get("india_statutory") or {}
+        ytd_pf += float(india.get("pf_employee") or 0)
+    pf_annual = ytd_pf + float(pf_employee or 0) * months_left
+
+    tax_info = calculate_annual_tds(
+        annual_gross=annual_gross,
+        regime=regime,
+        standard_deduction=std_ded,
+        section_80c=section_80c,
+        section_80d=section_80d,
+        other_vi_a=other_vi_a,
+        pf_employee_annual=pf_annual if regime == "old" else 0,
+    )
+    annual_tax = tax_info["annual_tax"]
+    ytd_tds = _ytd_tds_from_payslips(employee, fy_start, period_start)
+    tax_already = ytd_tds + prev_tds
+    remaining_tax = max(0.0, annual_tax - tax_already)
     monthly_tds = _round2(remaining_tax / months_left)
 
     return {
@@ -619,6 +654,15 @@ def calculate_monthly_tds(
         "regime": regime,
         "ytd_tds": _round2(ytd_tds),
         "annual_gross_projected": _round2(annual_gross),
+        "annual_current_employer_projected": _round2(annual_current),
+        "previous_employer_income": _round2(prev_income),
+        "previous_employer_tds": _round2(prev_tds),
+        "other_income": _round2(other_income),
+        "tax_already_deducted": _round2(tax_already),
+        "remaining_tax": _round2(remaining_tax),
+        "remaining_months": months_left,
+        "proof_status": proof,
+        "declared_deductions_applied": allow_declared,
     }
 
 
@@ -645,7 +689,42 @@ def calculate_india_statutory(
         return empty
 
     profile = get_employee_statutory_profile(employee)
-    pf = calculate_pf(basic_pay, settings, profile)
+    allowance_lines = []
+    # Prefer caller-provided allowance breakdown when present on employee cache;
+    # otherwise PF wage base uses basic only unless CoW 50% is enabled with lines.
+    cow_enabled = bool(
+        _setting(settings, "enable_code_on_wages_50pct", "enable_code_on_wages_50pct", default=False)
+    )
+    pf_base = float(basic_pay or 0)
+    statutory_wage_meta = {}
+    if cow_enabled:
+        from payroll.methods.statutory_wage import compute_statutory_wage_base
+        from payroll.models.models import Allowance
+
+        for allowance in Allowance.objects.filter(
+            specific_employees=employee, is_fixed=True, is_active=True
+        ):
+            allowance_lines.append(
+                {
+                    "title": allowance.title,
+                    "amount": float(allowance.amount or 0),
+                    "include_in_wage_definition": getattr(
+                        allowance, "include_in_wage_definition", False
+                    ),
+                    "pf_applicable": getattr(allowance, "pf_applicable", False),
+                    "is_excluded_allowance": getattr(
+                        allowance, "is_excluded_allowance", False
+                    ),
+                }
+            )
+        statutory_wage_meta = compute_statutory_wage_base(
+            basic_pay=basic_pay,
+            allowance_lines=allowance_lines,
+            apply_50pct_rule=True,
+        )
+        pf_base = float(statutory_wage_meta.get("statutory_wage") or basic_pay)
+
+    pf = calculate_pf(pf_base, settings, profile)
     esi = calculate_esi(
         gross_pay,
         settings,
@@ -750,7 +829,16 @@ def calculate_india_statutory(
         "tds_regime": tds_info.get("regime"),
         "annual_tax_projected": tds_info.get("annual_tax"),
         "taxable_income_projected": tds_info.get("taxable_income"),
+        "tds_remaining_months": tds_info.get("remaining_months"),
+        "tds_remaining_tax": tds_info.get("remaining_tax"),
+        "tds_tax_already_deducted": tds_info.get("tax_already_deducted"),
+        "tds_previous_employer_income": tds_info.get("previous_employer_income"),
+        "tds_previous_employer_tds": tds_info.get("previous_employer_tds"),
+        "tds_other_income": tds_info.get("other_income"),
+        "tds_proof_status": tds_info.get("proof_status"),
         "pt_state": resolve_pt_state(settings, employee),
+        "statutory_wage": statutory_wage_meta,
+        "code_on_wages_50pct": cow_enabled,
     }
 
     return {
@@ -783,8 +871,16 @@ def apply_india_statutory_to_payroll(
         }
 
     pretax_list = list(pretax_result.get("pretax_deductions") or [])
-    pretax_list.extend(india["pretax_deductions"])
-    pretax_result["pretax_deductions"] = pretax_list
+    # Drop legacy PF/ESI/PT rows so India statutory lines are not double-counted.
+    skipped = ("provident fund", "esi", "professional tax")
+    cleaned = []
+    for row in pretax_list:
+        title = (row.get("title") or "").lower()
+        if any(token in title for token in skipped):
+            continue
+        cleaned.append(row)
+    cleaned.extend(india["pretax_deductions"])
+    pretax_result["pretax_deductions"] = cleaned
 
     settings = get_india_settings(employee)
     if settings and _setting(settings, "enable_tds", "enable_tds"):
@@ -798,10 +894,22 @@ def apply_india_statutory_to_payroll(
     }
 
 
+def _format_payslip_period(start: date, end: date) -> str:
+    """Compact month label for PDFs (e.g. Jul 2026), never a full date range."""
+    if not start:
+        return "—"
+    if end and (start.year != end.year or start.month != end.month):
+        if start.year == end.year:
+            return f"{start.strftime('%b')}–{end.strftime('%b %Y')}"
+        return f"{start.strftime('%b %Y')}–{end.strftime('%b %Y')}"
+    return start.strftime("%b %Y")
+
+
 def _build_form16_totals_from_slips(slips) -> dict[str, Any]:
     """Aggregate Form 16 totals from an iterable of payslip instances."""
     totals = {
         "gross_salary": 0.0,
+        "basic_salary": 0.0,
         "pf_employee": 0.0,
         "pf_employer": 0.0,
         "eps": 0.0,
@@ -815,30 +923,48 @@ def _build_form16_totals_from_slips(slips) -> dict[str, Any]:
     }
     regime = "new"
     payslip_count = 0
+    last_projection = {
+        "taxable_income": 0.0,
+        "annual_tax": 0.0,
+    }
     for slip in slips:
         payslip_count += 1
         totals["gross_salary"] += float(slip.gross_pay or 0)
+        totals["basic_salary"] += float(slip.basic_pay or 0)
         totals["net_salary"] += float(slip.net_pay or 0)
-        india = (slip.pay_head_data or {}).get("india_statutory") or {}
-        totals["pf_employee"] += float(india.get("pf_employee") or 0)
+        pay_head = slip.pay_head_data or {}
+        india = pay_head.get("india_statutory") or {}
+        pf_emp = float(india.get("pf_employee") or 0)
+        esi_emp = float(india.get("esi_employee") or 0)
+        pt_amt = float(india.get("pt") or 0)
+        tds_amt = float(india.get("tds") or pay_head.get("federal_tax") or 0)
+        totals["pf_employee"] += pf_emp
         totals["pf_employer"] += float(india.get("pf_employer") or 0)
         split = pf_split_from_india(india)
         totals["eps"] = totals.get("eps", 0.0) + split["eps"]
         totals["epf_employer"] = totals.get("epf_employer", 0.0) + split["epf_employer"]
         totals["edli"] = totals.get("edli", 0.0) + split["edli"]
-        totals["esi_employee"] += float(india.get("esi_employee") or 0)
-        totals["pt"] += float(india.get("pt") or 0)
-        pay_head = slip.pay_head_data or {}
-        totals["tds"] += float(
-            india.get("tds") or pay_head.get("federal_tax") or 0
-        )
+        totals["esi_employee"] += esi_emp
+        totals["pt"] += pt_amt
+        totals["tds"] += tds_amt
         if india.get("tds_regime"):
             regime = india["tds_regime"]
+        if india.get("taxable_income_projected") is not None:
+            last_projection["taxable_income"] = float(
+                india.get("taxable_income_projected") or 0
+            )
+        if india.get("annual_tax_projected") is not None:
+            last_projection["annual_tax"] = float(india.get("annual_tax_projected") or 0)
         totals["months"].append(
             {
-                "period": f"{slip.start_date} — {slip.end_date}",
-                "gross": slip.gross_pay,
-                "tds": india.get("tds") or 0,
+                "period": _format_payslip_period(slip.start_date, slip.end_date),
+                "gross": float(slip.gross_pay or 0),
+                "basic": float(slip.basic_pay or 0),
+                "pf": pf_emp,
+                "esi": esi_emp,
+                "pt": pt_amt,
+                "tds": tds_amt,
+                "net": float(slip.net_pay or 0),
             }
         )
 
@@ -846,7 +972,17 @@ def _build_form16_totals_from_slips(slips) -> dict[str, Any]:
         if key != "months":
             totals[key] = _round2(totals[key])
 
-    return {"totals": totals, "regime": regime, "payslip_count": payslip_count}
+    balance = _round2(last_projection["annual_tax"] - totals["tds"])
+    last_projection["taxable_income"] = _round2(last_projection["taxable_income"])
+    last_projection["annual_tax"] = _round2(last_projection["annual_tax"])
+    last_projection["balance_tax"] = balance
+
+    return {
+        "totals": totals,
+        "regime": regime,
+        "payslip_count": payslip_count,
+        "projection": last_projection,
+    }
 
 
 def aggregate_form16(employee, financial_year_start: int) -> dict[str, Any]:
@@ -859,7 +995,7 @@ def aggregate_form16(employee, financial_year_start: int) -> dict[str, Any]:
         employee_id=employee,
         start_date__lte=fy_end,
         end_date__gte=fy_start,
-        status__in=["confirmed", "paid"],
+        status__in=["confirmed", "paid", "draft"],
     ).order_by("start_date")
 
     summary = _build_form16_totals_from_slips(slips)
@@ -874,6 +1010,7 @@ def aggregate_form16(employee, financial_year_start: int) -> dict[str, Any]:
         "employee": employee,
         "company": company,
         "financial_year": f"{financial_year_start}-{financial_year_start + 1}",
+        "financial_year_start": financial_year_start,
         "fy_start": fy_start,
         "fy_end": fy_end,
         "regime": regime,
@@ -881,7 +1018,19 @@ def aggregate_form16(employee, financial_year_start: int) -> dict[str, Any]:
         "uan": getattr(bank, "uan_number", None) if bank else None,
         "totals": totals,
         "payslip_count": payslip_count,
+        "projection": summary.get("projection")
+        or {"taxable_income": 0.0, "annual_tax": 0.0, "balance_tax": 0.0},
+        "months": totals.get("months") or [],
     }
+
+
+def aggregate_tax_computation(employee, financial_year_start: int) -> dict[str, Any]:
+    """Month-wise tax computation sheet for PDF download."""
+    from datetime import datetime as dt
+
+    context = aggregate_form16(employee, financial_year_start)
+    context["generated_on"] = dt.now().strftime("%d %b %Y %H:%M")
+    return context
 
 
 def aggregate_form16_bulk(employees, financial_year_start: int) -> dict[int, dict[str, Any]]:
@@ -956,6 +1105,7 @@ def aggregate_statutory_challan(company, period_start: date, period_end: date) -
             "lwf_employer": 0.0,
             "bonus_provision": 0.0,
             "tds": 0.0,
+            "ncp_days": 0.0,
         }
     )
 
@@ -1001,6 +1151,12 @@ def aggregate_statutory_challan(company, period_start: date, period_end: date) -
         row["lwf_employer"] += float(india.get("lwf_employer") or 0)
         row["bonus_provision"] += float(india.get("bonus_provision") or 0)
         row["tds"] += float(india.get("tds") or slip.pay_head_data.get("federal_tax") or 0)
+        unpaid = pay_head.get("unpaid_days")
+        if unpaid is None:
+            unpaid = float(pay_head.get("leave_lop_days") or 0) + float(
+                pay_head.get("attendance_lop_days") or 0
+            )
+        row["ncp_days"] += float(unpaid or 0)
 
     rows = []
     totals = {
@@ -1018,6 +1174,7 @@ def aggregate_statutory_challan(company, period_start: date, period_end: date) -
         "lwf_employer": 0.0,
         "bonus_provision": 0.0,
         "tds": 0.0,
+        "ncp_days": 0.0,
         "employee_count": 0,
     }
     for row in sorted(by_employee.values(), key=lambda r: (r["employee"].get_full_name() if r["employee"] else "")):
@@ -1642,3 +1799,131 @@ def generate_oltas_challan_text(
         ]))
 
     return "\n".join(lines) + "\n"
+
+
+ECR_DELIMITER = "#~#"
+
+
+def _ecr_safe_name(name: str) -> str:
+    """EPFO member name: letters, spaces, dots only."""
+    cleaned = []
+    for ch in (name or "").upper():
+        if ch.isalpha() or ch in (" ", "."):
+            cleaned.append(ch)
+        elif ch in ("-", "_", "'", "|", ",", "/"):
+            cleaned.append(" ")
+    return " ".join("".join(cleaned).split())
+
+
+def _ecr_uan(value) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits[:12]
+
+
+def _ecr_int(value) -> int:
+    try:
+        return int(round(float(value or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def build_epf_ecr_payload(challan_data: dict) -> dict[str, Any]:
+    """
+    Build EPFO ECR 2.0 rows (#~# delimited) from aggregated challan data.
+
+    Columns:
+    UAN, Member Name, Gross Wages, EPF Wages, EPS Wages, EDLI Wages,
+    EPF EE Share, EPS ER Share, EPF-EPS Diff (ER), NCP Days, Refund of Advances
+    """
+    lines: list[str] = []
+    included: list[dict] = []
+    issues: list[dict] = []
+
+    for row in challan_data.get("rows") or []:
+        pf_wages = float(row.get("pf_wages") or 0)
+        pf_ee = float(row.get("pf_employee") or 0)
+        pf_er = float(row.get("pf_employer") or 0)
+        if pf_wages <= 0 and pf_ee <= 0 and pf_er <= 0:
+            continue
+
+        emp = row.get("employee")
+        name = _ecr_safe_name(emp.get_full_name() if emp else "")
+        uan = _ecr_uan(row.get("uan"))
+        split = {
+            "eps": float(row.get("eps") or 0),
+            "epf_employer": float(row.get("epf_employer") or 0),
+        }
+        if not split["eps"] and not split["epf_employer"] and pf_er:
+            derived = pf_split_from_india(
+                {
+                    "pf_wages": pf_wages,
+                    "pf_employer": pf_er,
+                    "eps": row.get("eps"),
+                    "epf_employer": row.get("epf_employer"),
+                    "edli": row.get("edli"),
+                }
+            )
+            split = {
+                "eps": float(derived.get("eps") or 0),
+                "epf_employer": float(derived.get("epf_employer") or 0),
+            }
+
+        eps_wages = min(pf_wages, EPS_WAGE_CEILING) if pf_wages > 0 else 0.0
+        edli_wages = eps_wages
+        if float(split.get("eps") or 0) <= 0:
+            eps_wages = 0.0
+
+        ncp = _ecr_int(row.get("ncp_days") or 0)
+        fields = [
+            uan,
+            name,
+            str(_ecr_int(row.get("gross"))),
+            str(_ecr_int(pf_wages)),
+            str(_ecr_int(eps_wages)),
+            str(_ecr_int(edli_wages)),
+            str(_ecr_int(pf_ee)),
+            str(_ecr_int(split.get("eps"))),
+            str(_ecr_int(split.get("epf_employer"))),
+            str(ncp),
+            "0",
+        ]
+        line = ECR_DELIMITER.join(fields)
+        record = {
+            "uan": uan,
+            "name": name,
+            "line": line,
+            "employee": emp,
+            "badge_id": row.get("badge_id") or "",
+            "pf_wages": _ecr_int(pf_wages),
+            "pf_employee": _ecr_int(pf_ee),
+        }
+
+        if len(uan) != 12:
+            issues.append(
+                {
+                    **record,
+                    "issue": "Missing or invalid UAN (12 digits required)",
+                }
+            )
+            continue
+        if not name:
+            issues.append({**record, "issue": "Missing member name"})
+            continue
+
+        lines.append(line)
+        included.append(record)
+
+    return {
+        "lines": lines,
+        "included": included,
+        "issues": issues,
+        "text": ("\n".join(lines) + ("\n" if lines else "")),
+        "period_start": challan_data.get("period_start"),
+        "period_end": challan_data.get("period_end"),
+        "company": challan_data.get("company"),
+    }
+
+
+def generate_epf_ecr_text(challan_data: dict) -> str:
+    """Return EPFO ECR 2.0 plain-text body (ANSI-safe ASCII)."""
+    return build_epf_ecr_payload(challan_data)["text"]

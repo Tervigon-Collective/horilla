@@ -21,6 +21,11 @@ from payroll.methods.ctc_wizard import (
     release_salary,
     split_monthly_ctc,
 )
+from payroll.methods.ctc_packs import (
+    apply_salary_pack_to_contract,
+    get_salary_pack,
+    list_salary_packs,
+)
 from payroll.models.models import Contract
 from payroll.models.salary_revision import SalaryHold, SalaryRevision
 
@@ -45,37 +50,76 @@ def ctc_wizard(request, contract_id):
     snapshot = current_ctc_snapshot(contract)
 
     if request.method == "POST":
-        try:
-            monthly_ctc = float(request.POST.get("monthly_ctc", 0))
-        except (TypeError, ValueError):
-            monthly_ctc = 0
-        metro = request.POST.get("metro") == "1"
+        pack_code = (request.POST.get("pack_code") or "").strip().upper()
         note = (request.POST.get("note") or "").strip()
         try:
             effective_date = date.fromisoformat(request.POST.get("effective_date"))
         except (TypeError, ValueError):
             effective_date = date.today()
-        if monthly_ctc <= 0:
-            messages.error(request, _("Enter a valid monthly CTC amount."))
-        else:
-            previous = current_ctc_snapshot(contract)
-            split = split_monthly_ctc(monthly_ctc, metro=metro)
-            apply_ctc_split_to_contract(contract, split)
-            revision = record_salary_revision(
-                contract,
-                split,
-                previous=previous,
-                effective_date=effective_date,
-                note=note,
-            )
-            messages.success(
-                request,
-                _(
-                    "CTC applied: Basic %(basic)s, HRA %(hra)s, Special %(special)s"
+
+        if pack_code:
+            pack = get_salary_pack(pack_code)
+            if not pack:
+                messages.error(request, _("Unknown salary pack."))
+            else:
+                previous = current_ctc_snapshot(contract)
+                from payroll.methods.ctc_wizard import CtcSplit
+
+                apply_salary_pack_to_contract(contract, pack)
+                split = CtcSplit(
+                    monthly_ctc=pack.gross,
+                    basic=pack.basic,
+                    hra=pack.hra,
+                    special=pack.special,
+                    metro=True,
                 )
-                % {"basic": split.basic, "hra": split.hra, "special": split.special},
-            )
-            return redirect("salary-revision-letter", revision_id=revision.pk)
+                revision = record_salary_revision(
+                    contract,
+                    split,
+                    previous=previous,
+                    effective_date=effective_date,
+                    note=note or f"Applied salary pack {pack.code}: {pack.name}",
+                )
+                messages.success(
+                    request,
+                    _(
+                        "Pack %(code)s applied: Basic %(basic)s, HRA %(hra)s, Special %(special)s"
+                    )
+                    % {
+                        "code": pack.code,
+                        "basic": pack.basic,
+                        "hra": pack.hra,
+                        "special": pack.special,
+                    },
+                )
+                return redirect("salary-revision-letter", revision_id=revision.pk)
+        else:
+            try:
+                monthly_ctc = float(request.POST.get("monthly_ctc", 0))
+            except (TypeError, ValueError):
+                monthly_ctc = 0
+            metro = request.POST.get("metro") == "1"
+            if monthly_ctc <= 0:
+                messages.error(request, _("Enter a valid monthly CTC amount."))
+            else:
+                previous = current_ctc_snapshot(contract)
+                split = split_monthly_ctc(monthly_ctc, metro=metro)
+                apply_ctc_split_to_contract(contract, split)
+                revision = record_salary_revision(
+                    contract,
+                    split,
+                    previous=previous,
+                    effective_date=effective_date,
+                    note=note,
+                )
+                messages.success(
+                    request,
+                    _(
+                        "CTC applied: Basic %(basic)s, HRA %(hra)s, Special %(special)s"
+                    )
+                    % {"basic": split.basic, "hra": split.hra, "special": split.special},
+                )
+                return redirect("salary-revision-letter", revision_id=revision.pk)
 
     preview_ctc = snapshot["monthly_ctc"] or contract.wage or 0
     try:
@@ -98,6 +142,7 @@ def ctc_wizard(request, contract_id):
             "snapshot": snapshot,
             "revisions": revisions,
             "today": date.today().isoformat(),
+            "salary_packs": list_salary_packs(),
         },
     )
 

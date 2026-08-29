@@ -22,6 +22,16 @@ SUBMENUS = [
         "menu": _("Payslips"),
         "redirect": reverse("view-payslip"),
     },
+    {
+        "menu": _("Payroll Runs"),
+        "redirect": reverse("payroll-run-list"),
+        "accessibility": "payroll.sidebar.dasbhoard_accessibility",
+    },
+    {
+        "menu": _("Attendance Arrears"),
+        "redirect": reverse("attendance-arrear-list"),
+        "accessibility": "payroll.sidebar.dasbhoard_accessibility",
+    },
     # {
     #     "menu": _("Allowances"),
     #     "redirect": reverse("view-allowance"),
@@ -89,6 +99,11 @@ SUBMENUS = [
     {
         "menu": _("TRACES e-Filing"),
         "redirect": reverse("traces-efiling"),
+        "accessibility": "payroll.sidebar.india_statutory_accessibility",
+    },
+    {
+        "menu": _("EPF ECR"),
+        "redirect": reverse("epf-ecr-list"),
         "accessibility": "payroll.sidebar.india_statutory_accessibility",
     },
     {

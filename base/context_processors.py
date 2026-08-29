@@ -287,6 +287,11 @@ def intial_notice_period(request):
     """
     initial = 30
     first = None
+    rounding = {
+        "component_mode": "two_decimals",
+        "net_pay_mode": "nearest_rupee",
+        "statutory_mode": "two_decimals",
+    }
     if apps.is_installed("payroll"):
         PayrollGeneralSetting = get_horilla_model_class(
             app_label="payroll", model="payrollgeneralsetting"
@@ -294,7 +299,14 @@ def intial_notice_period(request):
         first = PayrollGeneralSetting.objects.first()
     if first:
         initial = first.notice_period
-    return {"get_initial_notice_period": initial}
+        rounding = {
+            "component_mode": getattr(first, "component_round_mode", None)
+            or "two_decimals",
+            "net_pay_mode": getattr(first, "net_pay_round_mode", None) or "nearest_rupee",
+            "statutory_mode": getattr(first, "statutory_round_mode", None)
+            or "two_decimals",
+        }
+    return {"get_initial_notice_period": initial, "rounding": rounding}
 
 
 def check_candidate_self_tracking(request):

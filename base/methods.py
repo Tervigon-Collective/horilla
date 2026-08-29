@@ -301,6 +301,46 @@ Group.add_to_class("users_count", property(users_count))
 #     return queryset
 
 
+def has_org_wide_perm(user, perm) -> bool:
+    """
+    Whether holding ``perm`` should unlock company-wide querysets / pickers.
+
+    ESS users often have view_*/add_* for self-service menus. Those must NOT
+    mean "see/edit everyone". Org-wide access requires:
+    - superuser, or
+    - Admin / HR Manager group, or
+    - change_/delete_ (or approve_) on the same model as a view_/add_ perm, or
+    - any non-view/add permission (change/delete/approve/export etc.)
+    """
+    if not user or not getattr(user, "is_authenticated", False) or not perm:
+        return False
+    if user.is_superuser:
+        return True
+    if not user.has_perm(perm):
+        return False
+    try:
+        if user.groups.filter(name__in=("Admin", "HR Manager")).exists():
+            return True
+    except Exception:
+        pass
+    try:
+        _app, codename = perm.split(".", 1)
+    except ValueError:
+        return True
+    if codename.startswith("view_"):
+        model = codename[len("view_") :]
+        return user.has_perm(f"{_app}.change_{model}") or user.has_perm(
+            f"{_app}.delete_{model}"
+        )
+    if codename.startswith("add_"):
+        model = codename[len("add_") :]
+        return user.has_perm(f"{_app}.change_{model}") or user.has_perm(
+            f"{_app}.delete_{model}"
+        )
+    # change_ / delete_ / approve_ / export_ / custom → treat as elevated
+    return True
+
+
 def filtersubordinates(
     request,
     queryset,
@@ -310,61 +350,41 @@ def filtersubordinates(
 ):
     """
     Filters a queryset to include only the current user's subordinates.
-    Respects the user's permission: if the user has `perm`, returns full queryset.
-
-    Args:
-        request: HttpRequest
-        queryset: Django queryset to filter
-        perm: permission codename string
-        field: ForeignKey field pointing to Employee (default "employee_id")
-        nested: if True, include all nested subordinates; else only direct subordinates
-
-    Returns:
-        Filtered queryset
+    Respects elevated permission: only org-wide holders get the full queryset.
     """
     user = request.user
 
-    if perm and user.has_perm(perm):
-        return queryset  # User has permission to view all
+    if perm and has_org_wide_perm(user, perm):
+        return queryset
 
     if not hasattr(user, "employee_get") or user.employee_get is None:
-        return queryset.none()  # No employee associated, return empty
+        return queryset.none()
 
-    # Get subordinate employee IDs
     sub_ids = get_subordinate_employee_ids(request, nested=nested)
-
-    # Include own records explicitly
     own_id = user.employee_get.id
-
-    # Build filter
     filter_ids = sub_ids + [own_id] if sub_ids else [own_id]
-
-    # Return filtered queryset
     return queryset.filter(**{f"{field}__id__in": filter_ids})
 
 
 def filter_own_records(request, queryset, perm=None):
-    """
-    This method is used to filter out subordinates queryset element.
-    """
+    """Own records unless the user has elevated (org-wide) permission."""
     user = request.user
-    if user.has_perm(perm):
+    if perm and has_org_wide_perm(user, perm):
         return queryset
-    queryset = queryset.filter(employee_id=request.user.employee_get)
-    return queryset
+    employee = getattr(user, "employee_get", None)
+    if not employee:
+        return queryset.none()
+    return queryset.filter(employee_id=employee)
 
 
 def filter_own_and_subordinate_recordes(request, queryset, perm=None):
-    """
-    This method is used to filter out subordinates queryset along with own queryset element.
-    """
+    """Own + subordinates, or all when elevated."""
     user = request.user
-    if user.has_perm(perm):
+    if perm and has_org_wide_perm(user, perm):
         return queryset
-    queryset = filter_own_records(request, queryset, perm) | filtersubordinates(
-        request, queryset, perm
+    return filter_own_records(request, queryset, None) | filtersubordinates(
+        request, queryset, None
     )
-    return queryset
 
 
 def filtersubordinatesemployeemodel(request, queryset, perm=None):
@@ -372,16 +392,19 @@ def filtersubordinatesemployeemodel(request, queryset, perm=None):
     This method is used to filter out all subordinates in the entire reporting chain.
     """
     user = request.user
-    if user.has_perm(perm):
+    if perm and has_org_wide_perm(user, perm):
         return queryset
 
     if not request:
         return queryset
 
     if settings.NESTED_SUBORDINATE_VISIBILITY:
+        employee = getattr(request.user, "employee_get", None)
+        if not employee:
+            return queryset.none()
         # Initialize the set of subordinates with the current manager(s)
         current_managers = [
-            request.user.employee_get.id,
+            employee.id,
         ]
         all_subordinates = Q(
             employee_work_info__reporting_manager_id__in=current_managers
@@ -438,12 +461,22 @@ def choosesubordinates(request, form, perm):
     """
     Dynamically set subordinate choices for employee field based on permissions
     and nested subordinate visibility.
+
+    ESS-style add_* alone does not unlock the full employee list — only elevated
+    (org-wide) holders get unrestricted choices. Others get self + subordinates.
     """
     user = request.user
-    if user.has_perm(perm):
+    if "employee_id" not in getattr(form, "fields", {}):
         return form
-    manager = Employee.objects.filter(employee_user_id=user).first()
+
+    if has_org_wide_perm(user, perm):
+        return form
+
+    manager = getattr(user, "employee_get", None) or Employee.objects.filter(
+        employee_user_id=user
+    ).first()
     if not manager:
+        form.fields["employee_id"].queryset = Employee.objects.none()
         return form
 
     # Start with direct subordinates
@@ -460,17 +493,15 @@ def choosesubordinates(request, form, perm):
             if not sub_managers.exists():
                 break
 
-            current_managers = sub_managers
+            current_managers = list(sub_managers)
             all_subordinates |= Q(
                 employee_work_info__reporting_manager_id__in=sub_managers
             )
 
-    queryset = Employee.objects.filter(all_subordinates).distinct()
-
-    # Assign to form field
-    if "employee_id" in form.fields:
-        form.fields["employee_id"].queryset = queryset
-
+    queryset = Employee.objects.filter(
+        Q(id=manager.id) | all_subordinates
+    ).distinct()
+    form.fields["employee_id"].queryset = queryset
     return form
 
 

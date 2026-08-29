@@ -857,7 +857,11 @@ class ReimbursementForm(ModelForm):
     def configure_fields(self):
         exclude_fields = []
 
-        if self.request and not self.request.user.has_perm("payroll.add_reimbursement"):
+        from base.methods import has_org_wide_perm
+
+        if self.request and not has_org_wide_perm(
+            self.request.user, "payroll.change_reimbursement"
+        ):
             exclude_fields.append("employee_id")
 
         self.setup_leave_fields()

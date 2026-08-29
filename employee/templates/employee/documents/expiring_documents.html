@@ -1,0 +1,99 @@
+{% extends "index.html" %}
+{% load i18n static %}
+
+{% block content %}
+<style>
+.exp-page { margin: -24px; padding: 24px; min-height: calc(100vh - 80px); }
+.exp-head__title { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+.exp-head__desc { color: rgba(100,100,100,.85); margin: 0 0 16px; font-size: 13px; }
+.exp-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.exp-tabs a {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 8px; text-decoration: none;
+  border: 1px solid rgba(128,128,128,.2); color: inherit; font-size: 13px;
+}
+.exp-tabs a.is-active { background: #E54F38; color: #fff; border-color: #E54F38; }
+.exp-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px;
+  background: rgba(128,128,128,.12);
+}
+.exp-badge--overdue { background: rgba(220,38,38,.12); color: #dc2626; }
+.exp-badge--soon { background: rgba(217,119,6,.15); color: #d97706; }
+.exp-badge--ok { background: rgba(37,99,235,.12); color: #2563eb; }
+</style>
+
+<div class="exp-page">
+  <div class="exp-head">
+    <h1 class="exp-head__title">{% trans "Expiring documents" %}</h1>
+    <p class="exp-head__desc">
+      {% trans "IDs, visas, certificates and other employee documents approaching or past expiry. Reminders are sent on the notify-before date." %}
+    </p>
+  </div>
+
+  <div class="exp-tabs">
+    <a href="?tab=due" class="{% if tab == 'due' %}is-active{% endif %}">
+      {% trans "Due ≤ 30 days" %} ({{ counts.due }})
+    </a>
+    <a href="?tab=soon" class="{% if tab == 'soon' %}is-active{% endif %}">
+      {% trans "Due ≤ 7 days" %} ({{ counts.soon }})
+    </a>
+    <a href="?tab=overdue" class="{% if tab == 'overdue' %}is-active{% endif %}">
+      {% trans "Expired" %} ({{ counts.overdue }})
+    </a>
+    <a href="?tab=all" class="{% if tab == 'all' %}is-active{% endif %}">
+      {% trans "All dated" %} ({{ counts.all }})
+    </a>
+  </div>
+
+  <div class="oh-sticky-table">
+    <table class="oh-table">
+      <thead>
+        <tr>
+          <th>{% trans "Document" %}</th>
+          <th>{% trans "Employee" %}</th>
+          <th>{% trans "Issue date" %}</th>
+          <th>{% trans "Expiry" %}</th>
+          <th>{% trans "Notify before" %}</th>
+          <th>{% trans "Status" %}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>{{ row.document.title }}</td>
+          <td>
+            <a href="{% url 'employee-view-individual' row.document.employee_id.id %}">
+              {{ row.document.employee_id.get_full_name }}
+            </a>
+          </td>
+          <td>{{ row.document.issue_date|date:"d M Y"|default:"—" }}</td>
+          <td>{{ row.document.expiry_date|date:"d M Y" }}</td>
+          <td>{{ row.document.notify_before|default:1 }} {% trans "days" %}</td>
+          <td>
+            {% if row.days is not None and row.days < 0 %}
+            <span class="exp-badge exp-badge--overdue">{{ row.status_label }} ({{ row.days }})</span>
+            {% elif row.days is not None and row.days <= 7 %}
+            <span class="exp-badge exp-badge--soon">{{ row.status_label }} ({{ row.days }}d)</span>
+            {% else %}
+            <span class="exp-badge exp-badge--ok">{{ row.status_label }}{% if row.days is not None %} ({{ row.days }}d){% endif %}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if row.document.document %}
+            <a class="oh-btn oh-btn--light oh-btn--sm" href="{% url 'view-file' row.document.id %}">{% trans "View" %}</a>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="7" style="text-align:center;padding:2rem;">
+            {% trans "No documents match this filter." %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

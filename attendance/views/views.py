@@ -1534,40 +1534,56 @@ def approve_overtime(request, obj_id):
     args:
         obj_id  : attendance id
     """
+    from attendance.methods.overtime_approval import apply_overtime_approval
+
     try:
         attendance = Attendance.objects.get(id=obj_id)
         if not request.user.is_superuser:
             if attendance.employee_id.id == request.user.employee_get.id:
                 messages.error(request, _("You cannot approve your own overtime."))
                 return attendance_view_redirect(request)
-        attendance.attendance_overtime_approve = True
-        attendance.save()
+        try:
+            fully = apply_overtime_approval(
+                attendance,
+                employee=getattr(request.user, "employee_get", None),
+                is_superuser=request.user.is_superuser,
+            )
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return attendance_view_redirect(request)
         urlencode = request.GET.urlencode()
         modified_url = f"/attendance/attendance-view/?{urlencode}"
-        messages.success(
-            request,
-            _("%(employee)s's %(date)s overtime approved")
-            % {
-                "employee": attendance.employee_id,
-                "date": attendance.attendance_date.strftime("%d %b %Y"),
-            },
-        )
-        with contextlib.suppress(Exception):
-            notify.send(
-                request.user.employee_get,
-                recipient=attendance.employee_id.employee_user_id,
-                verb=f"Your {attendance.attendance_date}'s attendance \
-                    overtime approved.",
-                verb_ar=f"تمت الموافقة على إضافة ساعات العمل الإضافية لتاريخ \
-                    {attendance.attendance_date}.",
-                verb_de=f"Die Überstunden für den {attendance.attendance_date}\
-                      wurden genehmigt.",
-                verb_es=f"Se ha aprobado el tiempo extra de asistencia para el \
-                    {attendance.attendance_date}.",
-                verb_fr=f"Les heures supplémentaires pour la date\
-                      {attendance.attendance_date} ont été approuvées.",
-                redirect=reverse("attendance-overtime-view") + f"?id={attendance.id}",
-                icon="checkmark",
+        if fully:
+            messages.success(
+                request,
+                _("%(employee)s's %(date)s overtime approved")
+                % {
+                    "employee": attendance.employee_id,
+                    "date": attendance.attendance_date.strftime("%d %b %Y"),
+                },
+            )
+            with contextlib.suppress(Exception):
+                notify.send(
+                    request.user.employee_get,
+                    recipient=attendance.employee_id.employee_user_id,
+                    verb=f"Your {attendance.attendance_date}'s attendance \
+                        overtime approved.",
+                    verb_ar=f"تمت الموافقة على إضافة ساعات العمل الإضافية لتاريخ \
+                        {attendance.attendance_date}.",
+                    verb_de=f"Die Überstunden für den {attendance.attendance_date}\
+                          wurden genehmigt.",
+                    verb_es=f"Se ha aprobado el tiempo extra de asistencia para el \
+                        {attendance.attendance_date}.",
+                    verb_fr=f"Les heures supplémentaires pour la date\
+                          {attendance.attendance_date} ont été approuvées.",
+                    redirect=reverse("attendance-overtime-view")
+                    + f"?id={attendance.id}",
+                    icon="checkmark",
+                )
+        else:
+            messages.success(
+                request,
+                _("Overtime approval recorded; waiting for next stage."),
             )
     except (Attendance.DoesNotExist, OverflowError):
         messages.error(request, _("Attendance not found"))
@@ -1595,13 +1611,23 @@ def approve_bulk_overtime(request):
     for attendance_id in filtered_ids:
         try:
             attendance = Attendance.objects.get(id=attendance_id)
-            attendance.attendance_overtime_approve = True
-            attendance.save()
-            otapprove_ids.append(attendance)
-            notify.send(
-                request.user.employee_get,
-                recipient=attendance.employee_id.employee_user_id,
-                verb=f"Overtime approved for\
+            from attendance.methods.overtime_approval import apply_overtime_approval
+
+            try:
+                fully = apply_overtime_approval(
+                    attendance,
+                    employee=getattr(request.user, "employee_get", None),
+                    is_superuser=request.user.is_superuser,
+                )
+            except ValueError as exc:
+                messages.error(request, str(exc))
+                continue
+            if fully:
+                otapprove_ids.append(attendance)
+                notify.send(
+                    request.user.employee_get,
+                    recipient=attendance.employee_id.employee_user_id,
+                    verb=f"Overtime approved for\
                       {attendance.attendance_date}'s attendance",
                 verb_ar=f"تمت الموافقة على العمل الإضافي لحضور تاريخ \
                     {attendance.attendance_date}",

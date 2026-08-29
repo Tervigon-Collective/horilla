@@ -302,8 +302,9 @@ class AssetRequestForm(ModelForm):
             **kwargs,
         )
         reload_queryset(self.fields)
-        if user is not None and user.has_perm("asset.add_assetrequest"):
+        from base.methods import has_org_wide_perm
 
+        if user is not None and has_org_wide_perm(user, "asset.add_assetrequest"):
             self.fields["requested_employee_id"].queryset = Employee.objects.all()
             self.fields["requested_employee_id"].initial = Employee.objects.filter(
                 id=user.employee_get.id

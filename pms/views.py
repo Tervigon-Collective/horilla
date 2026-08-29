@@ -1212,10 +1212,12 @@ def update_employee_objective(request, emp_obj_id):
             redirect to form of employee objective
     """
     emp_objective = EmployeeObjective.objects.get(id=emp_obj_id)
+    from base.methods import has_org_wide_perm
+
     if (
         request.user.employee_get == emp_objective.employee_id
         or request.user.employee_get in emp_objective.objective_id.managers.all()
-        or request.user.has_perm("pms.change_employeeobjective")
+        or has_org_wide_perm(request.user, "pms.change_employeeobjective")
     ):
         form = EmployeeObjectiveForm(instance=emp_objective)
         if request.method == "POST":

@@ -54,10 +54,55 @@
       />
     </div>
   </div>
-  <div class="oh-payslip__body" id="payslipBody">
+    <div class="oh-payslip__body" id="payslipBody">
     <!-- Payslip Summary -->
     {% include "payroll/payslip/individual_payslip_summery.html" %}
     <!-- End of Payslip Payable -->
   </div>
+  {% if perms.payroll.change_payslip and not instance.snapshot_frozen %}
+  <div class="oh-wrapper mt-3" style="padding:16px;border:1px dashed #cbd5e1;border-radius:8px;">
+    <h4>{% trans "Manual override (audited)" %}</h4>
+    <p class="text-muted">{% trans "Requires reason. Locked/paid payslips cannot be overridden." %}</p>
+    <form method="post" action="{% url 'payslip-override-create' instance.id %}" enctype="multipart/form-data" style="display:flex;flex-wrap:wrap;gap:8px;align-items:end;">
+      {% csrf_token %}
+      <div>
+        <label class="oh-label">{% trans "Field" %}</label>
+        <select name="field_name" class="oh-select">
+          <option value="net_pay">{% trans "Net pay" %}</option>
+          <option value="gross_pay">{% trans "Gross pay" %}</option>
+          <option value="basic_pay">{% trans "Basic pay" %}</option>
+          <option value="deduction">{% trans "Total deduction" %}</option>
+          <option value="component">{% trans "Named component" %}</option>
+        </select>
+      </div>
+      <div>
+        <label class="oh-label">{% trans "Component title" %}</label>
+        <input class="oh-input" name="component_title" placeholder="{% trans 'If named component' %}">
+      </div>
+      <div>
+        <label class="oh-label">{% trans "Revised value" %}</label>
+        <input class="oh-input" type="number" step="0.01" name="revised_value" required>
+      </div>
+      <div style="min-width:220px;flex:1;">
+        <label class="oh-label">{% trans "Reason" %}</label>
+        <input class="oh-input w-100" name="reason" required>
+      </div>
+      <div>
+        <label class="oh-label">{% trans "Attachment" %}</label>
+        <input type="file" name="attachment">
+      </div>
+      <button type="submit" class="oh-btn oh-btn--secondary">{% trans "Apply override" %}</button>
+    </form>
+    {% if instance.overrides.all %}
+    <ul class="mt-2">
+      {% for o in instance.overrides.all %}
+      <li><strong>{{ o.get_field_name_display }}</strong>: {{ o.original_value }} → {{ o.revised_value }} — {{ o.reason }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% elif instance.snapshot_frozen %}
+  <p class="mt-2 text-muted">{% trans "Payslip snapshot is frozen with the locked payroll run." %}</p>
+  {% endif %}
 </div>
 {% endblock content %}

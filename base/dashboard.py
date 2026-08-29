@@ -1089,19 +1089,13 @@ def get_pending_approvals_counts(request):
 
     # Leave requests
     try:
-        from leave.models import LeaveRequest
+        from leave.methods import leave_requests_awaiting_approval
 
         if can_approve:
-            if has_leave_perm:
-                leave_count = LeaveRequest.objects.filter(status="requested").count()
-            else:
-                from base.methods import filtersubordinates
-
-                qs = LeaveRequest.objects.filter(status="requested")
-                leave_count = filtersubordinates(
-                    request, qs, "leave.change_leaverequest"
-                ).count()
+            leave_count = leave_requests_awaiting_approval(request).count()
         else:
+            from leave.models import LeaveRequest
+
             leave_count = (
                 LeaveRequest.objects.filter(
                     employee_id=employee, status="requested"
@@ -1232,44 +1226,17 @@ def get_pending_approvals_counts(request):
 
     # Reimbursement requests
     try:
-        from payroll.models.models import Reimbursement
+        from payroll.methods.reimbursement_approval import reimbursements_awaiting_approval
 
-        if can_approve and has_reimb_perm:
-            reimb_count = Reimbursement.objects.filter(status="requested").count()
-        else:
-            reimb_count = (
-                Reimbursement.objects.filter(
-                    employee_id=employee, status="requested"
-                ).count()
-                if employee
-                else 0
-            )
-        pending["reimbursements"] = reimb_count
+        pending["reimbursements"] = reimbursements_awaiting_approval(request).count()
     except Exception:
         pending["reimbursements"] = 0
 
     # Overtime awaiting approval
     try:
-        from attendance.models import Attendance
+        from attendance.methods.overtime_approval import overtime_awaiting_approval
 
-        ot_base = Attendance.objects.filter(
-            attendance_overtime_approve=False,
-            overtime_second__gt=0,
-        )
-        if can_approve:
-            if has_ot_perm or has_attendance_perm:
-                ot_count = ot_base.count()
-            else:
-                from base.methods import filtersubordinates
-
-                ot_count = filtersubordinates(
-                    request, ot_base, "attendance.change_attendance"
-                ).count()
-        else:
-            ot_count = (
-                ot_base.filter(employee_id=employee).count() if employee else 0
-            )
-        pending["overtime"] = ot_count
+        pending["overtime"] = overtime_awaiting_approval(request).count()
     except Exception:
         pending["overtime"] = 0
 
@@ -1283,6 +1250,49 @@ def dashboard_pending_approvals(request):
     """JSON endpoint for dashboard pending-approval widget."""
     result = get_pending_approvals_counts(request)
     return JsonResponse(result)
+
+
+def get_hr_alerts_counts(request) -> dict:
+    """Probation + expiring-document counts for the dashboard widget."""
+    from base.templatetags.basefilters import is_reportingmanager
+
+    user = request.user
+    can_view = (
+        user.is_superuser
+        or user.has_perm("employee.view_employee")
+        or user.has_perm("employee.change_employee")
+        or user.has_perm("horilla_documents.view_document")
+        or user.has_perm("horilla_documents.view_documentrequest")
+        or is_reportingmanager(user)
+    )
+    if not can_view:
+        return {"is_restricted": True, "probation": {}, "documents": {}}
+
+    probation = {"all": 0, "due": 0, "soon": 0, "overdue": 0}
+    documents = {"all": 0, "due": 0, "soon": 0, "overdue": 0}
+    try:
+        from employee.methods.probation import probation_counts
+
+        probation = probation_counts(request)
+    except Exception:
+        pass
+    try:
+        from employee.methods.expiring_documents import expiring_documents_counts
+
+        documents = expiring_documents_counts(request)
+    except Exception:
+        pass
+    return {
+        "is_restricted": False,
+        "probation": probation,
+        "documents": documents,
+    }
+
+
+@login_required
+def dashboard_hr_alerts(request):
+    """JSON endpoint for dashboard probation + expiring-document alerts."""
+    return JsonResponse(get_hr_alerts_counts(request))
 
 
 @login_required

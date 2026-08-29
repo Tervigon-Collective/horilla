@@ -1,0 +1,32 @@
+{% load i18n %}
+<div class="oh-wrapper">
+  <h3>{% trans "Attendance arrears" %}</h3>
+  <p>{% trans "Retro attendance adjustments after a month is locked — paid in a later open month." %}</p>
+  <a class="oh-btn oh-btn--secondary mb-2" href="{% url 'attendance-arrear-create' %}">{% trans "Create arrear" %}</a>
+  <table class="oh-table__table">
+    <thead>
+      <tr>
+        <th>{% trans "Employee" %}</th>
+        <th>{% trans "Source period" %}</th>
+        <th>{% trans "Days" %}</th>
+        <th>{% trans "Amount" %}</th>
+        <th>{% trans "Payout month" %}</th>
+        <th>{% trans "Paid" %}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in arrears %}
+      <tr>
+        <td>{{ a.employee_id }}</td>
+        <td>{{ a.source_period_start }} → {{ a.source_period_end }}</td>
+        <td>{{ a.days }}</td>
+        <td>{{ a.amount }}</td>
+        <td>{{ a.payout_month }}</td>
+        <td>{% if a.paid %}{% trans "Yes" %}{% else %}{% trans "No" %}{% endif %}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="6">{% trans "No attendance arrears." %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

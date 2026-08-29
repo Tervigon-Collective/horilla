@@ -1005,6 +1005,33 @@ class Attendance(HorillaModel):
                 -old_work, -old_approved_ot, -old_pending_today
             )
 
+        # Spawn multi-level OT stages when OT is pending (skip if auto-approved)
+        if (
+            self.pk
+            and not self.attendance_overtime_approve
+            and (self.overtime_second or 0) > 0
+        ):
+            from base.multiple_approval import (
+                find_applicable_condition,
+                sync_approval_stages,
+            )
+
+            work_info = getattr(self.employee_id, "employee_work_info", None)
+            hours = round(float(self.overtime_second or 0) / 3600.0, 4)
+            applicable = find_applicable_condition(
+                department=getattr(work_info, "department_id", None) if work_info else None,
+                company=getattr(work_info, "company_id", None) if work_info else None,
+                condition_field="overtime_hours",
+                value=hours,
+            )
+            sync_approval_stages(
+                stage_model=AttendanceOvertimeConditionApproval,
+                fk_name="attendance_id",
+                request_obj=self,
+                employee=self.employee_id,
+                condition=applicable,
+            )
+
     def serialize(self):
         """
         Used to serialize attendance instance
@@ -1187,6 +1214,21 @@ class AttendanceRequestComment(HorillaModel):
 
     def __str__(self) -> str:
         return f"{self.comment}"
+
+
+class AttendanceOvertimeConditionApproval(models.Model):
+    """Per-attendance multi-level OT approval stages."""
+
+    sequence = models.IntegerField()
+    is_approved = models.BooleanField(default=False)
+    is_rejected = models.BooleanField(default=False)
+    attendance_id = models.ForeignKey(
+        Attendance, on_delete=models.CASCADE, related_name="ot_condition_approvals"
+    )
+    manager_id = models.ForeignKey(Employee, on_delete=models.CASCADE)
+
+    class Meta:
+        ordering = ["sequence"]
 
 
 class AttendanceOverTime(HorillaModel):

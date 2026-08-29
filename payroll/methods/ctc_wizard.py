@@ -144,7 +144,14 @@ def record_salary_revision(
     effective_date: date | None = None,
     note: str = "",
 ):
-    """Persist a revision row and compute arrears if effective date is in the past."""
+    """
+    Persist a revision row, close the previous active structure version,
+    and compute arrears if effective date is in the past.
+    """
+    from datetime import timedelta
+
+    from django.db import transaction
+
     from payroll.models.salary_revision import SalaryRevision
 
     previous = previous or current_ctc_snapshot(contract)
@@ -167,22 +174,102 @@ def record_salary_revision(
         arrears_months = max(0, arrears_months)
         arrears_amount = round((new_ctc - old_ctc) * arrears_months, 2)
 
-    return SalaryRevision.objects.create(
-        employee_id=contract.employee_id,
-        contract_id=contract,
-        effective_date=effective_date,
-        previous_monthly_ctc=old_ctc,
-        new_monthly_ctc=new_ctc,
-        previous_basic=float(previous.get("basic") or 0),
-        new_basic=split.basic,
-        new_hra=split.hra,
-        new_special=split.special,
-        metro=split.metro,
-        increment_percent=increment,
-        arrears_months=arrears_months,
-        arrears_amount=arrears_amount,
-        note=note or "",
+    with transaction.atomic():
+        active_qs = SalaryRevision.objects.filter(
+            employee_id=contract.employee_id,
+            status="active",
+        ).order_by("-version", "-id")
+        latest = active_qs.first()
+        next_version = (latest.version + 1) if latest else 1
+        # Close all currently active structures (should be one).
+        close_to = effective_date - timedelta(days=1)
+        for prior in active_qs:
+            prior.status = "closed"
+            if prior.effective_to is None:
+                prior.effective_to = (
+                    close_to if close_to >= prior.effective_date else prior.effective_date
+                )
+            prior.save(update_fields=["status", "effective_to"])
+
+        return SalaryRevision.objects.create(
+            employee_id=contract.employee_id,
+            contract_id=contract,
+            effective_date=effective_date,
+            effective_to=None,
+            version=next_version,
+            status="active",
+            previous_monthly_ctc=old_ctc,
+            new_monthly_ctc=new_ctc,
+            previous_basic=float(previous.get("basic") or 0),
+            new_basic=split.basic,
+            new_hra=split.hra,
+            new_special=split.special,
+            metro=split.metro,
+            increment_percent=increment,
+            arrears_months=arrears_months,
+            arrears_amount=arrears_amount,
+            note=note or "",
+        )
+
+
+def structure_as_of(employee, as_of: date | None = None) -> dict[str, float | int | str | None]:
+    """
+    Return the salary structure that applied on as_of (default today).
+
+    Prefers versioned SalaryRevision history; falls back to live contract snapshot.
+    """
+    from payroll.models.salary_revision import SalaryRevision
+
+    as_of = as_of or date.today()
+    revision = (
+        SalaryRevision.objects.filter(
+            employee_id=employee,
+            effective_date__lte=as_of,
+        )
+        .filter(models_q_effective_to(as_of))
+        .order_by("-effective_date", "-version", "-id")
+        .first()
     )
+    if revision:
+        return {
+            "source": "revision",
+            "revision_id": revision.pk,
+            "version": revision.version,
+            "status": revision.status,
+            "effective_date": revision.effective_date.isoformat(),
+            "effective_to": revision.effective_to.isoformat()
+            if revision.effective_to
+            else None,
+            "monthly_ctc": float(revision.new_monthly_ctc or 0),
+            "basic": float(revision.new_basic or 0),
+            "hra": float(revision.new_hra or 0),
+            "special": float(revision.new_special or 0),
+        }
+
+    from payroll.models.models import Contract
+
+    contract = Contract.objects.filter(
+        employee_id=employee, contract_status="active"
+    ).first()
+    if not contract:
+        return {
+            "source": "none",
+            "monthly_ctc": 0.0,
+            "basic": 0.0,
+            "hra": 0.0,
+            "special": 0.0,
+        }
+    snap = current_ctc_snapshot(contract)
+    snap["source"] = "contract"
+    snap["version"] = None
+    return snap
+
+
+def models_q_effective_to(as_of: date):
+    """Q: effective_to is null OR effective_to >= as_of."""
+    from django.db.models import Q
+
+    return Q(effective_to__isnull=True) | Q(effective_to__gte=as_of)
 
 
 def is_salary_on_hold(employee) -> bool:

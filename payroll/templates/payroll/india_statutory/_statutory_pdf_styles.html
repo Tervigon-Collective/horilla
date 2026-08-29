@@ -1,0 +1,146 @@
+<style>
+/* Shared statutory document styles — Form 16 + Tax Computation */
+.doc {
+    width: 700px;
+    margin: 0 auto;
+    padding: 8px 4px;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 10px;
+    color: #222;
+    line-height: 1.35;
+}
+.doc * { box-sizing: border-box; }
+.doc-top {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 6px;
+}
+.doc-top td { border: none; vertical-align: middle; padding: 0; }
+.doc-co {
+    font-size: 12px;
+    font-weight: 700;
+    color: #111;
+}
+.doc-kind {
+    text-align: right;
+    font-size: 11px;
+    font-weight: 700;
+    color: #111;
+}
+.doc-meta {
+    font-size: 9px;
+    color: #666;
+    margin: 2px 0 8px;
+}
+.doc-line {
+    border: 0;
+    border-top: 1px solid #222;
+    margin: 0 0 10px;
+}
+.doc-line-soft {
+    border: 0;
+    border-top: 1px solid #ddd;
+    margin: 8px 0;
+}
+.doc-sec {
+    font-size: 9px;
+    font-weight: 700;
+    color: #444;
+    margin: 10px 0 5px;
+    padding-bottom: 3px;
+    border-bottom: 1px solid #e5e5e5;
+}
+.doc-2col {
+    width: 100%;
+    border-collapse: collapse;
+}
+.doc-2col > tbody > tr > td {
+    width: 50%;
+    vertical-align: top;
+    border: none;
+    padding: 0;
+}
+.doc-2col > tbody > tr > td:first-child { padding-right: 16px; }
+.doc-2col > tbody > tr > td:last-child { padding-left: 16px; }
+.doc-kv {
+    width: 100%;
+    border-collapse: collapse;
+}
+.doc-kv td {
+    border: none;
+    padding: 2px 0;
+    font-size: 9.5px;
+    vertical-align: top;
+}
+.doc-kv .k {
+    width: 88px;
+    color: #777;
+    white-space: nowrap;
+}
+.doc-kv .v {
+    color: #222;
+    font-weight: 600;
+}
+.doc-fig {
+    width: 100%;
+    border-collapse: collapse;
+}
+.doc-fig td {
+    border-bottom: 1px solid #eee;
+    padding: 4px 0;
+    font-size: 9.5px;
+}
+.doc-fig .k { color: #555; width: 62%; }
+.doc-fig .v { text-align: right; font-weight: 600; color: #111; white-space: nowrap; }
+.doc-fig tr.strong td {
+    font-weight: 700;
+    border-top: 1px solid #222;
+    border-bottom: 1px solid #222;
+    padding-top: 6px;
+    padding-bottom: 6px;
+}
+.doc-tbl {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 2px;
+}
+.doc-tbl th {
+    font-size: 8px;
+    font-weight: 700;
+    color: #555;
+    text-align: left;
+    padding: 4px 3px;
+    border-bottom: 1px solid #222;
+    background: #fff;
+}
+.doc-tbl th.r, .doc-tbl td.r { text-align: right; }
+.doc-tbl td {
+    padding: 4px 3px;
+    border-bottom: 1px solid #eee;
+    font-size: 9px;
+    color: #333;
+}
+.doc-tbl tr.tot td {
+    font-weight: 700;
+    color: #111;
+    border-top: 1px solid #222;
+    border-bottom: 1px solid #222;
+}
+.doc-foot {
+    margin-top: 12px;
+    padding-top: 6px;
+    border-top: 1px solid #e5e5e5;
+    font-size: 8px;
+    color: #888;
+    line-height: 1.4;
+}
+.doc-badge {
+    display: inline-block;
+    font-size: 8px;
+    font-weight: 600;
+    color: #555;
+    border: 1px solid #ccc;
+    padding: 1px 5px;
+    margin-left: 4px;
+}
+</style>

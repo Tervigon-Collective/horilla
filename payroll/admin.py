@@ -24,6 +24,8 @@ from payroll.models.india_statutory import (
     Form16Record,
     IndiaStatutorySettings,
 )
+from payroll.models.payroll_run import AttendanceArrear, PayrollRun, PayrollRunSnapshot
+from payroll.models.salary_revision import PayslipOverride, SalaryHold, SalaryRevision
 
 # Register your models here.
 admin.site.register(FilingStatus)
@@ -41,3 +43,9 @@ admin.site.register(PayslipAutoGenerate)
 admin.site.register(IndiaStatutorySettings)
 admin.site.register(EmployeeStatutoryProfile)
 admin.site.register(Form16Record)
+admin.site.register(PayrollRun)
+admin.site.register(PayrollRunSnapshot)
+admin.site.register(AttendanceArrear)
+admin.site.register(SalaryRevision)
+admin.site.register(SalaryHold)
+admin.site.register(PayslipOverride)

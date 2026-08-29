@@ -1,7 +1,7 @@
 import sys
 from datetime import date, datetime, time, timedelta
 
-from apscheduler.schedulers.background import BackgroundScheduler
+from horilla.db import SafeBackgroundScheduler
 
 
 def update_experience():
@@ -105,7 +105,7 @@ if not any(
     """
     Initializes and starts background tasks using APScheduler when the server is running.
     """
-    scheduler = BackgroundScheduler()
+    scheduler = SafeBackgroundScheduler()
     scheduler.add_job(update_experience, "interval", hours=4)
     scheduler.add_job(block_unblock_disciplinary, "interval", seconds=60)
     scheduler.start()

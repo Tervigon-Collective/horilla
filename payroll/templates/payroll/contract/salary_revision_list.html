@@ -18,9 +18,12 @@
                     <thead>
                         <tr>
                             <th>{% trans "Employee" %}</th>
+                            <th>{% trans "Ver" %}</th>
+                            <th>{% trans "Status" %}</th>
                             <th>{% trans "Effective" %}</th>
-                            <th>{% trans "From" %}</th>
                             <th>{% trans "To" %}</th>
+                            <th>{% trans "From CTC" %}</th>
+                            <th>{% trans "To CTC" %}</th>
                             <th>{% trans "Increment" %}</th>
                             <th>{% trans "Arrears" %}</th>
                             <th>{% trans "Paid" %}</th>
@@ -31,7 +34,10 @@
                         {% for rev in revisions %}
                         <tr>
                             <td>{{ rev.employee_id.get_full_name }}</td>
+                            <td>v{{ rev.version }}</td>
+                            <td>{{ rev.get_status_display }}</td>
                             <td>{{ rev.effective_date }}</td>
+                            <td>{% if rev.effective_to %}{{ rev.effective_to }}{% else %}—{% endif %}</td>
                             <td class="is-num">{{ rev.previous_monthly_ctc|floatformat:0|currency_symbol_position }}</td>
                             <td class="is-num">{{ rev.new_monthly_ctc|floatformat:0|currency_symbol_position }}</td>
                             <td class="is-num">{{ rev.increment_percent|floatformat:1 }}%</td>

@@ -83,6 +83,13 @@ class CourseEnrollment(HorillaModel):
     enrolled_on = models.DateField(auto_now_add=True)
     due_date = models.DateField(null=True, blank=True, verbose_name=_("Due date"))
     completed_on = models.DateField(null=True, blank=True, verbose_name=_("Completed on"))
+    certificate_id = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        verbose_name=_("Certificate ID"),
+        help_text=_("Issued when the course is completed."),
+    )
 
     objects = HorillaCompanyManager("employee_id__employee_work_info__company_id")
 
@@ -94,6 +101,18 @@ class CourseEnrollment(HorillaModel):
 
     def __str__(self):
         return f"{self.employee_id} → {self.course_id} ({self.status})"
+
+    def ensure_certificate_id(self) -> str:
+        """Assign immutable LMS-{pk:06d} id once the course is completed."""
+        if self.certificate_id:
+            return self.certificate_id
+        if self.status != "completed" or not self.pk:
+            return ""
+        self.certificate_id = f"LMS-{self.pk:06d}"
+        type(self).objects.filter(pk=self.pk).update(
+            certificate_id=self.certificate_id
+        )
+        return self.certificate_id
 
     def progress_percent(self):
         total = self.course_id.lessons.filter(is_active=True).count()

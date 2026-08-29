@@ -1,0 +1,152 @@
+{% load i18n %}
+{% include "payroll/india_statutory/_statutory_pdf_styles.html" %}
+<div class="doc">
+    <table class="doc-top">
+        <tr>
+            <td class="doc-co">{{ company.company|default:company }}</td>
+            <td class="doc-kind">{% trans "Form 16 — Part B" %}</td>
+        </tr>
+    </table>
+    <div class="doc-meta">
+        FY {{ financial_year }}
+        {% if financial_year_start %}· AY {{ financial_year_start|add:1 }}-{{ financial_year_start|add:2 }}{% endif %}
+        · {{ regime|title }} regime
+        · {{ payslip_count }} payslip{{ payslip_count|pluralize }}
+    </div>
+    <hr class="doc-line">
+
+    <table class="doc-2col">
+        <tr>
+            <td>
+                <div class="doc-sec">{% trans "Employer" %}</div>
+                <table class="doc-kv">
+                    <tr>
+                        <td class="k">{% trans "Name" %}</td>
+                        <td class="v">{{ company.company|default:company }}</td>
+                    </tr>
+                    {% if statutory_settings and statutory_settings.tan_number %}
+                    <tr>
+                        <td class="k">{% trans "TAN" %}</td>
+                        <td class="v">{{ statutory_settings.tan_number }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if statutory_settings and statutory_settings.deductor_name %}
+                    <tr>
+                        <td class="k">{% trans "Deductor" %}</td>
+                        <td class="v">{{ statutory_settings.deductor_name }}</td>
+                    </tr>
+                    {% endif %}
+                </table>
+            </td>
+            <td>
+                <div class="doc-sec">{% trans "Employee" %}</div>
+                <table class="doc-kv">
+                    <tr>
+                        <td class="k">{% trans "Name" %}</td>
+                        <td class="v">{{ employee.get_full_name }}</td>
+                    </tr>
+                    <tr>
+                        <td class="k">{% trans "ID" %}</td>
+                        <td class="v">{{ employee.badge_id|default:"—" }}</td>
+                    </tr>
+                    {% if pan %}
+                    <tr>
+                        <td class="k">{% trans "PAN" %}</td>
+                        <td class="v">{{ pan }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if uan %}
+                    <tr>
+                        <td class="k">{% trans "UAN" %}</td>
+                        <td class="v">{{ uan }}</td>
+                    </tr>
+                    {% endif %}
+                </table>
+            </td>
+        </tr>
+    </table>
+
+    <div class="doc-sec">{% trans "Salary &amp; tax (from payslips)" %}</div>
+    <table class="doc-2col">
+        <tr>
+            <td>
+                <table class="doc-fig">
+                    <tr>
+                        <td class="k">{% trans "Gross salary" %}</td>
+                        <td class="v">₹ {{ totals.gross_salary|floatformat:2 }}</td>
+                    </tr>
+                    <tr>
+                        <td class="k">{% trans "PF (employee)" %}</td>
+                        <td class="v">₹ {{ totals.pf_employee|floatformat:2 }}</td>
+                    </tr>
+                    <tr>
+                        <td class="k">{% trans "EPS (pension)" %}</td>
+                        <td class="v">₹ {{ totals.eps|default:0|floatformat:2 }}</td>
+                    </tr>
+                    <tr>
+                        <td class="k">{% trans "EDLI" %}</td>
+                        <td class="v">₹ {{ totals.edli|default:0|floatformat:2 }}</td>
+                    </tr>
+                </table>
+            </td>
+            <td>
+                <table class="doc-fig">
+                    <tr>
+                        <td class="k">{% trans "ESI (employee)" %}</td>
+                        <td class="v">₹ {{ totals.esi_employee|floatformat:2 }}</td>
+                    </tr>
+                    <tr>
+                        <td class="k">{% trans "Professional tax" %}</td>
+                        <td class="v">₹ {{ totals.pt|floatformat:2 }}</td>
+                    </tr>
+                    <tr>
+                        <td class="k">{% trans "TDS deducted" %}</td>
+                        <td class="v">₹ {{ totals.tds|floatformat:2 }}</td>
+                    </tr>
+                    <tr class="strong">
+                        <td class="k">{% trans "Net salary paid" %}</td>
+                        <td class="v">₹ {{ totals.net_salary|floatformat:2 }}</td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+
+    {% if totals.months %}
+    <div class="doc-sec">{% trans "Month-wise summary" %}</div>
+    <table class="doc-tbl">
+        <thead>
+            <tr>
+                <th>{% trans "Period" %}</th>
+                <th class="r">{% trans "Gross" %}</th>
+                <th class="r">{% trans "PF" %}</th>
+                <th class="r">{% trans "TDS" %}</th>
+                <th class="r">{% trans "Net" %}</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in totals.months %}
+            <tr>
+                <td>{{ m.period }}</td>
+                <td class="r">{{ m.gross|floatformat:2 }}</td>
+                <td class="r">{{ m.pf|default:0|floatformat:2 }}</td>
+                <td class="r">{{ m.tds|floatformat:2 }}</td>
+                <td class="r">{{ m.net|default:0|floatformat:2 }}</td>
+            </tr>
+            {% endfor %}
+            <tr class="tot">
+                <td>{% trans "Total" %}</td>
+                <td class="r">{{ totals.gross_salary|floatformat:2 }}</td>
+                <td class="r">{{ totals.pf_employee|floatformat:2 }}</td>
+                <td class="r">{{ totals.tds|floatformat:2 }}</td>
+                <td class="r">{{ totals.net_salary|floatformat:2 }}</td>
+            </tr>
+        </tbody>
+    </table>
+    {% endif %}
+
+    <div class="doc-foot">
+        Internal Form 16 Part B summary from payslip data.
+        For filing, reconcile with Form 16 Part A on TRACES and your CA.
+    </div>
+</div>

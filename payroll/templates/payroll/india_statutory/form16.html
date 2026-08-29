@@ -33,7 +33,13 @@
     </a>
     <a class="oh-btn oh-btn--secondary oh-btn--sm" href="?fy={{ financial_year_start }}&format=pdf" target="_blank">
         <ion-icon name="download-outline"></ion-icon>
-        {% trans "Download PDF" %}
+        {% trans "Form 16 PDF" %}
+    </a>
+    <a class="oh-btn oh-btn--secondary oh-btn--sm"
+       href="{% url 'tax-computation-view' employee.id %}?fy={{ financial_year_start }}"
+       target="_blank">
+        <ion-icon name="calculator-outline"></ion-icon>
+        {% trans "Tax Computation PDF" %}
     </a>
     {% endif %}
 </div>
@@ -126,7 +132,9 @@
                         <tr>
                             <th>{% trans "Period" %}</th>
                             <th>{% trans "Gross" %}</th>
+                            <th>{% trans "PF" %}</th>
                             <th>{% trans "TDS" %}</th>
+                            <th>{% trans "Net" %}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -134,7 +142,9 @@
                         <tr>
                             <td>{{ m.period }}</td>
                             <td class="is-num">{{ m.gross|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ m.pf|default:0|floatformat:2|currency_symbol_position }}</td>
                             <td class="is-num">{{ m.tds|floatformat:2|currency_symbol_position }}</td>
+                            <td class="is-num">{{ m.net|default:0|floatformat:2|currency_symbol_position }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>

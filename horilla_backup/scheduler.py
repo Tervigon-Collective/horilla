@@ -1,6 +1,6 @@
 import os
 
-from apscheduler.schedulers.background import BackgroundScheduler
+from horilla.db import SafeBackgroundScheduler
 from django.core.management import call_command
 
 from horilla import settings
@@ -12,7 +12,7 @@ from .models import *
 from .pgdump import *
 from .zip import *
 
-scheduler = BackgroundScheduler()
+scheduler = SafeBackgroundScheduler()
 
 # def backup_database():
 #     folder_path = DBBACKUP_STORAGE_OPTIONS['location']

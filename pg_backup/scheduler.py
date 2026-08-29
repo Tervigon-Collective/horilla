@@ -46,7 +46,7 @@ import subprocess
 from pathlib import Path
 
 import environ
-from apscheduler.schedulers.background import BackgroundScheduler
+from horilla.db import SafeBackgroundScheduler
 from django.conf import settings
 
 # === Logging Configuration ===
@@ -143,7 +143,7 @@ else:
             logger.warning("BACKUP_CRON_TIMES not set. Scheduler is disabled.")
             return
 
-        scheduler = BackgroundScheduler()
+        scheduler = SafeBackgroundScheduler()
         times = [t.strip() for t in BACKUP_CRON_TIMES.split(",")]
 
         for time_str in times:

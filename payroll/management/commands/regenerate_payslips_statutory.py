@@ -53,6 +53,10 @@ class Command(BaseCommand):
             qs = qs.filter(
                 employee_id__employee_work_info__company_id_id=company_id
             ).distinct()
+        # Never silently overwrite locked / frozen payroll snapshots
+        qs = qs.filter(snapshot_frozen=False).exclude(
+            payroll_run__status__in=["locked", "paid", "published"]
+        )
         if limit:
             qs = qs[:limit]
 
@@ -86,7 +90,14 @@ class Command(BaseCommand):
                 "installments": payslip_data["installments"],
             }
             calculate_employer_contribution(data)
-            save_payslip(**data)
+            try:
+                from payroll.methods.payroll_run_engine import PayrollRunLockedError
+
+                save_payslip(**data)
+            except PayrollRunLockedError as exc:
+                self.stdout.write(self.style.WARNING(str(exc)))
+                skipped += 1
+                continue
             updated += 1
 
         mode = "Would update" if dry_run else "Updated"

@@ -151,6 +151,60 @@ class IndiaStatutoryTests(TestCase):
         self.assertGreater(len(blob), 40)
         self.assertEqual(blob[:2], b"PK")
 
+    def test_epf_ecr_text_format_and_uan_validation(self):
+        from payroll.methods.india_statutory import build_epf_ecr_payload
+
+        class Emp:
+            def get_full_name(self):
+                return "Ravi | Kumar"
+
+        data = {
+            "period_start": date(2026, 3, 1),
+            "period_end": date(2026, 3, 31),
+            "rows": [
+                {
+                    "employee": Emp(),
+                    "badge_id": "E1",
+                    "uan": "100234567890",
+                    "gross": 60000,
+                    "pf_wages": 15000,
+                    "pf_employee": 1800,
+                    "pf_employer": 1800,
+                    "eps": 1250,
+                    "epf_employer": 550,
+                    "edli": 75,
+                    "ncp_days": 2,
+                },
+                {
+                    "employee": Emp(),
+                    "badge_id": "E2",
+                    "uan": "",
+                    "gross": 30000,
+                    "pf_wages": 15000,
+                    "pf_employee": 1800,
+                    "pf_employer": 1800,
+                    "eps": 1250,
+                    "epf_employer": 550,
+                    "ncp_days": 0,
+                },
+            ],
+        }
+        payload = build_epf_ecr_payload(data)
+        self.assertEqual(len(payload["included"]), 1)
+        self.assertEqual(len(payload["issues"]), 1)
+        line = payload["lines"][0]
+        parts = line.split("#~#")
+        self.assertEqual(len(parts), 11)
+        self.assertEqual(parts[0], "100234567890")
+        self.assertEqual(parts[1], "RAVI KUMAR")
+        self.assertEqual(parts[3], "15000")
+        self.assertEqual(parts[6], "1800")
+        self.assertEqual(parts[7], "1250")
+        self.assertEqual(parts[8], "550")
+        self.assertEqual(parts[9], "2")
+        self.assertEqual(parts[10], "0")
+        self.assertTrue(payload["text"].endswith("\n"))
+
     def test_lwf_maharashtra_june_and_skip_other_months(self):
         from payroll.methods.india_statutory import calculate_lwf
 

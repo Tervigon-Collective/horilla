@@ -18,4 +18,9 @@ urlpatterns = [
         views.complete_lesson,
         name="lms-complete-lesson",
     ),
+    path(
+        "enrollments/<int:enrollment_id>/certificate/",
+        views.certificate_pdf,
+        name="lms-certificate-pdf",
+    ),
 ]

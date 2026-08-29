@@ -78,24 +78,11 @@ class TaskListView(HorillaListView):
             else False
         )
         queryset = queryset.filter(is_active=active)
-        if not self.request.user.has_perm("project.view_task"):
-            employee_id = self.request.user.employee_get
-            subordinates = get_subordinates(self.request)
-            subordinate_ids = [subordinate.id for subordinate in subordinates]
-            project = queryset.filter(
-                Q(project__managers=employee_id)
-                | Q(project__members=employee_id)
-                | Q(project__managers__in=subordinate_ids)
-                | Q(project__members__in=subordinate_ids)
-            )
-            queryset = (
-                queryset.filter(
-                    Q(task_members=employee_id)
-                    | Q(task_managers=employee_id)
-                    | Q(task_members__in=subordinate_ids)
-                    | Q(task_managers__in=subordinate_ids)
-                )
-                | project
+        from project.methods import accessible_tasks_queryset, can_view_all_projects
+
+        if not can_view_all_projects(self.request):
+            queryset = queryset.filter(
+                id__in=accessible_tasks_queryset(self.request).values("id")
             )
         return queryset.distinct()
 
@@ -218,11 +205,12 @@ class TasksNavBar(HorillaNavView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         employee = self.request.user.employee_get
-        projects = Project.objects.all()
-        managers = [
-            manager for project in projects for manager in project.managers.all()
-        ]
-        if employee in managers or self.request.user.has_perm("project.add_task"):
+        can_create = (
+            self.request.user.has_perm("project.add_task")
+            or Project.objects.filter(managers=employee).exists()
+            or Project.objects.filter(members=employee).exists()
+        )
+        if can_create:
             self.create_attrs = f"""
                 onclick = "event.stopPropagation();"
                 data-toggle="oh-modal-toggle"
@@ -231,7 +219,12 @@ class TasksNavBar(HorillaNavView):
                 hx-get="{reverse('create-task-all')}"
             """
 
-        if self.request.user.has_perm("project.view_task"):
+        from project.methods import can_view_all_projects
+
+        # ESS has view_task for menu access — bulk archive/delete is org-wide only.
+        if can_view_all_projects(self.request) or self.request.user.has_perm(
+            "project.delete_task"
+        ):
             self.actions = [
                 {
                     "action": _("Archive"),
@@ -275,13 +268,23 @@ class TaskCreateForm(HorillaFormView):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        if self.request.user.has_perm("project.view_task"):
+        from project.methods import can_create_project, can_view_all_projects
+
+        # Dynamic project/stage create is for org-wide or project creators, not
+        # every ESS user who only has view_task for menu access.
+        if can_view_all_projects(self.request) or can_create_project(self.request):
             self.dynamic_create_fields = [
                 ("project", DynamicProjectCreationFormView),
                 ("stage", StageDynamicCreateForm, ["project"]),
             ]
 
     def get(self, request, *args, pk=None, **kwargs):
+        from project.methods import (
+            can_add_task_to_project,
+            can_mutate_task,
+            can_view_all_projects,
+        )
+
         project_id = self.kwargs.get("project_id")
         stage_id = self.kwargs.get("stage_id")
         task_id = self.kwargs.get("pk")
@@ -289,6 +292,7 @@ class TaskCreateForm(HorillaFormView):
             messages.error(request, _("Please create a project first."))
             return HorillaRedirect(request)
 
+        task = None
         if project_id:
             project = Project.objects.filter(id=project_id).first()
             if not project:
@@ -308,22 +312,30 @@ class TaskCreateForm(HorillaFormView):
             project = task.project
         elif not task_id:
             return super().get(request, *args, pk=pk, **kwargs)
-        if (
-            request.user.employee_get in project.managers.all()
-            or request.user.is_superuser
-            or request.user.has_perm("project.add_task")
-        ):
-            self.dynamic_create_fields = [
-                ("project", DynamicProjectCreationFormView),
-                ("stage", StageDynamicCreateForm),
-            ]
-            return super().get(request, *args, pk=pk, **kwargs)
-        elif task_id:
-            if request.user.employee_get in task.task_managers.all():
-                return super().get(request, *args, pk=pk, **kwargs)
 
-        else:
+        employee = getattr(request.user, "employee_get", None)
+        if task_id:
+            if can_mutate_task(request, task) or can_view_all_projects(request):
+                if can_view_all_projects(request) or (
+                    employee and employee in project.managers.all()
+                ):
+                    self.dynamic_create_fields = [
+                        ("project", DynamicProjectCreationFormView),
+                        ("stage", StageDynamicCreateForm),
+                    ]
+                return super().get(request, *args, pk=pk, **kwargs)
             return handle_no_permission(request)
+
+        if can_add_task_to_project(request, project):
+            if can_view_all_projects(request) or (
+                employee and employee in project.managers.all()
+            ):
+                self.dynamic_create_fields = [
+                    ("project", DynamicProjectCreationFormView),
+                    ("stage", StageDynamicCreateForm),
+                ]
+            return super().get(request, *args, pk=pk, **kwargs)
+        return handle_no_permission(request)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -346,11 +358,17 @@ class TaskCreateForm(HorillaFormView):
         if task_id and not dynamic_project_id:
             task = self.form.instance
             stages = task.project.project_stages.all()
-            self.form.fields["stage"].choices = (
-                [("", _("Select Stage"))]
-                + [(stage.pk, stage) for stage in stages]
-                + [("dynamic_create", _("Dynamic Create"))]
-            )
+            from project.methods import can_view_all_projects
+
+            employee = getattr(self.request.user, "employee_get", None)
+            choices = [("", _("Select Stage"))] + [
+                (stage.pk, stage) for stage in stages
+            ]
+            if can_view_all_projects(self.request) or (
+                employee and employee in task.project.managers.all()
+            ):
+                choices.append(("dynamic_create", _("Dynamic Create")))
+            self.form.fields["stage"].choices = choices
 
         if stage_id:
             stage = ProjectStage.objects.filter(id=stage_id).first()
@@ -380,11 +398,12 @@ class TaskCreateForm(HorillaFormView):
                 ]
 
         if project_id or stage_id:
-            if (
-                self.request.user.employee_get in project.managers.all()
-                or self.request.user.is_superuser
-            ):
+            from project.methods import can_view_all_projects
 
+            employee = getattr(self.request.user, "employee_get", None)
+            if can_view_all_projects(self.request) or (
+                employee and employee in project.managers.all()
+            ):
                 self.form.fields["project"].choices.append(
                     ("dynamic_create", "Dynamic create")
                 )
@@ -408,9 +427,7 @@ class TaskCreateForm(HorillaFormView):
                 project = form.cleaned_data.get("project") or getattr(
                     form.instance, "project", None
                 )
-                if not can_add_task_to_project(self.request, project) and not (
-                    self.request.user.has_perm("project.add_task")
-                ):
+                if not can_add_task_to_project(self.request, project):
                     messages.error(self.request, _("You don't have permission."))
                     return self.HttpResponse()
                 message = _("New Task created")
@@ -431,12 +448,17 @@ class DynamicTaskCreateFormView(TaskCreateForm):
         if self.request.GET:
             project_id = self.request.GET.get("project_id")
             if project_id:
-                project = Project.objects.get(id=project_id)
+                from project.methods import can_add_task_to_project
+
+                project = Project.objects.filter(id=project_id).first()
+                if not project or not can_add_task_to_project(self.request, project):
+                    self.form.fields["project"].queryset = Project.objects.none()
+                    self.form.fields["stage"].queryset = ProjectStage.objects.none()
+                    return context
                 stages = ProjectStage.objects.filter(project__id=project_id)
                 self.form.fields["project"].initial = project
                 self.form.fields["project"].choices = [(project.id, project.title)]
                 self.form.fields["stage"].queryset = stages
-                # self.form.fields["project"].widget = forms.HiddenInput()
         return context
 
 
@@ -500,7 +522,7 @@ class TaskCardView(HorillaCardView):
             },
             {
                 "action": _("archive_status"),
-                "accessibility": "project.cbv.accessibility.task_crud_accessibility",
+                "accessibility": "project.cbv.accessibility.task_delete_accessibility",
                 "attrs": """
                     hx-get="{get_archive_url}"
                     hx-target="#listContainer"
@@ -512,7 +534,7 @@ class TaskCardView(HorillaCardView):
             },
             {
                 "action": _("Delete"),
-                "accessibility": "project.cbv.accessibility.task_crud_accessibility",
+                "accessibility": "project.cbv.accessibility.task_delete_accessibility",
                 "attrs": """
                     hx-post="{get_delete_url}"
                     hx-target="#listContainer"
@@ -533,24 +555,11 @@ class TaskCardView(HorillaCardView):
             else False
         )
         queryset = queryset.filter(is_active=active)
-        if not self.request.user.has_perm("project.view_task"):
-            employee_id = self.request.user.employee_get
-            subordinates = get_subordinates(self.request)
-            subordinate_ids = [subordinate.id for subordinate in subordinates]
-            project = queryset.filter(
-                Q(project__managers=employee_id)
-                | Q(project__members=employee_id)
-                | Q(project__managers__in=subordinate_ids)
-                | Q(project__members__in=subordinate_ids)
-            )
-            queryset = (
-                queryset.filter(
-                    Q(task_members=employee_id)
-                    | Q(task_managers=employee_id)
-                    | Q(task_members__in=subordinate_ids)
-                    | Q(task_managers__in=subordinate_ids)
-                )
-                | project
+        from project.methods import accessible_tasks_queryset, can_view_all_projects
+
+        if not can_view_all_projects(self.request):
+            queryset = queryset.filter(
+                id__in=accessible_tasks_queryset(self.request).values("id")
             )
         return queryset.distinct()
 

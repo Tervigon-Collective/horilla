@@ -1,6 +1,7 @@
 import random
 
 from django.core.paginator import Paginator
+from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from base.methods import get_pagination, get_subordinates
@@ -113,6 +114,7 @@ def is_projectmanager_or_member_or_perms(function, perm):
             or any_project_member(user)
             or any_task_manager(user)
             or any_task_member(user)
+            or can_create_project(request)
         ):
             return function(request, *args, **kwargs)
         return HorillaRedirect(request, message=_("You don't have permission."))
@@ -197,43 +199,173 @@ def can_mutate_project(request, project) -> bool:
     return employee in project.managers.all() or employee in project.members.all()
 
 
+# Roles that may see every project / timesheet in the company.
+_ORG_WIDE_PROJECT_GROUPS = ("Admin", "HR Manager", "Project Manager")
+
+
+def can_view_all_projects(request) -> bool:
+    """Admin / HR / Project Manager / change_project — company-wide visibility."""
+    if not getattr(request.user, "is_authenticated", False):
+        return False
+    user = request.user
+    if user.is_superuser:
+        return True
+    if user.has_perm("project.change_project") or user.has_perm("project.delete_project"):
+        return True
+    return user.groups.filter(name__in=_ORG_WIDE_PROJECT_GROUPS).exists()
+
+
+def _actor_and_team_ids(request) -> list:
+    """Self + direct reports (for reporting-manager team scope)."""
+    employee = getattr(request.user, "employee_get", None)
+    if not employee:
+        return []
+    ids = [employee.id]
+    try:
+        ids.extend(list(get_subordinates(request).values_list("id", flat=True)))
+    except Exception:
+        pass
+    return ids
+
+
+def accessible_projects_queryset(request):
+    """
+    Projects the user may list:
+    - Admin/HR/Project Manager: all
+    - Reporting manager: own + team members' projects
+    - Employee: only projects they manage/belong to (or via tasks)
+    """
+    qs = Project.objects.all()
+    if can_view_all_projects(request):
+        return qs
+    people = _actor_and_team_ids(request)
+    if not people:
+        return qs.none()
+    return qs.filter(
+        Q(managers__in=people)
+        | Q(members__in=people)
+        | Q(task__task_members__in=people)
+        | Q(task__task_managers__in=people)
+    ).distinct()
+
+
+def accessible_tasks_queryset(request):
+    """Tasks visible under the same own/team/org rules as projects."""
+    qs = Task.objects.all()
+    if can_view_all_projects(request):
+        return qs
+    people = _actor_and_team_ids(request)
+    if not people:
+        return qs.none()
+    return qs.filter(
+        Q(task_members__in=people)
+        | Q(task_managers__in=people)
+        | Q(project__managers__in=people)
+        | Q(project__members__in=people)
+    ).distinct()
+
+
+def accessible_timesheets_queryset(request):
+    """Own + team timesheets, or all for Admin/HR/Project Manager."""
+    qs = TimeSheet.objects.all()
+    if can_view_all_projects(request):
+        return qs
+    people = _actor_and_team_ids(request)
+    if not people:
+        return qs.none()
+    return qs.filter(
+        Q(employee_id__in=people)
+        | Q(project_id__managers__in=people)
+        | Q(task_id__task_managers__in=people)
+    ).distinct()
+
+
 def can_add_task_to_project(request, project) -> bool:
-    """Create a task on this project."""
+    """Create a task on this project (managers and members; delete stays separate)."""
     if not project or not getattr(request.user, "is_authenticated", False):
         return False
-    if request.user.is_superuser or request.user.has_perm("project.add_task"):
+    if can_view_all_projects(request):
         return True
     employee = getattr(request.user, "employee_get", None)
     if not employee:
         return False
-    return employee in project.managers.all()
+    return employee in project.managers.all() or employee in project.members.all()
+
+
+def can_create_project(request) -> bool:
+    """Any linked employee may create a project (creator becomes manager)."""
+    if not getattr(request.user, "is_authenticated", False):
+        return False
+    if request.user.is_superuser or request.user.has_perm("project.add_project"):
+        return True
+    return bool(getattr(request.user, "employee_get", None))
+
+
+def can_log_timesheet_on_project(request, project) -> bool:
+    """Fill timesheet on a project the user manages/belongs to."""
+    if not project or not getattr(request.user, "is_authenticated", False):
+        return False
+    if can_view_all_projects(request):
+        return True
+    employee = getattr(request.user, "employee_get", None)
+    if not employee:
+        return False
+    if employee in project.managers.all() or employee in project.members.all():
+        return True
+    return Task.objects.filter(project=project).filter(
+        Q(task_managers=employee) | Q(task_members=employee)
+    ).exists()
+
+
+def can_assign_timesheet_to(request, project, target_employee) -> bool:
+    """
+    Whether actor may create a timesheet for target_employee on project.
+    Own time: any project member. Others: project managers / org-wide only.
+    """
+    if not target_employee or not can_log_timesheet_on_project(request, project):
+        return False
+    actor = getattr(request.user, "employee_get", None)
+    if not actor:
+        return can_view_all_projects(request)
+    if target_employee == actor:
+        return True
+    if can_view_all_projects(request):
+        return True
+    return bool(project and actor in project.managers.all())
 
 
 def can_view_project(request, project) -> bool:
-    """View project details (member/manager or view_project)."""
+    """View one project: org-wide role, membership, or team member on it."""
     if not project or not getattr(request.user, "is_authenticated", False):
         return False
-    if request.user.is_superuser or request.user.has_perm("project.view_project"):
+    if can_view_all_projects(request):
         return True
-    return can_mutate_project(request, project)
+    people = _actor_and_team_ids(request)
+    if not people:
+        return False
+    if project.managers.filter(id__in=people).exists():
+        return True
+    if project.members.filter(id__in=people).exists():
+        return True
+    return Task.objects.filter(project=project).filter(
+        Q(task_managers__in=people) | Q(task_members__in=people)
+    ).exists()
 
 
 def can_view_task(request, task) -> bool:
     """View task details / timesheets list."""
     if not task or not getattr(request.user, "is_authenticated", False):
         return False
-    if request.user.is_superuser or request.user.has_perm("project.view_task"):
+    if can_view_all_projects(request):
         return True
-    if request.user.has_perm("project.view_timesheet"):
-        return True
-    return can_mutate_task(request, task)
+    return can_mutate_task(request, task) or can_view_project(request, task.project)
 
 
 def can_view_employee_timesheet(request, employee) -> bool:
-    """Self, reporting manager of that employee, or view_timesheet."""
+    """Self, reporting manager of that employee, or org-wide project role."""
     if not employee or not getattr(request.user, "is_authenticated", False):
         return False
-    if request.user.is_superuser or request.user.has_perm("project.view_timesheet"):
+    if can_view_all_projects(request):
         return True
     actor = getattr(request.user, "employee_get", None)
     if not actor:
@@ -322,10 +454,12 @@ def has_subordinates(request):
 
 
 def is_project_manager_or_super_user(request, project):
-    """
-    Method to check whether user is a manager of project or
-    user is a super user.
-    """
-    return (
-        request.user.employee_get in project.managers.all() or request.user.is_superuser
-    )
+    """True if user may archive/delete this project."""
+    if not project:
+        return False
+    if request.user.is_superuser or can_view_all_projects(request):
+        return True
+    if request.user.has_perm("project.delete_project"):
+        return True
+    employee = getattr(request.user, "employee_get", None)
+    return bool(employee and employee in project.managers.all())

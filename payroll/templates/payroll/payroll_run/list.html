@@ -1,0 +1,38 @@
+{% load i18n %}
+<div class="oh-wrapper">
+  <div class="oh-checkpoint-badge mb-2" style="display:flex;justify-content:space-between;align-items:center;">
+    <h3 class="oh-checkpoint-badge__title">{% trans "Payroll Runs" %}</h3>
+    {% if perms.payroll.add_payslip %}
+    <a href="{% url 'payroll-run-create' %}" class="oh-btn oh-btn--secondary">{% trans "New run" %}</a>
+    {% endif %}
+  </div>
+  <p class="text-muted">{% trans "Company" %}: {{ company }}</p>
+  <div class="oh-table">
+    <table class="oh-table__table">
+      <thead>
+        <tr>
+          <th>{% trans "Period" %}</th>
+          <th>{% trans "Version" %}</th>
+          <th>{% trans "Status" %}</th>
+          <th>{% trans "Batch" %}</th>
+          <th>{% trans "Proration" %}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+        <tr>
+          <td>{{ run.period_label }}</td>
+          <td>v{{ run.version }}</td>
+          <td><span class="oh-badge oh-badge--info">{{ run.get_status_display }}</span></td>
+          <td>{{ run.group_name }}</td>
+          <td>{{ run.get_proration_method_display }}</td>
+          <td><a href="{% url 'payroll-run-detail' run.id %}">{% trans "Open" %}</a></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6">{% trans "No payroll runs yet." %}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

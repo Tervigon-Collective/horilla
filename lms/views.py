@@ -228,7 +228,71 @@ def complete_lesson(request, enrollment_id, lesson_id):
         enrollment.status = "completed"
         enrollment.completed_on = date.today()
         enrollment.save(update_fields=["status", "completed_on"])
-        messages.success(request, _("Course completed."))
+        enrollment.ensure_certificate_id()
+        messages.success(
+            request,
+            _("Course completed. Your certificate is ready to download."),
+        )
     else:
         messages.success(request, _("Lesson marked complete."))
     return redirect("lms-course-detail", pk=enrollment.course_id_id)
+
+
+def _can_view_certificate(request, enrollment) -> bool:
+    employee = getattr(request.user, "employee_get", None)
+    if request.user.has_perm("lms.view_courseenrollment") or request.user.has_perm(
+        "lms.change_courseenrollment"
+    ):
+        return True
+    return bool(employee and enrollment.employee_id_id == employee.pk)
+
+
+@login_required
+def certificate_pdf(request, enrollment_id):
+    """Download completion certificate PDF for a finished enrollment."""
+    from django.template.loader import render_to_string
+
+    from base.methods import template_pdf
+
+    enrollment = get_object_or_404(
+        CourseEnrollment.objects.select_related(
+            "course_id",
+            "course_id__company_id",
+            "employee_id",
+            "employee_id__employee_work_info",
+            "employee_id__employee_work_info__company_id",
+        ),
+        pk=enrollment_id,
+    )
+    if not _can_view_certificate(request, enrollment):
+        messages.error(request, _("Not allowed."))
+        return redirect("lms-my-learning")
+    if enrollment.status != "completed":
+        messages.error(request, _("Certificate is available only after course completion."))
+        return redirect("lms-course-detail", pk=enrollment.course_id_id)
+
+    cert_id = enrollment.ensure_certificate_id()
+    work_info = getattr(enrollment.employee_id, "employee_work_info", None)
+    company = (
+        enrollment.course_id.company_id
+        or getattr(work_info, "company_id", None)
+    )
+    company_name = (
+        getattr(company, "company", None) or str(company) if company else "Horilla LMS"
+    )
+    html_content = render_to_string(
+        "lms/certificate_pdf.html",
+        {
+            "certificate_id": cert_id,
+            "employee_name": enrollment.employee_id.get_full_name(),
+            "course_title": enrollment.course_id.title,
+            "completed_on": enrollment.completed_on,
+            "duration_hours": enrollment.course_id.duration_hours,
+            "company_name": company_name,
+        },
+    )
+    return template_pdf(
+        template=html_content,
+        html=True,
+        filename=f"LMS_Certificate_{cert_id}",
+    )

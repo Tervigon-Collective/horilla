@@ -1,0 +1,124 @@
+{% load i18n %}
+<div class="oh-wrapper">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h3>{% trans "Payroll run" %} {{ run.period_label }} v{{ run.version }}</h3>
+    <a href="{% url 'payroll-run-list' %}">{% trans "All runs" %}</a>
+  </div>
+  <p>
+    <strong>{% trans "Status" %}:</strong> {{ run.get_status_display }}
+    · <strong>{% trans "Batch" %}:</strong> {{ run.group_name }}
+    · {{ run.period_start }} → {{ run.period_end }}
+    · <strong>{% trans "Attendance" %}:</strong>
+      {% if run.attendance_locked %}{% trans "Locked" %}{% else %}{% trans "Open" %}{% endif %}
+  </p>
+
+  <div class="oh-btn-group mb-3" style="display:flex;flex-wrap:wrap;gap:8px;">
+    {% if not run.is_immutable %}
+    {% if not run.attendance_locked %}
+    <form method="post" action="{% url 'payroll-run-lock-attendance' run.id %}">{% csrf_token %}
+      <button class="oh-btn oh-btn--info" type="submit">{% trans "Lock attendance" %}</button>
+    </form>
+    {% endif %}
+    <form method="post" action="{% url 'payroll-run-calculate' run.id %}">{% csrf_token %}
+      <button class="oh-btn oh-btn--secondary" type="submit">{% trans "Calculate" %}</button>
+    </form>
+    <form method="post" action="{% url 'payroll-run-validate' run.id %}">{% csrf_token %}
+      <button class="oh-btn oh-btn--info" type="submit">{% trans "Validate" %}</button>
+    </form>
+    {% if run.status == "validation_passed" %}
+    <form method="post" action="{% url 'payroll-run-transition' run.id %}">{% csrf_token %}
+      <input type="hidden" name="status" value="hr_approved">
+      <button class="oh-btn oh-btn--secondary" type="submit">{% trans "HR approve" %}</button>
+    </form>
+    {% endif %}
+    {% if run.status == "hr_approved" %}
+    <form method="post" action="{% url 'payroll-run-transition' run.id %}">{% csrf_token %}
+      <input type="hidden" name="status" value="finance_approved">
+      <button class="oh-btn oh-btn--secondary" type="submit">{% trans "Finance approve" %}</button>
+    </form>
+    {% endif %}
+    {% if run.status == "finance_approved" %}
+    <form method="post" action="{% url 'payroll-run-transition' run.id %}">{% csrf_token %}
+      <input type="hidden" name="status" value="locked">
+      <button class="oh-btn oh-btn--primary" type="submit">{% trans "Lock payroll" %}</button>
+    </form>
+    {% endif %}
+    {% if run.status == "locked" or run.status == "paid" or run.status == "published" or run.status == "finance_approved" %}
+    <a class="oh-btn oh-btn--light" href="{% url 'payroll-run-bank-file' run.id %}">{% trans "Bank transfer file" %}</a>
+    {% endif %}
+    {% else %}
+    {% if run.status == "locked" %}
+    <form method="post" action="{% url 'payroll-run-transition' run.id %}">{% csrf_token %}
+      <input type="hidden" name="status" value="paid">
+      <button class="oh-btn oh-btn--secondary" type="submit">{% trans "Mark paid" %}</button>
+    </form>
+    <a class="oh-btn oh-btn--light" href="{% url 'payroll-run-bank-file' run.id %}">{% trans "Bank transfer file" %}</a>
+    {% endif %}
+    {% if run.status == "paid" %}
+    <form method="post" action="{% url 'payroll-run-transition' run.id %}">{% csrf_token %}
+      <input type="hidden" name="status" value="published">
+      <button class="oh-btn oh-btn--secondary" type="submit">{% trans "Publish payslips" %}</button>
+    </form>
+    {% endif %}
+    <form method="post" action="{% url 'payroll-run-reopen' run.id %}" style="display:flex;gap:6px;align-items:center;">
+      {% csrf_token %}
+      <input class="oh-input" name="reason" placeholder="{% trans 'Reopen reason (required)' %}" required>
+      <button class="oh-btn oh-btn--danger" type="submit">{% trans "Reopen as new version" %}</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if variance %}
+  <div class="oh-card mb-3">
+    <h5>{% trans "Month-on-month variance" %}</h5>
+    <p>
+      {% trans "Gross" %}: {{ variance.previous_gross }} → {{ variance.current_gross }}
+      ({{ variance.gross_variance }}{% if variance.gross_variance_pct != None %} / {{ variance.gross_variance_pct }}%{% endif %})
+      · {% trans "Headcount" %}: {{ variance.previous_headcount }} → {{ variance.current_headcount }}
+    </p>
+  </div>
+  {% endif %}
+
+  {% if errors %}
+  <div class="oh-alert oh-alert--error mb-2">
+    <strong>{% trans "Critical errors" %}</strong>
+    <ul>{% for e in errors %}<li>{{ e.message }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+  {% if warnings %}
+  <div class="oh-alert oh-alert--warning mb-2">
+    <strong>{% trans "Warnings" %}</strong>
+    <ul>{% for w in warnings %}<li>{{ w.message }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
+  <h5>{% trans "Payslips in this run" %} ({{ payslips|length }})</h5>
+  <div class="oh-table">
+    <table class="oh-table__table">
+      <thead>
+        <tr>
+          <th>{% trans "Employee" %}</th>
+          <th>{% trans "Gross" %}</th>
+          <th>{% trans "Deduction" %}</th>
+          <th>{% trans "Net" %}</th>
+          <th>{% trans "Status" %}</th>
+          <th>{% trans "Frozen" %}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in payslips %}
+        <tr>
+          <td><a href="{% url 'view-created-payslip' p.id %}">{{ p.employee_id }}</a></td>
+          <td>{{ p.gross_pay }}</td>
+          <td>{{ p.deduction }}</td>
+          <td>{{ p.net_pay }}</td>
+          <td>{{ p.get_status }}</td>
+          <td>{% if p.snapshot_frozen %}{% trans "Yes" %}{% else %}{% trans "No" %}{% endif %}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6">{% trans "No payslips yet — click Calculate." %}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

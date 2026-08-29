@@ -429,7 +429,9 @@ def ticket_view(request):
     all_tickets = []
     if is_reportingmanager(request):
         all_tickets = filtersubordinates(request, tickets, "helpdesk.view_ticket")
-    if request.user.has_perm("helpdesk.view_ticket"):
+    from base.methods import has_org_wide_perm
+
+    if has_org_wide_perm(request.user, "helpdesk.view_ticket"):
         all_tickets = tickets
     allocated_tickets = []
     ticket_list = tickets.filter(is_active=True)
@@ -852,7 +854,9 @@ def ticket_filter(request):
 
     all_tickets = tickets.filter(is_active=True)
     all_tickets = filtersubordinates(request, tickets, "helpdesk.add_tickets")
-    if request.user.has_perm("helpdesk.view_ticket"):
+    from base.methods import has_org_wide_perm
+
+    if has_org_wide_perm(request.user, "helpdesk.view_ticket"):
         all_tickets = tickets
 
     allocated_tickets = Ticket.objects.none()
@@ -939,8 +943,10 @@ def ticket_detail(request, ticket_id, **kwargs):
             request, message=_("No Ticket found matching the query.")
         )
 
+    from base.methods import has_org_wide_perm
+
     if (
-        request.user.has_perm("helpdesk.view_ticket")
+        has_org_wide_perm(request.user, "helpdesk.view_ticket")
         or ticket.employee_id.get_reporting_manager() == request.user.employee_get
         or is_department_manager(request, ticket)
         or request.user.employee_get == ticket.employee_id
@@ -1218,9 +1224,11 @@ def can_access_ticket(request, ticket):
     """
     if ticket is None:
         return False
+    from base.methods import has_org_wide_perm
+
     employee = request.user.employee_get
     return (
-        request.user.has_perm("helpdesk.view_ticket")
+        has_org_wide_perm(request.user, "helpdesk.view_ticket")
         or employee == ticket.employee_id
         or employee in ticket.assigned_to.all()
         or ticket.employee_id.get_reporting_manager() == employee
@@ -1794,8 +1802,10 @@ def update_priority(request, ticket_id):
             request, message=_("No Ticket found matching the query.")
         )
 
+    from base.methods import has_org_wide_perm
+
     if (
-        request.user.has_perm("helpdesk.view_ticket")
+        has_org_wide_perm(request.user, "helpdesk.view_ticket")
         or ticket.employee_id.get_reporting_manager() == request.user.employee_get
         or is_department_manager(request, ticket)
         or request.user.employee_get == ticket.employee_id

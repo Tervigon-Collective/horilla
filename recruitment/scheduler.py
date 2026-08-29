@@ -3,7 +3,7 @@ import datetime as dt
 import sys
 from datetime import datetime, timedelta
 
-from apscheduler.schedulers.background import BackgroundScheduler
+from horilla.db import SafeBackgroundScheduler
 from dateutil.relativedelta import relativedelta
 
 today = datetime.now()
@@ -55,7 +55,7 @@ if not any(
     """
     Initializes and starts background tasks using APScheduler when the server is running.
     """
-    scheduler = BackgroundScheduler()
+    scheduler = SafeBackgroundScheduler()
     scheduler.add_job(candidate_convert, "interval", minutes=5)
     scheduler.add_job(recruitment_close, "interval", hours=1)
 

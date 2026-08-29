@@ -24,7 +24,6 @@ from base.models import (
     Department,
     Holidays,
     JobPosition,
-    MultipleApprovalCondition,
     clear_messages,
 )
 from employee.models import Employee, EmployeeWorkInformation
@@ -136,6 +135,7 @@ LEAVE_CONDITION_TYPE = [
     ("nationality", _("Nationality")),
     ("department", _("Department")),
     ("employment_type", _("Employment Type")),
+    ("employment_status", _("Employment Status")),
     ("grade", _("Grade")),
     ("service_duration", _("Service Duration")),
 ]
@@ -222,6 +222,7 @@ class LeaveTypeCondition(HorillaModel):
             "nationality",
             "department",
             "employment_type",
+            "employment_status",
             "grade",
             "service_duration",
         }
@@ -835,10 +836,15 @@ class AvailableLeave(HorillaModel):
             if cf_max is not None and cf_max != math.inf:
                 carry_amount = min(carry_amount, float(cf_max))
             self.carryforward_days = round(max(0.0, carry_amount), 3)
+            self.available_days = self.leave_type_id.total_days
         else:
             # "no carryforward": unused days are forfeit, do NOT preserve old CF
             self.carryforward_days = 0.0
-        self.available_days = self.leave_type_id.total_days
+            # Monthly-accrual types lapse to zero at FY reset (balance rebuilds via accrual)
+            if getattr(self.leave_type_id, "monthly_accrual", False):
+                self.available_days = 0.0
+            else:
+                self.available_days = self.leave_type_id.total_days
 
     # Setting the reset date for carryforward leaves
 
@@ -1627,48 +1633,28 @@ class LeaveRequest(HorillaModel):
             reserve_leave_balance(self)
 
         self.update_leave_clashes_count()
-        work_info = EmployeeWorkInformation.objects.filter(employee_id=self.employee_id)
-        department_id = None
-        conditions = None
-        if work_info.exists():
-            department_id = self.employee_id.employee_work_info.department_id
-            emp_comp_id = self.employee_id.employee_work_info.company_id
-        requested_days = self.requested_days
-        applicable_condition = False
-        if department_id != None and emp_comp_id != None:
-            conditions = MultipleApprovalCondition.objects.filter(
-                department=department_id, company_id=emp_comp_id
-            ).order_by("condition_value")
-        if conditions != None:
-            for condition in conditions:
-                operator = condition.condition_operator
-                if operator == "range":
-                    start_value = float(condition.condition_start_value)
-                    end_value = float(condition.condition_end_value)
-                    if start_value <= requested_days <= end_value:
-                        applicable_condition = condition
-                        break
-                else:
-                    operator_func = operator_mapping.get(condition.condition_operator)
-                    condition_value = type(requested_days)(condition.condition_value)
-                    if operator_func(requested_days, condition_value):
-                        applicable_condition = condition
-                        break
+        if self.status == "requested":
+            from base.multiple_approval import (
+                find_applicable_condition,
+                sync_approval_stages,
+            )
 
-        if applicable_condition and self.status == "requested":
-            LeaveRequestConditionApproval.objects.filter(leave_request_id=self).delete()
-            sequence = 0
-            managers = applicable_condition.approval_managers()
-            for manager in managers:
-                if not isinstance(manager, Employee):
-                    manager = getattr(self.employee_id.employee_work_info, manager)
-                if manager:
-                    sequence += 1
-                    LeaveRequestConditionApproval.objects.create(
-                        sequence=sequence,
-                        leave_request_id=self,
-                        manager_id=manager,
-                    )
+            work_info = getattr(self.employee_id, "employee_work_info", None)
+            department_id = getattr(work_info, "department_id", None) if work_info else None
+            emp_comp_id = getattr(work_info, "company_id", None) if work_info else None
+            applicable_condition = find_applicable_condition(
+                department=department_id,
+                company=emp_comp_id,
+                condition_field="requested_days",
+                value=self.requested_days,
+            )
+            sync_approval_stages(
+                stage_model=LeaveRequestConditionApproval,
+                fk_name="leave_request_id",
+                request_obj=self,
+                employee=self.employee_id,
+                condition=applicable_condition,
+            )
 
     def clean(self):
         cleaned_data = super().clean()
@@ -1692,6 +1678,14 @@ class LeaveRequest(HorillaModel):
                 }
             )
 
+        from leave.services import evaluate_leave_type_conditions
+
+        is_eligible, error_msg = evaluate_leave_type_conditions(
+            leave_type, self.employee_id, for_assignment=False
+        )
+        if not is_eligible:
+            raise ValidationError({"leave_type_id": error_msg})
+
         # Date validations
         if self.start_date > self.end_date:
             raise ValidationError(_("End date should not be less than start date."))
@@ -1704,8 +1698,13 @@ class LeaveRequest(HorillaModel):
                 _("Mismatch in the breakdown of the start and end date.")
             )
 
+        def _has_attachment(file_field):
+            return bool(file_field and getattr(file_field, "name", None))
+
         # Attachment requirement
-        if leave_type and leave_type.require_attachment == "yes" and not attachment:
+        if leave_type and leave_type.require_attachment == "yes" and not _has_attachment(
+            attachment
+        ):
             raise ValidationError(
                 {"attachment": _("An attachment is required for this leave request")}
             )
@@ -1721,7 +1720,10 @@ class LeaveRequest(HorillaModel):
                 )
 
         # Past date restriction
-        if not request.user.is_superuser:
+        is_superuser = bool(
+            request and getattr(getattr(request, "user", None), "is_superuser", False)
+        )
+        if request and not is_superuser:
             emp_company = getattr(
                 getattr(self.employee_id, "employee_work_info", None),
                 "company_id",
@@ -1757,6 +1759,21 @@ class LeaveRequest(HorillaModel):
             employee=self.employee_id,
         )
 
+        # Sick leave: medical certificate for more than 2 consecutive working days
+        if (
+            leave_type
+            and "sick" in (leave_type.name or "").lower()
+            and float(effective_requested_days or 0) > 2
+            and not _has_attachment(attachment)
+        ):
+            raise ValidationError(
+                {
+                    "attachment": _(
+                        "A medical certificate is required for sick leave longer than 2 consecutive working days."
+                    )
+                }
+            )
+
         if effective_requested_days <= 0:
             raise ValidationError(
                 _(
@@ -1791,13 +1808,15 @@ class LeaveRequest(HorillaModel):
 
         from leave.services import pending_requested_days
 
-        pending_other = pending_requested_days(
-            self.employee_id, leave_type, exclude_pk=self.pk
-        )
-        if effective_requested_days + pending_other > total_leave_days:
-            raise ValidationError(
-                _("Does not have sufficient leave balance for the requested dates.")
+        # Unlimited leave types (e.g. LWP) skip balance gate
+        if leave_type.limit_leave:
+            pending_other = pending_requested_days(
+                self.employee_id, leave_type, exclude_pk=self.pk
             )
+            if effective_requested_days + pending_other > total_leave_days:
+                raise ValidationError(
+                    _("Does not have sufficient leave balance for the requested dates.")
+                )
 
         # Get employee department and job if available
         work_info = EmployeeWorkInformation.objects.filter(
@@ -1807,7 +1826,7 @@ class LeaveRequest(HorillaModel):
         emp_job = work_info.job_position_id if work_info else None
 
         # Skip further checks for superusers
-        if request.user.is_superuser:
+        if is_superuser:
             return cleaned_data
 
         # Restricted leave checks

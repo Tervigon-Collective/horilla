@@ -1623,6 +1623,14 @@
                         <div class="md-info-panel__empty">{% trans "Loading..." %}</div>
                     </div>
                 </div>
+                <div class="md-info-panel" id="md-hr-alerts-panel">
+                    <div class="md-info-panel__header">
+                        <div class="md-info-panel__title">{% trans "HR Alerts" %}</div>
+                    </div>
+                    <div class="md-info-panel__body" id="md-hr-alerts">
+                        <div class="md-info-panel__empty">{% trans "Loading..." %}</div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -2726,6 +2734,52 @@
                 }).catch(() => { document.getElementById('md-pending-approvals').innerHTML = '<div class="md-info-panel__empty">{% trans "Unable to load" %}</div>'; });
             }
             loadPendingApprovals();
+
+            // ─── HR ALERTS (probation + expiring documents) ───
+            function loadHrAlerts() {
+                fetch("{% url 'dashboard-hr-alerts' %}")
+                .then(r => r.json())
+                .then(data => {
+                    const panel = document.getElementById('md-hr-alerts-panel');
+                    const body = document.getElementById('md-hr-alerts');
+                    if (!body) return;
+                    if (data.is_restricted) {
+                        if (panel) panel.style.display = 'none';
+                        return;
+                    }
+                    const p = data.probation || {};
+                    const d = data.documents || {};
+                    const total = (p.overdue || 0) + (p.soon || 0) + (p.due || 0)
+                        + (d.overdue || 0) + (d.soon || 0) + (d.due || 0);
+                    if (!total) {
+                        body.innerHTML = '<div class="md-info-panel__empty">{% trans "No probation or document alerts" %}</div>';
+                        return;
+                    }
+                    body.innerHTML = `
+                <div class="md-pending-grid">
+                    <a href="{% url 'probation-list' %}?tab=overdue" class="md-pending-card md-pending-card--amber">
+                        <div class="md-pending-card__count">${p.overdue || 0}</div>
+                        <div class="md-pending-card__label">{% trans "Probation overdue" %}</div>
+                    </a>
+                    <a href="{% url 'probation-list' %}?tab=soon" class="md-pending-card md-pending-card--blue">
+                        <div class="md-pending-card__count">${p.soon || 0}</div>
+                        <div class="md-pending-card__label">{% trans "Probation ≤7d" %}</div>
+                    </a>
+                    <a href="{% url 'expiring-documents-list' %}?tab=overdue" class="md-pending-card" style="background:#fef2f2;">
+                        <div class="md-pending-card__count" style="color:#dc2626;">${d.overdue || 0}</div>
+                        <div class="md-pending-card__label">{% trans "Docs expired" %}</div>
+                    </a>
+                    <a href="{% url 'expiring-documents-list' %}?tab=soon" class="md-pending-card md-pending-card--purple">
+                        <div class="md-pending-card__count">${d.soon || 0}</div>
+                        <div class="md-pending-card__label">{% trans "Docs ≤7d" %}</div>
+                    </a>
+                </div>`;
+                }).catch(() => {
+                    const el = document.getElementById('md-hr-alerts');
+                    if (el) el.innerHTML = '<div class="md-info-panel__empty">{% trans "Unable to load" %}</div>';
+                });
+            }
+            loadHrAlerts();
 
             {% if perms.recruitment.view_recruitment or request.user.is_superuser %}
             // ─── RECRUITMENT FUNNEL ───

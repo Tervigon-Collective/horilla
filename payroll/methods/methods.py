@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from django.apps import apps
 from django.core.paginator import Paginator
-from django.db.models import F, Q
+from django.db.models import Q
 
 # from attendance.models import Attendance
 from base.methods import (
@@ -365,41 +365,12 @@ def daily_computation(employee, wage, start_date, end_date):
     basic_pay = wage * total_working_days
     loss_of_pay = 0
 
-    date_range = get_date_range(start_date, end_date)
-    # Half-day filter: only truly unpaid leaves (exclude custom payment_type)
-    unpaid_only_q = (
-        Q(leave_type_id__payment_type="unpaid")
-        | Q(leave_type_id__payment_type__isnull=True, leave_type_id__payment="unpaid")
-        | Q(leave_type_id__payment_type="", leave_type_id__payment="unpaid")
-    )
-    half_day_leaves_between_period_on_start_date = (
-        employee.leaverequest_set.filter(
-            unpaid_only_q,
-            start_date__in=date_range,
-            status="approved",
-        )
-        .exclude(start_date_breakdown="full_day")
-        .count()
-    )
-
-    half_day_leaves_between_period_on_end_date = (
-        employee.leaverequest_set.filter(
-            unpaid_only_q, end_date__in=date_range, status="approved"
-        )
-        .exclude(end_date_breakdown="full_day")
-        .exclude(start_date=F("end_date"))
-        .count()
-    )
-    unpaid_half_leaves = (
-        half_day_leaves_between_period_on_start_date
-        + half_day_leaves_between_period_on_end_date
-    ) * 0.5
-
+    # unpaid_leaves already accounts for half-days inside get_leaves()
     contract = employee.contract_set.filter(
         is_active=True, contract_status="active"
     ).first()
 
-    unpaid_leaves = leave_data["unpaid_leaves"] - unpaid_half_leaves
+    unpaid_leaves = float(leave_data["unpaid_leaves"] or 0)
     leave_lop_days = unpaid_leaves
     if contract.calculate_daily_leave_amount:
         loss_of_pay = unpaid_leaves * wage
@@ -610,50 +581,11 @@ def monthly_computation(employee, wage, start_date, end_date, *args, **kwargs):
 
     contract = employee.contract_set.filter(contract_status="active").first()
     loss_of_pay = 0
-    date_range = get_date_range(start_date, end_date)
-    # Half-day filter: only truly unpaid leaves (exclude custom payment_type)
-    unpaid_only_q = (
-        Q(leave_type_id__payment_type="unpaid")
-        | Q(leave_type_id__payment_type__isnull=True, leave_type_id__payment="unpaid")
-        | Q(leave_type_id__payment_type="", leave_type_id__payment="unpaid")
-    )
-    if apps.is_installed("leave"):
-        start_date_leaves = (
-            employee.leaverequest_set.filter(
-                unpaid_only_q,
-                start_date__in=date_range,
-                status="approved",
-            )
-            .exclude(start_date_breakdown="full_day")
-            .count()
-        )
-        end_date_leaves = (
-            employee.leaverequest_set.filter(
-                unpaid_only_q,
-                end_date__in=date_range,
-                status="approved",
-            )
-            .exclude(end_date_breakdown="full_day")
-            .exclude(start_date=F("end_date"))
-            .count()
-        )
-    else:
-        start_date_leaves = 0
-        end_date_leaves = 0
-
-    half_day_leaves_between_period_on_start_date = start_date_leaves
-
-    half_day_leaves_between_period_on_end_date = end_date_leaves
-
-    unpaid_half_leaves = (
-        half_day_leaves_between_period_on_start_date
-        + half_day_leaves_between_period_on_end_date
-    ) * 0.5
-
+    # unpaid_leaves already accounts for half-days inside get_leaves()
     contract = employee.contract_set.filter(
         is_active=True, contract_status="active"
     ).first()
-    unpaid_leaves = abs(leave_data["unpaid_leaves"] - unpaid_half_leaves)
+    unpaid_leaves = abs(float(leave_data["unpaid_leaves"] or 0))
     leave_lop_days = unpaid_leaves
     total_working_days = sum(d["working_days_on_period"] for d in month_data)
     daily_computed_salary = get_daily_salary(wage=wage, wage_date=start_date)[
@@ -801,13 +733,44 @@ def calculate_employer_contribution(data):
 
 def save_payslip(**kwargs):
     """
-    This method is used to save the generated payslip
+    This method is used to save the generated payslip.
+
+    Refuses to overwrite slips tied to a locked / paid / published payroll run
+    unless kwargs['force'] is True (orchestrator recalculating a mutable run).
     """
+    from payroll.methods.payroll_run_engine import (
+        PayrollRunLockedError,
+        assert_period_mutable,
+    )
+
     filtered_instance = Payslip.objects.filter(
         employee_id=kwargs["employee"],
         start_date=kwargs["start_date"],
         end_date=kwargs["end_date"],
     ).first()
+
+    force = bool(kwargs.get("force"))
+    if filtered_instance is not None:
+        if filtered_instance.snapshot_frozen and not force:
+            raise PayrollRunLockedError(
+                "Payslip snapshot is frozen (payroll locked). "
+                "Reopen the payroll run to create a new version."
+            )
+        if filtered_instance.status == "paid" and not force:
+            raise PayrollRunLockedError(
+                "Cannot overwrite a paid payslip. Reopen payroll or create an adjustment."
+            )
+        run = getattr(filtered_instance, "payroll_run", None)
+        if run is not None and run.is_immutable and not force:
+            raise PayrollRunLockedError(
+                f"Payroll run {run} is {run.status} and cannot be recalculated."
+            )
+
+    if not force:
+        assert_period_mutable(
+            kwargs["employee"], kwargs["start_date"], kwargs["end_date"]
+        )
+
     instance = filtered_instance if filtered_instance is not None else Payslip()
     instance.employee_id = kwargs["employee"]
     instance.group_name = kwargs.get("group_name")
@@ -820,6 +783,29 @@ def save_payslip(**kwargs):
     instance.deduction = round(kwargs["deduction"], 2)
     instance.net_pay = round(kwargs["net_pay"], 2)
     instance.pay_head_data = kwargs["pay_data"]
+    if kwargs.get("payroll_run") is not None:
+        instance.payroll_run = kwargs["payroll_run"]
+
+    from payroll.methods.rounding import apply_payslip_rounding
+
+    company = None
+    work = getattr(kwargs["employee"], "employee_work_info", None)
+    if work:
+        company = getattr(work, "company_id", None)
+    rounded = apply_payslip_rounding(
+        basic_pay=instance.basic_pay,
+        contract_wage=instance.contract_wage,
+        gross_pay=instance.gross_pay,
+        deduction=instance.deduction,
+        net_pay=instance.net_pay,
+        company=company,
+    )
+    instance.basic_pay = rounded["basic_pay"]
+    instance.contract_wage = rounded["contract_wage"]
+    instance.gross_pay = rounded["gross_pay"]
+    instance.deduction = rounded["deduction"]
+    instance.net_pay = rounded["net_pay"]
+
     instance.save()
     instance.installment_ids.set(kwargs["installments"])
     return instance

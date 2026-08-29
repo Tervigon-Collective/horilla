@@ -15,6 +15,7 @@ from django.utils.translation import gettext_lazy as gettext
 from base.models import Company
 from employee.models import Employee
 from horilla.decorators import login_required, permission_required
+from horilla.http import HorillaRedirect
 from payroll.forms.india_statutory_forms import (
     EmployeeStatutoryProfileForm,
     IndiaStatutorySettingsForm,
@@ -22,16 +23,18 @@ from payroll.forms.india_statutory_forms import (
 from payroll.methods.india_statutory import (
     aggregate_form16,
     aggregate_form16_bulk,
+    aggregate_form24q,
+    aggregate_gratuity_register,
     aggregate_statutory_challan,
+    aggregate_tax_computation,
+    build_epf_ecr_payload,
     challan_csv_rows,
     financial_year_bounds,
-    aggregate_form24q,
     form24q_csv_rows,
     generate_oltas_challan_text,
     generate_traces_zip,
     quarter_bounds,
     register_csv_rows,
-    aggregate_gratuity_register,
 )
 from payroll.methods.accounting_export import (
     aggregate_payroll_journal,
@@ -172,10 +175,19 @@ def india_statutory_settings(request):
 @login_required
 @permission_required("payroll.view_payslip")
 def employee_statutory_profile(request, emp_id):
+    from payroll.cbv.accessibility import can_view_all_payslips, is_payroll_admin
+
     employee = get_object_or_404(Employee, pk=emp_id)
+    actor = getattr(request.user, "employee_get", None)
+    if not (
+        can_view_all_payslips(request)
+        or (actor and actor == employee)
+    ):
+        messages.error(request, gettext("You don't have permission."))
+        return HorillaRedirect(request)
     profile, _ = EmployeeStatutoryProfile.objects.get_or_create(employee_id=employee)
     if request.method == "POST":
-        if not request.user.has_perm("payroll.change_payslip"):
+        if not (is_payroll_admin(request) or request.user.has_perm("payroll.change_payslip")):
             messages.error(
                 request,
                 gettext("You do not have permission to update statutory profiles."),
@@ -198,7 +210,16 @@ def employee_statutory_profile(request, emp_id):
 @login_required
 @permission_required("payroll.view_payslip")
 def form16_view(request, emp_id):
+    from payroll.cbv.accessibility import can_view_all_payslips
+
     employee = get_object_or_404(Employee, pk=emp_id)
+    actor = getattr(request.user, "employee_get", None)
+    if not (
+        can_view_all_payslips(request)
+        or (actor and actor == employee)
+    ):
+        messages.error(request, gettext("You don't have permission."))
+        return HorillaRedirect(request)
     fy_param = request.GET.get("fy")
     today = date.today()
     _, _, default_fy_start, _ = financial_year_bounds(today)
@@ -254,6 +275,54 @@ def form16_view(request, emp_id):
         )
 
     return render(request, "payroll/india_statutory/form16.html", context)
+
+
+@login_required
+@permission_required("payroll.view_payslip")
+def tax_computation_view(request, emp_id):
+    """Income-tax computation sheet (HTML or PDF) for an employee FY."""
+    employee = get_object_or_404(Employee, pk=emp_id)
+    fy_param = request.GET.get("fy")
+    today = date.today()
+    _, _, default_fy_start, _ = financial_year_bounds(today)
+    try:
+        fy_start = int(fy_param) if fy_param else default_fy_start
+    except (TypeError, ValueError):
+        fy_start = default_fy_start
+
+    context = aggregate_tax_computation(employee, fy_start)
+    if company := context.get("company"):
+        context["statutory_settings"] = getattr(
+            company, "india_statutory_settings", None
+        )
+
+    if request.GET.get("format") == "pdf" or request.GET.get("pdf") == "1":
+        from django.template.loader import render_to_string
+
+        from base.methods import template_pdf
+
+        html_content = render_to_string(
+            "payroll/india_statutory/tax_computation_pdf.html", context
+        )
+        return template_pdf(
+            template=html_content,
+            html=True,
+            filename=f"TaxComputation_{employee.id}_FY{fy_start}",
+        )
+
+    # Default: PDF download (computation sheet is a document, not a dashboard page)
+    from django.template.loader import render_to_string
+
+    from base.methods import template_pdf
+
+    html_content = render_to_string(
+        "payroll/india_statutory/tax_computation_pdf.html", context
+    )
+    return template_pdf(
+        template=html_content,
+        html=True,
+        filename=f"TaxComputation_{employee.id}_FY{fy_start}",
+    )
 
 
 @login_required
@@ -689,6 +758,70 @@ def oltas_challan_download(request):
 
 @login_required
 @permission_required("payroll.view_payslip")
+def epf_ecr_list(request):
+    """EPFO ECR 2.0 preview + validation for a wage month."""
+    company = _selected_company(request)
+    settings = None
+    if company:
+        settings = IndiaStatutorySettings.objects.filter(company_id=company).first()
+
+    period_start, period_end, year, month = _parse_period_month(request)
+    challan_data = aggregate_statutory_challan(company, period_start, period_end)
+    ecr = build_epf_ecr_payload(challan_data)
+
+    month_options = [
+        {"value": m, "label": date(2000, m, 1).strftime("%B")} for m in range(1, 13)
+    ]
+    download_url = (
+        f"{reverse('epf-ecr-download')}?year={year}&month={month}"
+    )
+
+    return render(
+        request,
+        "payroll/india_statutory/epf_ecr.html",
+        {
+            "company": company,
+            "settings": settings,
+            "ecr": ecr,
+            "selected_year": year,
+            "selected_month": month,
+            "month_options": month_options,
+            "year_options": [
+                date.today().year - 1,
+                date.today().year,
+                date.today().year + 1,
+            ],
+            "download_url": download_url,
+            "establishment_code": getattr(settings, "pf_establishment_code", "")
+            if settings
+            else "",
+        },
+    )
+
+
+@login_required
+@permission_required("payroll.view_payslip")
+def epf_ecr_download(request):
+    """Download EPFO ECR 2.0 text file (#~# delimited)."""
+    company = _selected_company(request)
+    period_start, period_end, year, month = _parse_period_month(request)
+    challan_data = aggregate_statutory_challan(company, period_start, period_end)
+    ecr = build_epf_ecr_payload(challan_data)
+    if ecr["issues"] and request.GET.get("include_invalid") != "1":
+        # Still download valid rows only; preview page lists issues
+        pass
+    content = ecr["text"]
+    # EPFO expects ANSI/ASCII — strip non-ascii just in case
+    content = content.encode("ascii", "ignore").decode("ascii")
+    slug = _company_slug(company)
+    filename = f"ECR_{year}_{month:02d}_{slug}.txt"
+    response = HttpResponse(content, content_type="text/plain; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+@login_required
+@permission_required("payroll.view_payslip")
 def accounting_export_list(request):
     company = _selected_company(request)
     settings = None
@@ -987,6 +1120,7 @@ def fnf_excel_export(request):
 # Aliases so URL modules can import snake_case names
 form16_view = form16_view
 form16_list = form16_list
+tax_computation_view = tax_computation_view
 challan_list = challan_list
 challan_export = challan_export
 form24q_list = form24q_list

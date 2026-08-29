@@ -141,16 +141,12 @@ class Project(HorillaModel):
         This method generates an onclick URL for task viewing.
         """
         request = getattr(_thread_locals, "request", None)
-        employee = request.user.employee_get
-        url = reverse_lazy("task-view", kwargs={"project_id": self.pk})
+        if not request or not getattr(request.user, "is_authenticated", False):
+            return ""
+        from project.methods import can_view_project
 
-        if (
-            employee in self.managers.all()
-            or employee in self.members.all()
-            or any(employee in task.task_managers.all() for task in self.task_set.all())
-            or any(employee in task.task_members.all() for task in self.task_set.all())
-            or request.user.has_perm("project.view_project")
-        ):
+        url = reverse_lazy("task-view", kwargs={"project_id": self.pk})
+        if can_view_project(request, self):
             return f"onclick=\"window.location.href='{url}?view=list'\""
         return ""
 

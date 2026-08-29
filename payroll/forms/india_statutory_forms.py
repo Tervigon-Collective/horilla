@@ -31,6 +31,7 @@ class IndiaStatutorySettingsForm(forms.ModelForm):
             "enable_lwf": HorillaCheckboxInput(),
             "enable_bonus": HorillaCheckboxInput(),
             "enable_gratuity": HorillaCheckboxInput(),
+            "enable_code_on_wages_50pct": HorillaCheckboxInput(),
             "pf_wage_ceiling": forms.NumberInput(
                 attrs={"class": "oh-input w-100", "step": "0.01"}
             ),
@@ -109,5 +110,21 @@ class EmployeeStatutoryProfileForm(forms.ModelForm):
             ),
             "vpf_rate": forms.NumberInput(
                 attrs={"class": "oh-input w-100", "step": "0.01"}
+            ),
+            "contribute_pf_on_actual_wage": HorillaCheckboxInput(),
+            "previous_employer_income": forms.NumberInput(
+                attrs={"class": "oh-input w-100", "step": "0.01"}
+            ),
+            "previous_employer_tds": forms.NumberInput(
+                attrs={"class": "oh-input w-100", "step": "0.01"}
+            ),
+            "other_income_annual": forms.NumberInput(
+                attrs={"class": "oh-input w-100", "step": "0.01"}
+            ),
+            "proof_submission_status": forms.Select(
+                attrs={"class": "oh-select oh-select-2 w-100"}
+            ),
+            "payroll_status": forms.Select(
+                attrs={"class": "oh-select oh-select-2 w-100"}
             ),
         }

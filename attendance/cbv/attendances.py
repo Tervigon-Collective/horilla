@@ -276,7 +276,7 @@ class AttendancesNavView(HorillaNavView):
                 """,
                 }
             )
-        if self.request.user.has_perm("attendance.add_attendance") or is_reportingmanager(
+        if self.request.user.has_perm("attendance.delete_attendance") or is_reportingmanager(
             self.request
         ):
             actions.append(

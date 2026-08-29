@@ -165,18 +165,20 @@ class AllObjectives(ObjectivesList):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        from base.methods import has_org_wide_perm
+
         employee = self.request.user.employee_get
         manager = False
         if Objective.objects.filter(managers=employee).exists():
             manager = True
-        if self.request.user.has_perm("pms.view_employeeobjective"):
+        if has_org_wide_perm(self.request.user, "pms.view_employeeobjective"):
             queryset = queryset
         elif manager:
             queryset = queryset.filter(Q(managers=employee)) | queryset.filter(
                 employee_objective__employee_id=employee
             )
         else:
-            queryset = queryset.none()
+            queryset = queryset.filter(employee_objective__employee_id=employee)
         return queryset.distinct()
 
 
@@ -666,12 +668,15 @@ class CreateEmployeeKeyResultFormView(HorillaFormView):
         objective's managers can create/update an employee key result.
         """
 
+        from base.methods import has_org_wide_perm
+
         return (
-            self.request.user.has_perm("pms.change_objective")
-            or self.request.user.has_perm("pms.change_employeeobjective")
-            or self.request.user.has_perm("pms.change_employeekeyresult")
+            has_org_wide_perm(self.request.user, "pms.change_objective")
+            or has_org_wide_perm(self.request.user, "pms.change_employeeobjective")
+            or has_org_wide_perm(self.request.user, "pms.change_employeekeyresult")
             or self.request.user.employee_get
             in self.emp_objective.objective_id.managers.all()
+            or self.request.user.employee_get == self.emp_objective.employee_id
         )
 
     def get_form_kwargs(self):
