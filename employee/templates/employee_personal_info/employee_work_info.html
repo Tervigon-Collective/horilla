@@ -70,6 +70,7 @@
                     {{work_form.contract_end_date.errors}}
                     {{work_form.contract_end_date}}
                 </div>
+                {% if show_salary %}
                 <div class="col-md-6 mb-4">
                     {{work_form.basic_salary.errors}}
                     {{work_form.basic_salary}}
@@ -78,6 +79,7 @@
                     {{work_form.salary_hour.errors}}
                     {{work_form.salary_hour}}
                 </div>
+                {% endif %}
                 <div class="col-md-6 mb-4">
                     {{work_form.tags.errors}}
                     {{work_form.tags}}
@@ -111,6 +113,7 @@
         </form>
     </div>
 
+    {% if show_bank_details %}
     <div class="card rounded-3 mt-4">
         <form  enctype="multipart/form-data">
             <div class="card-body pl-5 pr-5 pb-5 pt-5">
@@ -185,4 +188,5 @@
             </div>
             </form>
     </div>
+    {% endif %}
 </div>

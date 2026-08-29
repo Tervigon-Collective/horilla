@@ -368,6 +368,36 @@ def self_info_update(request):
     )
 
 
+def _employee_form_context(request, employee, form, work_form, bank_form):
+    from employee.cbv.accessibility import can_view_bank_details, can_view_salary
+
+    return {
+        "form": form,
+        "work_form": work_form,
+        "bank_form": bank_form,
+        "show_salary": can_view_salary(request, employee),
+        "show_bank_details": can_view_bank_details(request, employee),
+    }
+
+
+def _apply_work_info_salary_policy(request, work_info):
+    from employee.cbv.accessibility import is_hr_user
+
+    if is_hr_user(request):
+        return work_info
+    if work_info.pk:
+        original = EmployeeWorkInformation.objects.filter(pk=work_info.pk).values(
+            "basic_salary", "salary_hour"
+        ).first()
+        if original:
+            work_info.basic_salary = original["basic_salary"]
+            work_info.salary_hour = original["salary_hour"]
+    else:
+        work_info.basic_salary = None
+        work_info.salary_hour = None
+    return work_info
+
+
 def profile_edit_access(request, emp_id):
     feature = request.GET.get("feature", None)
     accessibility = DefaultAccessibility.objects.filter(feature=feature).first()
@@ -487,9 +517,10 @@ def about_tab(request, pk, **kwargs):
     )
     bank_details = EmployeeBankDetails.objects.filter(employee_id=employee).first()
     work_info = EmployeeWorkInformation.objects.filter(employee_id=employee).first()
-    from employee.cbv.accessibility import can_view_salary
+    from employee.cbv.accessibility import can_view_salary, can_view_bank_details
 
     show_salary = can_view_salary(request, employee)
+    show_bank_details = can_view_bank_details(request, employee)
     if not show_salary:
         contracts = None
     return render(
@@ -502,6 +533,7 @@ def about_tab(request, pk, **kwargs):
             "bank_details": bank_details,
             "work_info": work_info,
             "show_salary": show_salary,
+            "show_bank_details": show_bank_details,
         },
     )
 
@@ -520,6 +552,22 @@ def allowances_deductions_tab(request, pk):
     deduction tab template.
     """
     employee = Employee.objects.get(id=pk)
+    from employee.cbv.accessibility import can_view_salary
+
+    if not can_view_salary(request, employee):
+        return render(
+            request,
+            "tabs/allowance_deduction-tab.html",
+            {
+                "employee": employee,
+                "active_contracts": None,
+                "basic_pay": None,
+                "allowances": None,
+                "allowance_ids": None,
+                "deductions": None,
+                "deduction_ids": None,
+            },
+        )
     active_contracts = (
         employee.contract_set.filter(contract_status="active").first()
         if apps.is_installed("payroll")
@@ -1797,6 +1845,7 @@ def employee_view_update(request, obj_id, **kwargs):
                 if work_form.is_valid():
                     instance = work_form.save(commit=False)
                     instance.employee_id = employee
+                    instance = _apply_work_info_salary_policy(request, instance)
                     instance.save()
                     instance.tags.set(request.POST.getlist("tags"))
                     notify.send(
@@ -1817,17 +1866,24 @@ def employee_view_update(request, obj_id, **kwargs):
                 #     ).first()
                 # )
             elif request.POST.get("form") == "bank":
-                instance = EmployeeBankDetails.objects.filter(
-                    employee_id=employee
-                ).first()
-                bank_form = EmployeeBankDetailsUpdateForm(
-                    request.POST, instance=instance
-                )
-                if bank_form.is_valid():
-                    instance = bank_form.save(commit=False)
-                    instance.employee_id = employee
-                    instance.save()
-                    messages.success(request, _("Employee bank details updated."))
+                from employee.cbv.accessibility import can_modify_bank_details
+
+                if not can_modify_bank_details(request, employee):
+                    messages.error(
+                        request, _("You don't have permission to edit bank details.")
+                    )
+                else:
+                    instance = EmployeeBankDetails.objects.filter(
+                        employee_id=employee
+                    ).first()
+                    bank_form = EmployeeBankDetailsUpdateForm(
+                        request.POST, instance=instance
+                    )
+                    if bank_form.is_valid():
+                        instance = bank_form.save(commit=False)
+                        instance.employee_id = employee
+                        instance.save()
+                        messages.success(request, _("Employee bank details updated."))
         use_edit_fragment = request.META.get("HTTP_HX_REQUEST") == "true"
         template_name = (
             "employee/update_form/form_view_fragment.html"
@@ -1838,18 +1894,21 @@ def employee_view_update(request, obj_id, **kwargs):
         active_tab = (
             submitted_form if submitted_form in ("personal", "work", "bank") else ""
         )
-        response = render(
-            request,
-            template_name,
+        form_context = _employee_form_context(
+            request, employee, form, work_form, bank_form
+        )
+        form_context.update(
             {
                 "obj_id": obj_id,
-                "form": form,
-                "work_form": work_form,
-                "bank_form": bank_form,
                 "work_info_history": work_info_history,
                 "container_mode": container_mode,
                 "active_tab": active_tab,
-            },
+            }
+        )
+        response = render(
+            request,
+            template_name,
+            form_context,
         )
         return response
     return HorillaRedirect(request, fallback_url="/employee/employee-view")
@@ -2039,6 +2098,7 @@ def employee_update_work_info(request, obj_id=None):
     if form.is_valid() and employee is not None:
         work_info = form.save(commit=False)
         work_info.employee_id = employee
+        work_info = _apply_work_info_salary_policy(request, work_info)
         work_info.save()
         return HttpResponse(
             """
@@ -2067,7 +2127,16 @@ def employee_update_bank_details(request, obj_id=None):
     """
     This method is used to render form to create employee's bank information.
     """
+    from employee.cbv.accessibility import can_modify_bank_details
+
     employee = Employee.objects.filter(id=obj_id).first()
+    if employee and not can_modify_bank_details(request, employee):
+        return HttpResponse(
+            '<ul class="alert alert-danger"><li>'
+            + _("You don't have permission to edit bank details.")
+            + "</li></ul>",
+            status=403,
+        )
     form = EmployeeBankDetailsForm(
         request.POST,
         instance=EmployeeBankDetails.objects.filter(employee_id=employee).first(),
@@ -2253,7 +2322,7 @@ def employee_update(request, obj_id):
     return render(
         request,
         "employee_personal_info/employee_update_form.html",
-        {"form": form, "work_form": work_form, "bank_form": bank_form},
+        _employee_form_context(request, employee, form, work_form, bank_form),
     )
 
 
@@ -2641,12 +2710,13 @@ def employee_work_info_view_create(request, obj_id):
     if work_form.is_valid():
         work_info = work_form.save(commit=False)
         work_info.employee_id = employee
+        work_info = _apply_work_info_salary_policy(request, work_info)
         work_info.save()
         messages.success(request, _("Created work information"))
     return render(
         request,
         "employee_personal_info/employee_update_form.html",
-        {"form": form, "work_form": work_form, "bank_form": bank_form},
+        _employee_form_context(request, employee, form, work_form, bank_form),
     )
 
 
@@ -2670,12 +2740,16 @@ def employee_work_info_view_update(request, obj_id):
         instance=work_information,
     )
     if work_form.is_valid():
-        work_form.save()
+        work_info = work_form.save(commit=False)
+        work_info = _apply_work_info_salary_policy(request, work_info)
+        work_info.save()
         messages.success(request, _("Work Information Updated Successfully"))
     return render(
         request,
         "employee_personal_info/employee_update_form.html",
-        {"form": form, "work_form": work_form, "bank_form": bank_form},
+        _employee_form_context(
+            request, work_information.employee_id, form, work_form, bank_form
+        ),
     )
 
 
@@ -2688,7 +2762,12 @@ def employee_bank_details_view_create(request, obj_id):
     args:
         obj_id : employee instance id
     """
+    from employee.cbv.accessibility import can_modify_bank_details
+
     employee = Employee.objects.get(id=obj_id)
+    if not can_modify_bank_details(request, employee):
+        messages.error(request, _("You don't have permission to edit bank details."))
+        return HttpResponse(status=403)
     form = EmployeeForm(instance=employee)
     bank_form = EmployeeBankDetailsUpdateForm(request.POST)
     work_form_instance = EmployeeWorkInformation.objects.filter(
@@ -2705,7 +2784,7 @@ def employee_bank_details_view_create(request, obj_id):
     return render(
         request,
         "employee_personal_info/employee_update_form.html",
-        {"form": form, "work_form": work_form, "bank_form": bank_form},
+        _employee_form_context(request, employee, form, work_form, bank_form),
     )
 
 
@@ -2716,7 +2795,12 @@ def employee_bank_details_view_update(request, obj_id):
     """
     This method is used to update employee bank details.
     """
+    from employee.cbv.accessibility import can_modify_bank_details
+
     employee_bank_instance = EmployeeBankDetails.objects.get(id=obj_id)
+    if not can_modify_bank_details(request, employee_bank_instance.employee_id):
+        messages.error(request, _("You don't have permission to edit bank details."))
+        return HttpResponse(status=403)
     form = EmployeeForm(instance=employee_bank_instance.employee_id)
     work_form = EmployeeWorkInformationUpdateForm(
         instance=employee_bank_instance.employee_id.employee_work_info
@@ -2732,7 +2816,9 @@ def employee_bank_details_view_update(request, obj_id):
     return render(
         request,
         "employee_personal_info/employee_update_form.html",
-        {"form": form, "work_form": work_form, "bank_form": bank_form},
+        _employee_form_context(
+            request, employee_bank_instance.employee_id, form, work_form, bank_form
+        ),
     )
 
 

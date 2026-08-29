@@ -115,6 +115,21 @@ def can_view_salary(request, employee=None) -> bool:
     return getattr(employee, "employee_user_id", None) == request.user
 
 
+def can_view_bank_details(request, employee=None) -> bool:
+    """Own bank details, or HR/admin only."""
+    if not request or not request.user.is_authenticated:
+        return False
+    if is_hr_user(request):
+        return True
+    if employee is None:
+        return False
+    return getattr(employee, "employee_user_id", None) == request.user
+
+
+def can_modify_bank_details(request, employee=None) -> bool:
+    return can_view_bank_details(request, employee)
+
+
 def deny_without_employee_record_access(request, pk):
     """Redirect if the user may not open this employee's record."""
     employee = Employee.objects.entire().filter(id=pk).first() if pk else None

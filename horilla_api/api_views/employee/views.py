@@ -56,6 +56,14 @@ def permission_check(request, perm):
     return request.user.has_perm(perm)
 
 
+def permission_denied_response(message=None):
+    msg = message or _("No permission")
+    return Response(
+        {"message": msg, "error": msg},
+        status=status.HTTP_403_FORBIDDEN,
+    )
+
+
 def object_check(cls, pk):
     try:
         obj = cls.objects.get(id=pk)
@@ -217,14 +225,9 @@ class EmployeeListAPIView(APIView):
 
 
 def _can_modify_bank_details(request, employee):
-    """Bank details are confidential — self or HR only."""
-    from employee.cbv.accessibility import is_hr_user
+    from employee.cbv.accessibility import can_modify_bank_details
 
-    if not employee:
-        return False
-    if is_hr_user(request):
-        return True
-    return getattr(employee, "employee_user_id", None) == request.user
+    return can_modify_bank_details(request, employee)
 
 
 class EmployeeBankDetailsAPIView(APIView):
@@ -391,32 +394,32 @@ class EmployeeWorkInformationAPIView(APIView):
 
     @manager_permission_required("employee.change_employeeworkinformation")
     def put(self, request, pk):
-        from employee.cbv.accessibility import is_hr_user
+        from employee.cbv.accessibility import can_access_employee_record, is_hr_user
 
         work_info = EmployeeWorkInformation.objects.get(pk=pk)
-        if (
-            request.user.employee_get == work_info.reporting_manager_id
-            or request.user.has_perm("employee.change_employeeworkinformation")
-        ):
-            data = (
-                request.data.copy()
-                if hasattr(request.data, "copy")
-                else dict(request.data)
-            )
-            if not is_hr_user(request):
-                data.pop("basic_salary", None)
-                data.pop("salary_hour", None)
-            serializer = EmployeeWorkInformationSerializer(
-                work_info,
-                data=data,
-                partial=True,
-                context={"request": request},
-            )
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"message": _("No permission")}, status=400)
+        if not can_access_employee_record(request, work_info.employee_id):
+            return Response({"error": _("Permission denied")}, status=403)
+        own = getattr(work_info.employee_id, "employee_user_id", None) == request.user
+        if not (is_hr_user(request) or own):
+            return Response({"error": _("Permission denied")}, status=403)
+        data = (
+            request.data.copy()
+            if hasattr(request.data, "copy")
+            else dict(request.data)
+        )
+        if not is_hr_user(request):
+            data.pop("basic_salary", None)
+            data.pop("salary_hour", None)
+        serializer = EmployeeWorkInformationSerializer(
+            work_info,
+            data=data,
+            partial=True,
+            context={"request": request},
+        )
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @method_decorator(
         permission_required("employee.delete_employeeworkinformation"), name="dispatch"
@@ -525,7 +528,7 @@ class ActiontypeView(APIView):
 
     def post(self, request):
         if permission_check(request, "employee.add_actiontype") is False:
-            return Response({"error": _("No permission")}, status=401)
+            return permission_denied_response()
         serializer = self.serializer_class(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -534,7 +537,7 @@ class ActiontypeView(APIView):
 
     def put(self, request, pk):
         if permission_check(request, "employee.change_actiontype") is False:
-            return Response({"error": _("No permission")}, status=401)
+            return permission_denied_response()
         action_type = object_check(Actiontype, pk)
         if action_type is None:
             return Response({"error": _("Actiontype not found")}, status=404)
@@ -546,7 +549,7 @@ class ActiontypeView(APIView):
 
     def delete(self, request, pk):
         if permission_check(request, "employee.delete_actiontype") is False:
-            return Response({"error": _("No permission")}, status=401)
+            return permission_denied_response()
         action_type = object_check(Actiontype, pk)
         if action_type is None:
             return Response({"error": _("Actiontype not found")}, status=404)
@@ -636,7 +639,7 @@ class DisciplinaryActionAPIView(APIView):
 
     def post(self, request):
         if permission_check(request, "employee.add_disciplinaryaction") is False:
-            return Response({"error": _("No permission")}, status=401)
+            return permission_denied_response()
         serializer = DisciplinaryActionSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -645,7 +648,7 @@ class DisciplinaryActionAPIView(APIView):
 
     def put(self, request, pk):
         if permission_check(request, "employee.add_disciplinaryaction") is False:
-            return Response({"error": _("No permission")}, status=401)
+            return permission_denied_response()
         disciplinary_action = self.get_object(pk)
         serializer = DisciplinaryActionSerializer(
             disciplinary_action, data=request.data
@@ -657,7 +660,7 @@ class DisciplinaryActionAPIView(APIView):
 
     def delete(self, request, pk):
         if permission_check(request, "employee.add_disciplinaryaction") is False:
-            return Response({"error": _("No permission")}, status=401)
+            return permission_denied_response()
         disciplinary_action = self.get_object(pk)
         disciplinary_action.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -711,7 +714,7 @@ class PolicyAPIView(APIView):
 
     def post(self, request):
         if permission_check(request, "employee.add_policy") is False:
-            return Response({"error": _("No permission")}, status=401)
+            return permission_denied_response()
 
         serializer = PolicySerializer(data=request.data)
         if serializer.is_valid():
@@ -721,7 +724,7 @@ class PolicyAPIView(APIView):
 
     def put(self, request, pk):
         if permission_check(request, "employee.change_policy") is False:
-            return Response({"error": _("No permission")}, status=401)
+            return permission_denied_response()
         policy = self.get_object(pk)
         serializer = PolicySerializer(policy, data=request.data)
         if serializer.is_valid():
@@ -731,7 +734,7 @@ class PolicyAPIView(APIView):
 
     def delete(self, request, pk):
         if permission_check(request, "employee.delete_policy") is False:
-            return Response({"error": _("No permission")}, status=401)
+            return permission_denied_response()
         policy = self.get_object(pk)
         policy.delete()
         return Response(status=204)

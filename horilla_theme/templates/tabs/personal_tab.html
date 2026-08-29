@@ -389,7 +389,7 @@
         </section>
 
         <!-- Bank Information -->
-        {% if perms.employee.change_employee or perms.employee.add_employee or request.user.is_superuser or request.user == employee.employee_user_id %}
+        {% if show_bank_details %}
             <section>
                 <div class="overflow-hidden rounded-xl border border-[#ebebeb]">
                     <div class="flex items-center justify-between bg-[#f3f3f3] px-3 py-3">

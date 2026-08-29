@@ -316,7 +316,7 @@
 				</div>
 			</div>
 		</div>
-		{% if perms.employee.change_employee or perms.employee.add_employee or request.user.is_superuser or request.user == employee.employee_user_id %}
+		{% if show_bank_details %}
 			<div class="oh-card oh-card--margin">
 				<div class="oh-card__header">
 					<span class="oh-card__title oh-card__title--sm fw-bold me-2">{% trans "Bank Information" %}</span>

@@ -72,11 +72,13 @@
 
                 <div class="w-10 h-px bg-secondary-200 emp-connector" data-for="work"></div>
 
+                {% if show_bank_details %}
                 <a href="#" class="emp-step-btn flex items-center gap-2 text-dark-100 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap no-underline"
                    data-action="general-tab" data-target="#bank" id="step-bank">
                     <div class="w-5 h-5 rounded-full border-2 border-secondary-200 flex items-center justify-center text-xxs font-semibold">3</div>
                     {% trans "Bank Information" %}
                 </a>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -84,7 +86,9 @@
     <!-- Tab Content -->
     {% include 'employee/update_form/personal_info.html' with active_tab=active_tab %}
     {% include 'employee/update_form/work_details.html' with active_tab=active_tab %}
+    {% if show_bank_details %}
     {% include 'employee/update_form/bank_details.html' with active_tab=active_tab %}
+    {% endif %}
 
     <script>
         (function () {

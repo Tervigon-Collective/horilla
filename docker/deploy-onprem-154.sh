@@ -1,64 +1,64 @@
 #!/usr/bin/env bash
-# Deploy Horilla app + media/static to 132.154.65.28 (port 8002).
+# Deploy Horilla to on-prem 132.154.65.28 (127.0.0.1:18083 via docker compose).
 # Database stays on DB_HOST (default 72.61.228.168) — no pg_dump/restore.
+# Does not depend on /var/jenkins_apps/horilla (retired on 168).
 set -euo pipefail
 
 DEST_HOST="${DEST_HOST:-132.154.65.28}"
 DEST_SSH_PORT="${DEST_SSH_PORT:-2222}"
-DEST_USER="${DEST_USER:-root}"
+DEST_USER="${DEST_USER:-tervigon}"
 SSH_KEY="${SSH_KEY:-/root/.ssh/id_ed25519_132}"
-APP_PORT="${APP_PORT:-8002}"
-SOURCE_APP_DIR="${SOURCE_APP_DIR:-/var/jenkins_apps/horilla}"
-SOURCE_SRC_DIR="${SOURCE_SRC_DIR:-/var/jenkins_apps/horilla-src}"
+SOURCE_SRC_DIR="${SOURCE_SRC_DIR:-.}"
 IMAGE="${IMAGE:-horilla_app:latest}"
-CONTAINER="${CONTAINER:-horilla-app-onprem}"
-REMOTE_APP_DIR="${REMOTE_APP_DIR:-/var/jenkins_apps/horilla}"
+REMOTE_HRMS_ROOT="${REMOTE_HRMS_ROOT:-/srv/seleric/hrms}"
+REMOTE_APP_DIR="${REMOTE_APP_DIR:-${REMOTE_HRMS_ROOT}/horilla}"
+ENV_SOURCE="${ENV_SOURCE:-}"
 
 SSH=(ssh -i "$SSH_KEY" -p "$DEST_SSH_PORT" -o StrictHostKeyChecking=no "${DEST_USER}@${DEST_HOST}")
-RSYNC=(rsync -avz -e "ssh -i $SSH_KEY -p $DEST_SSH_PORT -o StrictHostKeyChecking=no")
+RSYNC=(rsync -avz --delete
+  --exclude .git
+  --exclude .github/
+  --exclude '**/tests/'
+  --exclude media/
+  --exclude staticfiles/
+  --exclude logs/
+  --exclude __pycache__/
+  --exclude '*.pyc'
+  -e "ssh -i $SSH_KEY -p $DEST_SSH_PORT -o StrictHostKeyChecking=no")
 
-echo "=== Pre-flight: free port ${APP_PORT} on ${DEST_HOST} ==="
-"${SSH[@]}" "for p in ${APP_PORT}; do ss -tln | grep -q \":\$p \" && echo TAKEN:\$p && exit 1 || echo FREE:\$p; done"
+echo "=== Pre-flight: HRMS port 18083 on ${DEST_HOST} ==="
+"${SSH[@]}" "ss -tln | grep -q ':18083 ' && echo LISTEN:18083 || echo FREE:18083"
 
-echo "=== Ensure remote directories ==="
-"${SSH[@]}" "mkdir -p ${REMOTE_APP_DIR}/{logs,media,staticfiles,backups}"
+echo "=== Ensure remote app directories (preserve media/static) ==="
+"${SSH[@]}" "mkdir -p ${REMOTE_APP_DIR}/{logs,media,staticfiles}"
 
-echo "=== Sync media + staticfiles (data, not DB) ==="
-"${RSYNC[@]}" "${SOURCE_APP_DIR}/media/" "${DEST_USER}@${DEST_HOST}:${REMOTE_APP_DIR}/media/"
-"${RSYNC[@]}" "${SOURCE_APP_DIR}/staticfiles/" "${DEST_USER}@${DEST_HOST}:${REMOTE_APP_DIR}/staticfiles/"
+echo "=== Sync application source (code only; media/static stay on dest) ==="
+"${RSYNC[@]}" "${SOURCE_SRC_DIR}/" "${DEST_USER}@${DEST_HOST}:${REMOTE_APP_DIR}/"
 
-echo "=== Build + export image on source ==="
-docker build -t "$IMAGE" "$SOURCE_SRC_DIR"
+echo "=== Build + export image on Jenkins host ==="
+docker build -t "$IMAGE" "${SOURCE_SRC_DIR}"
 docker save "$IMAGE" | gzip | "${SSH[@]}" "gunzip | docker load"
 
-echo "=== Copy env (create from example on first run) ==="
-if [[ -f ${SOURCE_APP_DIR}/.env.onprem-154 ]]; then
-  "${RSYNC[@]}" "${SOURCE_APP_DIR}/.env.onprem-154" "${DEST_USER}@${DEST_HOST}:${REMOTE_APP_DIR}/.env"
-else
-  echo "WARN: ${SOURCE_APP_DIR}/.env.onprem-154 missing — copy docker/.env.onprem-154.example and set secrets on dest"
-fi
-
-echo "=== Start container on port ${APP_PORT} ==="
+echo "=== Ensure .env on dest ==="
 "${SSH[@]}" bash -s <<EOF
 set -e
-docker rm -f ${CONTAINER} 2>/dev/null || true
-docker run -d \\
-  --name ${CONTAINER} \\
-  --restart unless-stopped \\
-  --env-file ${REMOTE_APP_DIR}/.env \\
-  --log-opt max-size=10m \\
-  --log-opt max-file=3 \\
-  -p ${APP_PORT}:8000 \\
-  -v ${REMOTE_APP_DIR}/logs:/app/logs \\
-  -v ${REMOTE_APP_DIR}/media:/app/media \\
-  -v ${REMOTE_APP_DIR}/staticfiles:/app/staticfiles \\
-  ${IMAGE}
-for i in \$(seq 1 30); do
-  curl -fsS --max-time 5 http://127.0.0.1:${APP_PORT}/login/ >/dev/null && echo healthy && exit 0
-  sleep 3
+test -f ${REMOTE_APP_DIR}/.env || { echo "FAIL: missing ${REMOTE_APP_DIR}/.env on on-prem — create it once on 154"; exit 1; }
+EOF
+if [[ -n "${ENV_SOURCE:-}" && -f "${ENV_SOURCE}" ]]; then
+  "${SSH[@]}" "test -f ${REMOTE_APP_DIR}/.env || cp ${ENV_SOURCE} ${REMOTE_APP_DIR}/.env"
+fi
+
+echo "=== Restart via on-prem compose (127.0.0.1:18083) ==="
+"${SSH[@]}" "HRMS_APP_ONLY=1 bash ${REMOTE_HRMS_ROOT}/deploy-hrms.sh"
+
+echo "=== Health check ==="
+"${SSH[@]}" bash -s <<'EOF'
+for i in $(seq 1 40); do
+  curl -fsS --max-time 8 http://127.0.0.1:18083/login/ >/dev/null && echo healthy && exit 0
+  sleep 5
 done
-docker logs --tail 50 ${CONTAINER}
+docker logs --tail 80 horilla-web-1 2>/dev/null || docker compose -f /srv/seleric/hrms/horilla/docker-compose.server.yml ps
 exit 1
 EOF
 
-echo "=== Done: http://${DEST_HOST}:${APP_PORT}/login/ ==="
+echo "=== Done: https://hrms.seleric.com/login/ ==="
