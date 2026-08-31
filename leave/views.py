@@ -4365,6 +4365,9 @@ def create_leaverequest_comment(request, leave_id):
     This method renders form and template to create Leave request comments
     """
     leave = LeaveRequest.objects.filter(id=leave_id).first()
+    if not leave:
+        return HorillaRedirect(request, message=_("Leave request not found."))
+
     emp = request.user.employee_get
     form = LeaverequestcommentForm(
         initial={"employee_id": emp.id, "request_id": leave_id}
@@ -4533,6 +4536,11 @@ def create_allocationrequest_comment(request, leave_id):
     """
     previous_data = request.GET.urlencode()
     leave = LeaveAllocationRequest.objects.filter(id=leave_id).first()
+    if not leave:
+        return HorillaRedirect(
+            request, message=_("Leave allocation request not found.")
+        )
+
     emp = request.user.employee_get
     form = LeaveallocationrequestcommentForm(
         initial={"employee_id": emp.id, "request_id": leave_id}
@@ -5443,6 +5451,11 @@ if apps.is_installed("attendance"):
         This method renders form and template to create Compensatory leave comments
         """
         comp_leave = CompensatoryLeaveRequest.objects.filter(id=comp_leave_id).first()
+        if not comp_leave:
+            return HorillaRedirect(
+                request, message=_("Compensatory leave request not found.")
+            )
+
         emp = request.user.employee_get
         form = CompensatoryLeaveRequestcommentForm(
             initial={"employee_id": emp.id, "request_id": comp_leave}

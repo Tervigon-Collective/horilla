@@ -37,7 +37,6 @@
                 hx-get="{% url 'department-manager-list' %}"
                 hx-trigger="load"
             >
-                <div class="animated-background"></div>
             </div>
 
             {% comment %}
@@ -73,19 +72,4 @@
         {% endif %}
     </div>
 
-    <button
-        id="getDepartmentEmployeesButton"
-        hx-get="{% url 'get-department-employee' %}"
-        hx-target="#id_manager"
-        hidden
-    >
-    </button>
-    <script>
-        function getDepartmentEmployees(element) {
-        	var dep_id = element.val();
-        	$("#getDepartmentEmployeesButton")
-        		.attr("hx-vals", JSON.stringify({ dep_id: dep_id }))
-        		.click();
-        }
-    </script>
 {% endblock settings %}

@@ -432,7 +432,7 @@ def leave_top_takers(request):
 @login_required
 @permission_required("leave.delete_leaverequest")
 def leave_on_leave_today(request):
-    """Employees with approved leave overlapping the selected period."""
+    """Employees with approved leave on actual today."""
     from leave.models import LeaveRequest
 
     from_date, to_date = _parse_period(request)
@@ -443,8 +443,8 @@ def leave_on_leave_today(request):
     try:
         qs = (
             LeaveRequest.objects.filter(
-                start_date__lte=period_end,
-                end_date__gte=from_date,
+                start_date__lte=today,
+                end_date__gte=today,
                 status="approved",
             )
             .select_related("employee_id", "leave_type_id")
@@ -557,7 +557,9 @@ def leave_weekly_pattern(request):
 @login_required
 @permission_required("leave.delete_leaverequest")
 def leave_upcoming(request):
-    """Approved leaves starting within the selected period."""
+    """Approved leaves starting within next 7 days from today."""
+    from datetime import timedelta
+
     from leave.models import LeaveRequest
 
     from_date, to_date = _parse_period(request)
@@ -566,11 +568,12 @@ def leave_upcoming(request):
     upcoming = []
 
     try:
+        next_week = today + timedelta(days=7)
         qs = (
             LeaveRequest.objects.filter(
                 status="approved",
-                start_date__gte=from_date,
-                start_date__lte=period_end,
+                start_date__gte=today,
+                start_date__lte=next_week,
             )
             .select_related("employee_id", "leave_type_id")
             .order_by("start_date")[:15]

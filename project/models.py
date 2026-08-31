@@ -107,17 +107,6 @@ class Project(HorillaModel):
             )
             return employee_names_string
 
-    def get_members(self):
-        """
-        members column
-        """
-        employees = self.members.all()
-        if employees:
-            employee_names_string = ", ".join(
-                [str(employee.get_full_name()) for employee in employees]
-            )
-            return employee_names_string
-
     def get_avatar(self):
         """
         Method will retun the api to the avatar or path to the profile image
@@ -631,9 +620,17 @@ class TimeSheet(HorillaModel):
                 ):
                     raise ValidationError(_("Employee not included in this task"))
             elif self.project_id:
+                project = self.project_id
                 if (
-                    not employee in self.project_id.managers.all()
-                    and not employee in self.project_id.members.all()
+                    not employee in project.managers.all()
+                    and not any(
+                        employee in task.task_managers.all()
+                        for task in project.task_set.all()
+                    )
+                    and not any(
+                        employee in task.task_members.all()
+                        for task in project.task_set.all()
+                    )
                 ):
                     raise ValidationError(_("Employee not included in this project"))
             if self.date > datetime.datetime.today().date():

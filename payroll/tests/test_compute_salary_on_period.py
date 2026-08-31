@@ -23,6 +23,8 @@ EMPTY_LEAVES = {
 
 
 class ComputeSalaryOnPeriodTests(TestCase):
+    NO_ATTENDANCE_LOP = {"absence_days": 0.0, "absence_dates": []}
+
     def setUp(self):
         company = make_company("Salary Co")
         self.employee = make_employee(company=company, email="salary@test.horilla")
@@ -58,7 +60,13 @@ class ComputeSalaryOnPeriodTests(TestCase):
         return_value={"day_wage": 1000.0},
     )
     @patch("payroll.methods.methods.get_leaves", return_value=EMPTY_LEAVES)
-    def test_monthly_with_no_unpaid_leaves(self, _leaves, _daily, mock_months):
+    @patch("payroll.methods.methods.get_attendance_lop_data")
+    def test_monthly_with_no_unpaid_leaves(
+        self, mock_attendance_lop, _leaves, _daily, mock_months
+    ):
+        # This case covers leave-driven LOP only; with no Attendance rows in
+        # the test DB the real helper would mark every working day absent.
+        mock_attendance_lop.return_value = self.NO_ATTENDANCE_LOP
         self._activate(wage=31000.0)
         mock_months.return_value = [
             {
@@ -80,7 +88,11 @@ class ComputeSalaryOnPeriodTests(TestCase):
         return_value={"day_wage": 1000.0},
     )
     @patch("payroll.methods.methods.get_leaves")
-    def test_monthly_deducts_unpaid_leaves(self, mock_leaves, _daily, mock_months):
+    @patch("payroll.methods.methods.get_attendance_lop_data")
+    def test_monthly_deducts_unpaid_leaves(
+        self, mock_attendance_lop, mock_leaves, _daily, mock_months
+    ):
+        mock_attendance_lop.return_value = self.NO_ATTENDANCE_LOP
         self._activate(wage=31000.0)
         mock_months.return_value = [
             {
@@ -102,7 +114,7 @@ class ComputeSalaryOnPeriodTests(TestCase):
     @patch("payroll.methods.methods.get_leaves", return_value=EMPTY_LEAVES)
     def test_daily_wage_uses_working_days(self, _leaves, mock_wd, _months):
         self._activate(wage_type="daily", wage=500.0)
-        mock_wd.return_value = {"total_working_days": 20}
+        mock_wd.return_value = {"total_working_days": 20, "working_days_on": []}
         data = compute_salary_on_period(self.employee, self.start, self.end)
         self.assertEqual(data["paid_days"], 20)
         self.assertEqual(data["unpaid_days"], 0)

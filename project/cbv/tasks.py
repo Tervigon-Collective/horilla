@@ -16,11 +16,12 @@ from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 
 from base.methods import get_subordinates
+from employee.models import Employee
 from horilla.http import HorillaRedirect
 from horilla.methods import handle_no_permission
 from horilla_views.cbv_methods import login_required
+from horilla_views.generic.cbv.kanban import HorillaKanbanView
 from horilla_views.generic.cbv.views import (
-    HorillaCardView,
     HorillaDetailedView,
     HorillaFormView,
     HorillaListView,
@@ -32,6 +33,7 @@ from project.cbv.project_stage import StageDynamicCreateForm
 from project.cbv.projects import DynamicProjectCreationFormView
 from project.filters import TaskAllFilter
 from project.forms import TaskAllForm
+from project.methods import employees_for_project
 from project.models import Project, ProjectStage, Task
 from project.templatetags.taskfilters import task_crud_perm
 
@@ -163,6 +165,23 @@ class TaskListView(HorillaListView):
         data-toggle="oh-modal-toggle"
     """
 
+    # Mirrors TasksNavBar.nested_group_by_fields below -- List and Nav
+    # are separate classes/templates (see employee/cbv/employees.py's
+    # EmployeesList/EmployeeNav for the same split). "Task Managers" and
+    # "Task Members" are deliberately left out: they're ManyToManyFields,
+    # and the nested engine's `values(*fields).annotate(Count("pk"))`
+    # aggregate would fan out one row per related employee, double-
+    # counting tasks with more than one manager/member assigned.
+    nested_group_by_fields = [
+        "title",
+        "project",
+        "stage",
+        "status",
+        "is_active",
+        "start_date",
+        "end_date",
+    ]
+
 
 @method_decorator(login_required, name="dispatch")
 class TasksNavBar(HorillaNavView):
@@ -174,6 +193,18 @@ class TasksNavBar(HorillaNavView):
         "project",
         "stage",
         "status",
+    ]
+    default_group_by = "project"
+
+    # Mirrors TaskListView.nested_group_by_fields
+    nested_group_by_fields = [
+        "title",
+        "project",
+        "stage",
+        "status",
+        "is_active",
+        "start_date",
+        "end_date",
     ]
     filter_form_context_name = "form"
     filter_instance = TaskAllFilter()
@@ -354,6 +385,10 @@ class TaskCreateForm(HorillaFormView):
                 + [(stage.pk, stage) for stage in stages]
                 + [("dynamic_create", _("Dynamic Create"))]
             )
+            dynamic_project = Project.objects.filter(id=dynamic_project_id).first()
+            employees = employees_for_project(dynamic_project)
+            self.form.fields["task_managers"].queryset = employees
+            self.form.fields["task_members"].queryset = employees
 
         if task_id and not dynamic_project_id:
             task = self.form.instance
@@ -372,11 +407,19 @@ class TaskCreateForm(HorillaFormView):
 
         if stage_id:
             stage = ProjectStage.objects.filter(id=stage_id).first()
-            project = stage.project
-            self.form.fields["stage"].initial = stage
-            self.form.fields["stage"].choices = [(stage.id, stage.title)]
-            self.form.fields["project"].initial = project
-            self.form.fields["project"].choices = [(project.id, project.title)]
+            if stage:
+                project = stage.project
+                self.form.fields["stage"].initial = stage
+                self.form.fields["stage"].choices = [(stage.id, stage.title)]
+                self.form.fields["stage"].widget = forms.HiddenInput()
+                self.form.fields["project"].initial = project
+                self.form.fields["project"].choices = [(project.id, project.title)]
+                self.form.fields["project"].widget = forms.HiddenInput()
+                self.form.initial["project"] = project.pk
+                self.form.initial["stage"] = stage.pk
+                employees = employees_for_project(project)
+                self.form.fields["task_managers"].queryset = employees
+                self.form.fields["task_members"].queryset = employees
         elif project_id:
             project = Project.objects.get(id=project_id)
             self.form.fields["project"].initial = project
@@ -385,6 +428,9 @@ class TaskCreateForm(HorillaFormView):
             self.form.fields["stage"].choices = [
                 (stage.id, stage.title) for stage in stages
             ]
+            employees = employees_for_project(project)
+            self.form.fields["task_managers"].queryset = employees
+            self.form.fields["task_members"].queryset = employees
         elif self.form.instance.pk:
             self.form_class.verbose_name = _("Update Task")
             if self.request.GET.get("project_task"):
@@ -495,13 +541,17 @@ class TaskDetailView(HorillaDetailedView):
 
 
 @method_decorator(login_required, name="dispatch")
-class TaskCardView(HorillaCardView):
+class TaskCardView(HorillaKanbanView):
     """
-    card view of the page
+    kanban card view of the page, with tasks arranged into columns by status
     """
 
     model = Task
     filter_class = TaskAllFilter
+    disable_group_by = True
+    filter_keys_to_remove = ["field"]
+    group_key = "status"
+    show_kanban_confirmation = False
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -547,7 +597,7 @@ class TaskCardView(HorillaCardView):
         ]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        self.queryset = super().get_queryset()
         active = (
             True
             if self.request.GET.get("is_active", True)
@@ -561,65 +611,23 @@ class TaskCardView(HorillaCardView):
             queryset = queryset.filter(
                 id__in=accessible_tasks_queryset(self.request).values("id")
             )
-        return queryset.distinct()
+        self.queryset = self.queryset.distinct()
+        return self.queryset
 
     details = {
-        "image_src": "get_avatar",
+        "image_src": "{get_avatar}",
         "title": "{title}",
-        "subtitle": "{card_view_subtitle}",
+        "Project": "{if_project}",
+        "Stage": "{stage}",
+        "End Date": "{end_date}",
     }
 
-    card_attrs = """
+    kanban_attrs = """
         hx-get='{task_detail_view}?instance_ids={ordered_ids}'
         hx-target="#genericModalBody"
         data-target="#genericModal"
         data-toggle="oh-modal-toggle"
     """
-
-    card_status_indications = [
-        (
-            "todo--dot",
-            _("To Do"),
-            """
-                onclick="
-                    $('#applyFilter').closest('form').find('[name=status]').val('to_do');
-                    $('#applyFilter').click();
-                "
-            """,
-        ),
-        (
-            "in-progress--dot",
-            _("In progress"),
-            """
-                onclick="
-                    $('#applyFilter').closest('form').find('[name=status]').val('in_progress');
-                    $('#applyFilter').click();
-                "
-            """,
-        ),
-        (
-            "completed--dot",
-            _("Completed"),
-            """
-                onclick="
-                    $('#applyFilter').closest('form').find('[name=status]').val('completed');
-                    $('#applyFilter').click();
-                "
-            """,
-        ),
-        (
-            "expired--dot",
-            _("Expired"),
-            """
-                onclick="
-                    $('#applyFilter').closest('form').find('[name=status]').val('expired');
-                    $('#applyFilter').click();
-                "
-            """,
-        ),
-    ]
-
-    card_status_class = "status-{status}"
 
 
 @method_decorator(login_required, name="dispatch")
@@ -654,3 +662,4 @@ class TasksInIndividualView(TaskListView):
     row_status_indications = None
     bulk_select_option = False
     action_method = None
+    custom_empty_template = "cbv/projects/compact_empty.html"

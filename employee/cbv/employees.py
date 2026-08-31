@@ -20,7 +20,7 @@ from django.utils.translation import gettext_lazy as _
 from accessibility.cbv_decorators import enter_if_accessible
 from accessibility.models import DefaultAccessibility
 from base.context_processors import enable_profile_edit
-from base.methods import has_export_access, is_reportingmanager
+from base.methods import eval_validate, has_export_access, is_reportingmanager
 from employee.filters import EmployeeFilter
 from employee.forms import BulkUpdateFieldForm, EmployeeExportExcelForm
 from employee.models import Employee, EmployeeBankDetails, EmployeeWorkInformation
@@ -118,6 +118,20 @@ class EmployeesList(HorillaListView):
     model = Employee
     filter_class = EmployeeFilter
     view_id = "view-container"
+    # Mirrors EmployeeNav.nested_group_by_fields below -- needed here too
+    # since this (List) and EmployeeNav are separate classes, and the
+    # inline "add/change field" dropdowns in the "Grouped by" breadcrumb
+    # (nested_group_by_table.html, rendered by this List view) need the
+    # full set of available fields, not just whichever ones are active.
+    nested_group_by_fields = [
+        ("employee_work_info__department_id", _("Department")),
+        ("employee_work_info__job_position_id", _("Job Position")),
+        ("employee_work_info__job_role_id", _("Job Role")),
+        ("employee_work_info__shift_id", _("Shift")),
+        ("employee_work_info__work_type_id", _("Work Type")),
+        ("employee_work_info__reporting_manager_id", _("Reporting Manager")),
+        ("employee_work_info__company_id", _("Company")),
+    ]
     # The "Actions" dropdown already has an Export entry that exports the
     # selected employees (falling back to the full filtered list when nothing
     # is selected), so this standalone quick-action button would just be a
@@ -127,12 +141,19 @@ class EmployeesList(HorillaListView):
     bulk_update_fields = [
         "experience",
         "gender",
+        "dob",
         "country",
         "state",
         "city",
+        "address",
         "zip",
         "marital_status",
         "children",
+        "emergency_contact",
+        "emergency_contact_name",
+        "emergency_contact_relation",
+        "employee_work_info__email",
+        "employee_work_info__mobile",
         "employee_work_info__department_id",
         "employee_work_info__job_position_id",
         "employee_work_info__job_role_id",
@@ -142,7 +163,17 @@ class EmployeesList(HorillaListView):
         "employee_work_info__employee_type_id",
         "employee_work_info__location",
         "employee_work_info__date_joining",
+        "employee_work_info__basic_salary",
+        "employee_work_info__salary_hour",
+        "employee_work_info__contract_end_date",
         "employee_work_info__company_id",
+        "employee_bank_details__bank_name",
+        "employee_bank_details__branch",
+        "employee_bank_details__any_other_code1",
+        "employee_bank_details__any_other_code2",
+        "employee_bank_details__country",
+        "employee_bank_details__state",
+        "employee_bank_details__city",
     ]
 
     import_fields = [
@@ -287,7 +318,40 @@ class EmployeesList(HorillaListView):
             ),
         )
 
+        form.fields["employee_bank_details__country"] = forms.ChoiceField(
+            required=False,
+            widget=forms.Select(
+                attrs={
+                    "class": "oh-select oh-select-2",
+                    "style": "width: 100%; height:45px;",
+                }
+            ),
+        )
+
+        form.fields["employee_bank_details__state"] = forms.ChoiceField(
+            required=False,
+            widget=forms.Select(
+                attrs={
+                    "class": "oh-select oh-select-2",
+                    "style": "width: 100%; height:45px;",
+                }
+            ),
+        )
+
         return form
+
+    def handle_bulk_submission(self, request):
+        """
+        Ensure work info / bank details rows exist for every selected employee
+        before the bulk update runs, mirroring the legacy bulk-update view, so
+        `employee_work_info__*` and `employee_bank_details__*` fields also get
+        applied to employees who don't have those related rows yet.
+        """
+        instance_ids = eval_validate(request.POST.get("instance_ids", "[]"))
+        for employee_id in instance_ids:
+            EmployeeWorkInformation.objects.get_or_create(employee_id_id=employee_id)
+            EmployeeBankDetails.objects.get_or_create(employee_id_id=employee_id)
+        return super().handle_bulk_submission(request)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -597,13 +661,6 @@ class EmployeeNav(HorillaNavView):
                         """,
                     },
                     {
-                        "action": _("Bulk Update"),
-                        "attrs": """
-                        id="employeeBulkUpdateId"
-                        style="cursor: pointer;"
-                        """,
-                    },
-                    {
                         "action": _("Delete"),
                         "attrs": """
                         class="oh-dropdown__link--danger"
@@ -649,6 +706,15 @@ class EmployeeNav(HorillaNavView):
         ("employee_work_info__shift_id", _("Shift")),
         ("employee_work_info__work_type_id", _("Work Type")),
         ("employee_work_info__job_role_id", _("Job Role")),
+        ("employee_work_info__reporting_manager_id", _("Reporting Manager")),
+        ("employee_work_info__company_id", _("Company")),
+    ]
+    nested_group_by_fields = [
+        ("employee_work_info__department_id", _("Department")),
+        ("employee_work_info__job_position_id", _("Job Position")),
+        ("employee_work_info__job_role_id", _("Job Role")),
+        ("employee_work_info__shift_id", _("Shift")),
+        ("employee_work_info__work_type_id", _("Work Type")),
         ("employee_work_info__reporting_manager_id", _("Reporting Manager")),
         ("employee_work_info__company_id", _("Company")),
     ]

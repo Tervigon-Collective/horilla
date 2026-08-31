@@ -510,7 +510,20 @@ class LeaveType(HorillaModel):
         return reset_date
 
     def set_expired_date(self, assigned_date):
-        period = self.carryforward_expire_in
+        """
+        Carryforward expiry, `carryforward_expire_in` periods after
+        `assigned_date`.
+
+        `assigned_date` may be a datetime (created_at) or a date, and may be
+        None on an unsaved row - auto_now_add does not populate created_at
+        until the first save() completes.
+        """
+        if not assigned_date:
+            return None
+
+        assigned_date = getattr(assigned_date, "date", lambda: assigned_date)()
+
+        period = self.carryforward_expire_in or 0
         if self.carryforward_expire_period == "day":
             expired_date = assigned_date + relativedelta(days=period)
         elif self.carryforward_expire_period == "month":
@@ -537,8 +550,11 @@ class LeaveType(HorillaModel):
             self.carryforward_type == "carryforward expire"
             and not self.carryforward_expire_date
         ):
+            # created_at is only populated once the row has been saved, so a
+            # newly created leave type has to fall back to now - otherwise
+            # creating a "carryforward expire" type raises TypeError.
             self.carryforward_expire_date = self.set_expired_date(
-                assigned_date=self.created_at
+                assigned_date=self.created_at or timezone.now()
             )
         elif self.carryforward_type != "carryforward expire":
             self.carryforward_expire_date = None
@@ -949,8 +965,18 @@ class AvailableLeave(HorillaModel):
                 assigned_date=self.assigned_date, available_leave=self
             )
 
-        # Logic for expired_date
-        if self.leave_type_id.carryforward_type == "carryforward expire":
+        # Logic for expired_date.
+        #
+        # Only seed this on insert, and only when the caller has not supplied
+        # one. Recomputing it on every save silently undid carry-forward
+        # expiry: expire_carryforward_days() sets expired_date=None and saves,
+        # and this put the leave type's date straight back, so the expiry never
+        # persisted and the record stayed permanently "due to expire".
+        if (
+            self.expired_date is None
+            and self._state.adding
+            and self.leave_type_id.carryforward_type == "carryforward expire"
+        ):
             expiry_date = self.assigned_date
             if self.leave_type_id.carryforward_expire_date:
                 expiry_date = self.leave_type_id.carryforward_expire_date
@@ -1141,9 +1167,10 @@ class LeaveRequest(HorillaModel):
         method for rendering detail view action
         """
 
+        current_date = date.today()
         return render_template(
             path="cbv/my_leave_request/detail_leave_actions.html",
-            context={"instance": self},
+            context={"instance": self, "current_date": current_date},
         )
 
     def get_period(self):

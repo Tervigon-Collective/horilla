@@ -192,6 +192,15 @@
     	$(".oh-tabs__content").removeClass("oh-tabs__content--active")
     	$(target).addClass("oh-tabs__content--active")
 
+    	// Generic hook for pages whose tabs are backed by different models
+    	// (e.g. asset request/allocation) and need to react to which tab is
+    	// now active -- e.g. scoping a shared Nav's Group By options to the
+    	// active tab's own fields. No listeners by default; dispatching this
+    	// unconditionally is a no-op for every other page.
+    	document.dispatchEvent(new CustomEvent('oh:tab-switched', {
+    		detail: { tabUrl: $elem.attr('data-tab-url'), target: target }
+    	}));
+
     	let url_target = `[data-target="${target}"]`
     	$.ajax({
     		type: "get",
@@ -247,7 +256,16 @@
     			$(el).attr('data-loaded', 'true');
     			var req = htmx.ajax('GET', url, {target: target, source: el});
     			if (req && typeof req.then === 'function') {
-    				return req.catch(function () {});
+    				// A failed/aborted request never swaps into `target`, so
+    				// it's left empty indefinitely with no indication
+    				// anything went wrong -- render an explicit retry state
+    				// instead of silently swallowing the failure.
+    				return req.catch(function () {
+    					$(el).removeAttr('data-loaded');
+    					if (typeof renderLoadFailure === 'function') {
+    						renderLoadFailure(target, null, "htmx.ajax('GET', '" + url + "', {target: '" + target + "'});");
+    					}
+    				});
     			}
     			return $.Deferred().resolve().promise();
     		}

@@ -22,12 +22,16 @@ function makeListUnique(list) {
     return Array.from(new Set(list));
 }
 
-tickactivityCheckboxes();
+if (typeof tickactivityCheckboxes === "function") {
+    tickactivityCheckboxes();
+}
 function makeactivityListUnique(list) {
     return Array.from(new Set(list));
 }
 
-ticklatecomeCheckboxes();
+if (typeof ticklatecomeCheckboxes === "function") {
+    ticklatecomeCheckboxes();
+}
 function makelatecomeListUnique(list) {
     return Array.from(new Set(list));
 }

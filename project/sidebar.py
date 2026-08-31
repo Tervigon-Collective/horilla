@@ -9,7 +9,6 @@ from django.utils.translation import gettext_lazy as _
 from base.templatetags.basefilters import is_reportingmanager
 from project.methods import (
     any_project_manager,
-    any_project_member,
     any_task_manager,
     any_task_member,
     can_create_project,
@@ -53,7 +52,6 @@ def menu_accessibilty(
         "project" in user_perms
         # or has_subordinates(request)
         or any_project_manager(user)
-        or any_project_member(user)
         or any_task_manager(user)
         or any_task_member(user)
         or can_create_project(request)
@@ -80,7 +78,6 @@ def project_accessibility(request, submenu, user_perms, *args, **kwargs):
         user.has_perm("project.view_project")
         # or has_subordinates(request)
         or any_project_manager(user)
-        or any_project_member(user)
         or any_task_manager(user)
         or any_task_member(user)
         or can_create_project(request)
@@ -96,7 +93,6 @@ def task_accessibility(request, submenu, user_perms, *args, **kwargs):
         user.has_perm("project.view_task")
         # or has_subordinates(request)
         or any_project_manager(user)
-        or any_project_member(user)
         or any_task_manager(user)
         or any_task_member(user)
         or can_create_project(request)
@@ -112,7 +108,6 @@ def timesheet_accessibility(request, submenu, user_perms, *args, **kwargs):
         user.has_perm("project.view_timesheet")
         # or has_subordinates(request)
         or any_project_manager(user)
-        or any_project_member(user)
         or any_task_manager(user)
         or any_task_member(user)
         or can_create_project(request)

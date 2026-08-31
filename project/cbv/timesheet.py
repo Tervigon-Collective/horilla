@@ -72,6 +72,22 @@ class TimeSheetNavView(HorillaNavView):
         "employee_id__employee_work_info__company_id",
     ]
 
+    # Mirrors TimeSheetList.nested_group_by_fields below -- List and Nav
+    # are separate classes/templates (see employee/cbv/employees.py's
+    # EmployeesList/EmployeeNav for the same split).
+    nested_group_by_fields = [
+        "employee_id",
+        "project_id",
+        "task_id",
+        "date",
+        "status",
+        "employee_id__employee_work_info__reporting_manager_id",
+        "employee_id__employee_work_info__department_id",
+        "employee_id__employee_work_info__job_position_id",
+        "employee_id__employee_work_info__employee_type_id",
+        "employee_id__employee_work_info__company_id",
+    ]
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.search_url = reverse("time-sheet-list")
@@ -224,6 +240,20 @@ class TimeSheetList(HorillaListView):
 
     row_status_class = "status-{status}"
 
+    # Mirrors TimeSheetNavView.nested_group_by_fields
+    nested_group_by_fields = [
+        "employee_id",
+        "project_id",
+        "task_id",
+        "date",
+        "status",
+        "employee_id__employee_work_info__reporting_manager_id",
+        "employee_id__employee_work_info__department_id",
+        "employee_id__employee_work_info__job_position_id",
+        "employee_id__employee_work_info__employee_type_id",
+        "employee_id__employee_work_info__company_id",
+    ]
+
 
 @method_decorator(login_required, name="dispatch")
 @method_decorator(
@@ -369,16 +399,12 @@ class TimeSheetFormView(HorillaFormView):
             if can_view_all_projects(self.request):
                 members = (
                     project.managers.all()
-                    | project.members.all()
                     | task.task_members.all()
                     | task.task_managers.all()
                 ).distinct()
             elif actor and actor in project.managers.all():
                 members = (
-                    employee
-                    | project.members.all()
-                    | task.task_members.all()
-                    | task.task_managers.all()
+                    employee | task.task_members.all() | task.task_managers.all()
                 ).distinct()
             elif actor and actor in task.task_managers.all():
                 members = (employee | task.task_members.all()).distinct()

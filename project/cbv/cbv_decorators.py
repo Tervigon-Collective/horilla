@@ -5,7 +5,6 @@ from horilla.horilla_middlewares import _thread_locals
 from horilla.http import HorillaRedirect
 from project.methods import (
     any_project_manager,
-    any_project_member,
     any_task_manager,
     any_task_member,
     can_create_project,
@@ -35,7 +34,6 @@ def is_projectmanager_or_member_or_perms(function, perm):
         if (
             user.has_perm(perm)
             or any_project_manager(user)
-            or any_project_member(user)
             or any_task_manager(user)
             or any_task_member(user)
             or can_create_project(request)

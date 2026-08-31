@@ -69,6 +69,21 @@ def generate_colors(num_colors):
     return colors
 
 
+def employees_for_project(project):
+    """
+    Employees eligible to be selected as managers/members for the given
+    project. Restricted to the project's own company; projects without a
+    company assignment (legacy data) are left unrestricted.
+    """
+    if not project:
+        return Employee.objects.none()
+    if project.company_id:
+        return Employee.objects.filter(
+            employee_work_info__company_id=project.company_id
+        )
+    return Employee.objects.all()
+
+
 def any_project_manager(user):
     employee = user.employee_get
     if employee.project_managers.all().exists():

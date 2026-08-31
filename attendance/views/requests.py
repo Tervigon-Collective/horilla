@@ -437,7 +437,7 @@ def validate_attendance_request(request, attendance_id):
         other_dict = first_dict
         first_dict = empty_data
     else:
-        requested_data = attendance.requested_data
+        requested_data = attendance.requested_data or {}
         other_dict = (
             requested_data
             if isinstance(requested_data, dict)
@@ -613,12 +613,17 @@ def cancel_attendance_request(request, attendance_id):
     """
     This method is used to cancel attendance request
     """
+    from employee.cbv.accessibility import can_manage_employee_action
+
     try:
         attendance = Attendance.objects.get(id=attendance_id)
-        if (
-            attendance.employee_id.employee_user_id == request.user
-            or is_reportingmanager(request)
-            or request.user.has_perm("attendance.change_attendance")
+        # Own request, or someone who manages *this* employee (HR/admin/perm
+        # holder included). is_reportingmanager() only asks "manages anyone",
+        # which let any manager reject any employee's request.
+        if attendance.employee_id.employee_user_id == request.user or (
+            can_manage_employee_action(
+                request, attendance.employee_id, "attendance.change_attendance"
+            )
         ):
             attendance.is_validate_request_approved = False
             attendance.is_validate_request = False
@@ -724,6 +729,16 @@ def bulk_approve_attendance_request(request):
             filtered_ids.append(attendance_id)
     if request.user.is_superuser:
         filtered_ids = ids
+    skipped = len(ids) - len(filtered_ids)
+    if skipped:
+        messages.warning(
+            request,
+            _(
+                "%(count)s request(s) were skipped - you can only approve requests "
+                "of employees who report to you."
+            )
+            % {"count": skipped},
+        )
     for attendance_id in filtered_ids:
         attendance = Attendance.objects.get(id=attendance_id)
         prev_attendance_date = attendance.attendance_date
@@ -841,14 +856,17 @@ def bulk_reject_attendance_request(request):
     """
     This method is used to delete bulk attendance request
     """
+    from employee.cbv.accessibility import can_manage_employee_action
+
     ids = json.loads(request.POST.get("ids", "[]"))
+    skipped = 0
     for attendance_id in ids:
         try:
             attendance = Attendance.objects.get(id=attendance_id)
-            if (
-                attendance.employee_id.employee_user_id == request.user
-                or is_reportingmanager(request)
-                or request.user.has_perm("attendance.change_attendance")
+            if attendance.employee_id.employee_user_id == request.user or (
+                can_manage_employee_action(
+                    request, attendance.employee_id, "attendance.change_attendance"
+                )
             ):
                 attendance.is_validate_request_approved = False
                 attendance.is_validate_request = False
@@ -876,8 +894,19 @@ def bulk_reject_attendance_request(request):
                     redirect=reverse("request-attendance-view")
                     + f"?id={attendance.id}",
                 )
+            else:
+                skipped += 1
         except (Attendance.DoesNotExist, OverflowError):
             messages.error(request, _("Attendance request not found"))
+    if skipped:
+        messages.warning(
+            request,
+            _(
+                "%(count)s request(s) were skipped - you can only act on your own "
+                "requests or those of employees who report to you."
+            )
+            % {"count": skipped},
+        )
     return HttpResponse("success")
 
 

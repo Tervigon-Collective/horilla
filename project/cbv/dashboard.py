@@ -74,7 +74,6 @@ class ProjectDetailView(HorillaDetailedView):
 
     cols = {
         "get_managers": 12,
-        "get_members": 12,
         "description": 12,
     }
 
@@ -91,7 +90,7 @@ class ProjectDetailView(HorillaDetailedView):
                     "action": _("View Project"),
                     "icon": "create-outline",
                     "attrs": """
-                    class = "oh-btn oh-btn--info w-100"
+                    class = "oh-btn oh-btn--primary w-100"
                     {redirect}
                 """,
                 }
@@ -109,7 +108,6 @@ class ProjectDetailView(HorillaDetailedView):
         get_field = self.model()._meta.get_field
         return [
             (get_field("managers").verbose_name, "get_managers"),
-            (get_field("members").verbose_name, "get_members"),
             (get_field("status").verbose_name, "get_status_display"),
             (_("No of Tasks"), "task_count"),
             (get_field("start_date").verbose_name, "start_date"),

@@ -24,7 +24,11 @@ from employee.models import (
     EmployeeBankDetails,
     EmployeeWorkInformation,
 )
-from horilla.horilla_middlewares import _thread_locals, set_selected_company
+from horilla.horilla_middlewares import (
+    _thread_locals,
+    get_selected_company,
+    set_selected_company,
+)
 from horilla.methods import get_horilla_model_class
 from horilla_documents.models import DocumentRequest
 
@@ -340,7 +344,25 @@ class CompanyMiddleware:
     def __call__(self, request):
         # ✅ make request globally accessible (safe)
         _thread_locals.request = request
+        # _handle() sets the current_company_id ContextVar. A ContextVar is not
+        # per-request -- it lives on the thread/context -- so without restoring
+        # it here the company selected by one request stays visible to the next
+        # piece of work on that thread. HorillaCompanyManager.get_queryset()
+        # reads it and silently filters every query to that company, which in
+        # tests makes a freshly created fixture invisible to the very next test
+        # (Employee.objects.get(pk=...) raising DoesNotExist, holidays not
+        # matching is_holiday(), ...).
+        previous_company = get_selected_company()
+        try:
+            return self._handle(request)
+        finally:
+            # Threads are reused across requests and across tests, so a request
+            # left here outlives its own lifecycle. HorillaModel.save() reads it
+            # to stamp created_by/modified_by, which then point at a stale user.
+            _thread_locals.request = None
+            set_selected_company(previous_company)
 
+    def _handle(self, request):
         if not request.user.is_authenticated:
             set_selected_company(None)
             return self.get_response(request)

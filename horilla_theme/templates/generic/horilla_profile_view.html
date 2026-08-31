@@ -240,7 +240,7 @@
                                 navBar.style.display = '';
                                 var tagRow = navBar.querySelector('#filterTagContainerSectionNav');
                                 if (tagRow) { tagRow.innerHTML = ''; }
-                                list.innerHTML = '<div class=&quot;animated-background&quot;></div>';
+                                list.innerHTML = '';
                                 setTimeout(function () {
                                     var btn = document.getElementById('applyFilter');
                                     if (btn) { btn.click(); }
@@ -369,7 +369,8 @@
                                 data-tab="{{tab.title}}"
                                 class="bg-white {% if forloop.counter == 1 and not active_target %} active {% endif %}"
                             >
-                                {{ tab.title }}
+                                {# label only — data-tab and tab.url stay untranslated for routing #}
+                                {% trans tab.title %}
                             </button>
                         </li>
                     {% endif %}

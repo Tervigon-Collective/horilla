@@ -19,9 +19,9 @@ urlpatterns = [
         name="project-dashboard-kpi",
     ),
     path(
-        "dashboard/api/status/",
-        proj_dashboard.project_status_distribution,
-        name="project-dashboard-status",
+        "dashboard/api/pipeline/",
+        proj_dashboard.project_status_pipeline,
+        name="project-dashboard-pipeline",
     ),
     path(
         "dashboard/api/tasks/",
@@ -34,14 +34,19 @@ urlpatterns = [
         name="project-dashboard-trend",
     ),
     path(
-        "dashboard/api/deadlines/",
-        proj_dashboard.project_upcoming_deadlines,
-        name="project-dashboard-deadlines",
-    ),
-    path(
         "dashboard/api/top/",
         proj_dashboard.project_top_active,
         name="project-dashboard-top",
+    ),
+    path(
+        "dashboard/api/contributors/",
+        proj_dashboard.project_top_contributors,
+        name="project-dashboard-contributors",
+    ),
+    path(
+        "dashboard/api/task-deadlines/",
+        proj_dashboard.project_task_deadlines,
+        name="project-dashboard-task-deadlines",
     ),
     path(
         "projects-due-in-this-month/",
@@ -141,7 +146,11 @@ urlpatterns = [
     path("delete-task/<int:task_id>/", views.delete_task, name="delete-task"),
     path("task-details/<int:task_id>/", views.task_details, name="task-details"),
     path("task-filter/<int:project_id>/", views.task_filter, name="task-filter"),
-    path("task-stage-change/", views.task_stage_change, name="task-stage-change"),
+    path(
+        "task-stage-change/<int:task_id>/",
+        views.task_stage_change,
+        name="task-stage-change",
+    ),
     # path("task-timesheet/<int:task_id>/", views.task_timesheet, name="task-timesheet"),
     path(
         "task-timesheet/<int:task_id>/",

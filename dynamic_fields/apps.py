@@ -19,6 +19,10 @@ class DynamicFieldsConfig(AppConfig):
     name = "dynamic_fields"
 
     def ready(self):
+        # Wire signals here rather than in migrations/__init__.py, which the
+        # test loader imports outside the app registry.
+        from dynamic_fields import signals  # noqa: F401
+
         from django.contrib.contenttypes.models import ContentType
         from simple_history.models import HistoricalRecords
 

@@ -155,7 +155,12 @@ class HorillaCompanyManager(models.Manager):
             if filter_ids is None:
                 return qs
             if not filter_ids:
-                return qs.none()
+                # No company assignments yet. Returning none() hid every
+                # company-agnostic row too (company_id IS NULL) - seeded product
+                # tours, global settings - so such a user saw an empty app. The
+                # specific-company branch below already lets NULL rows through;
+                # match it, which still exposes no other company's data.
+                return qs.filter(**{f"{filter_path}__isnull": True})
             try:
                 return qs.filter(
                     Q(**{f"{filter_path}__in": list(filter_ids)})

@@ -21,6 +21,15 @@ class ManagerPermission403Tests(TestCase):
             email="api_mgr403@test.horilla",
             user=self.user,
         )
+        # New employees are auto-added to the default "Employee" role, which
+        # grants attendance.view_attendance for self-service. Drop it so this
+        # case really is "user without the permission" - otherwise the 403
+        # assertion silently tests nothing.
+        self.user.groups.clear()
+        # COMPANY_SCOPED_PERMISSIONS resolves perms through CompanyGroupAssignment
+        # rather than user.groups, so that grant has to go as well.
+        self.user.company_group_assignments.all().delete()
+        self.user = type(self.user).objects.get(pk=self.user.pk)
 
     def test_missing_manager_perm_returns_403(self):
         self.client.force_authenticate(user=self.user)

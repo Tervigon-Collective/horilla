@@ -20,7 +20,20 @@ if (typeof i18nMessages === 'undefined') {
         candidateStageChange: gettext(
             "Are you sure to change the candidate from %(from)s stage to %(to)s stage"
         ),
+        retry: gettext("Retry"),
+        loadFailed: gettext("Something went wrong while loading this data."),
+        loadFailedStatus: gettext("Request failed (status %(status)s)."),
+        loadTimeout: gettext("The request took too long to respond."),
     }
+}
+
+// Blanket safety net for every htmx request on the page, including
+// programmatic htmx.ajax() calls (e.g. HorillaTabView's tab-content loads)
+// that don't set their own hx-timeout. htmx's own default (0) never times
+// out a hung request, so without this a stalled server response leaves
+// the swap target empty indefinitely with no error ever surfacing.
+if (typeof htmx !== "undefined" && !htmx.config.timeout) {
+    htmx.config.timeout = 15000;
 }
 
 var confirmModal = {
@@ -120,6 +133,45 @@ function hlvSelectAllRecords(btn, viewSelector, storeKey) {
     }
 }
 
+/**
+ * Inverse of hlvSelectAllRecords: drop a specific set of ids (e.g. every
+ * record in one group) out of the shared selection, not the whole store.
+ * Selected ids can span pages/groups the DOM never rendered, so this can't
+ * rely solely on unchecking on-page checkboxes -- it patches data-ids
+ * directly first, then syncs whichever of those rows do happen to be
+ * on-page (via a real checkbox uncheck + change event, so highlightRow and
+ * every other change-bound handler still runs normally).
+ */
+function hlvUnselectRecords(btn, viewSelector, storeKey) {
+    storeKey = storeKey || "selectedInstances";
+    var idsToRemove = [];
+    try {
+        idsToRemove = JSON.parse($(btn).attr("data-select-ids") || "[]").map(String);
+    } catch (e) {
+        idsToRemove = [];
+    }
+    var removeSet = new Set(idsToRemove);
+
+    var $store = ensureSelectionStore(storeKey);
+    var ids = JSON.parse($store.attr("data-ids") || "[]")
+        .map(String)
+        .filter(function (id) { return !removeSet.has(id); });
+    $store.attr("data-ids", JSON.stringify(ids));
+    setStoredSelection(storeKey, ids);
+
+    var $scope = $(viewSelector).filter(".hlv-container");
+    if (!$scope.length) $scope = $(viewSelector).first();
+    $scope.find(".list-table-row").each(function () {
+        if (removeSet.has(String($(this).val())) && $(this).is(":checked")) {
+            $(this).prop("checked", false).trigger("change");
+        }
+    });
+
+    var viewId = (viewSelector || "").replace(/^#/, "");
+    reloadSelectedCount($(`#count_${viewId}`), storeKey);
+    reloadSelectedCount($(`.count_${viewId}`), storeKey);
+}
+
 // Used by the "Unselect"/"Unselect All Records" actions so the clear is
 // persisted synchronously - the MutationObserver mirror below is async
 // (fires on the next microtask), which left a window where hitting reload
@@ -192,11 +244,11 @@ function setStoredSelection(storeKey, ids) {
 // immediately undone by the very next selectSelected() call.
 var _hlvSelectionRestored = {};
 
-// Selection ids are written to the DOM in several places (inline template
-// onclick handlers, addToSelectedId, the checkbox .change() handler below) -
-// rather than hook every call site, watch the attribute itself so every path
-// stays mirrored into localStorage.
 $(document).ready(function () {
+    // Selection ids are written to the DOM in several places (inline template
+    // onclick handlers, addToSelectedId, the checkbox .change() handler below) -
+    // rather than hook every call site, watch the attribute itself so every path
+    // stays mirrored into localStorage.
     var selectionObserver = new MutationObserver(function (mutations) {
         mutations.forEach(function (mutation) {
             var el = mutation.target;
@@ -209,6 +261,37 @@ $(document).ready(function () {
         attributes: true,
         attributeFilter: ["data-ids"],
         subtree: true,
+    });
+
+    // Clear modal target contents when closed to prevent duplicate DOM IDs
+    var modalObserver = new MutationObserver(function (mutations) {
+        mutations.forEach(function (mutation) {
+            if (mutation.attributeName === "class") {
+                var el = mutation.target;
+                // If the modal was just closed (lost oh-modal--show class)
+                if (!$(el).hasClass("oh-modal--show")) {
+                    var clearableModals = [
+                        "objectCreateModal",
+                        "objectUpdateModal",
+                        "dynamicCreateModal",
+                        "objectDetailsModal",
+                        "objectDetailsModalW25",
+                        "genericModal"
+                    ];
+                    if (clearableModals.includes(el.id)) {
+                        setTimeout(function() {
+                            if (!$(el).hasClass("oh-modal--show")) {
+                                $(el).find(".oh-modal__dialog").empty();
+                            }
+                        }, 200); // 200ms delay to allow any close transitions to finish
+                    }
+                }
+            }
+        });
+    });
+
+    $(".oh-modal").each(function () {
+        modalObserver.observe(this, { attributes: true });
     });
 });
 
@@ -825,25 +908,69 @@ function reloadMessage(e) {
     $("#reloadMessagesButton").click();
 }
 
-function htmxLoadIndicator(e) {
-    var target = $(e).attr("hx-target");
-    var table = $(target).find("table");
-    var card = $(target).find(".oh-card__body");
-    var kanban = $(target).find(".oh-kanban-card");
+// Star-rating widgets (e.g. helpdesk ticket priority) submit their form on
+// the radio's own "change" event rather than a click handler on an ancestor
+// element. A click on the <label> that visually draws the star fires TWO
+// bubbling click events (one on the label itself, one the browser forwards
+// to its associated radio input as label-activation behavior), so an
+// ancestor onclick submits the form twice. "change" fires exactly once per
+// actual value change regardless of how many click events led to it.
+$(document).on("change", ".rating-radio", function () {
+    $(this).closest("form").find("button[type=submit]").click();
+});
 
-    if (table.length) {
-        table.addClass("is-loading");
-        table.find("th, td").empty();
+// Intentionally a no-op: the loading skeleton/placeholder animation has
+// been removed project-wide. Kept as a function (rather than deleted)
+// because it's still wired up via hx-on:submit="htmxLoadIndicator(this);"
+// across many templates -- removing the function entirely would throw a
+// ReferenceError on every one of those pages. The swap target is simply
+// left as whatever it already showed until the real response replaces it.
+function htmxLoadIndicator(e) {}
+
+/**
+ * Shared failure fallback for any lazy-loaded swap target (the nav filter
+ * form's hx-get for list/card views, and HorillaTabView's own tab-content
+ * htmx.ajax() loads). Without this, a non-2xx response, a network failure,
+ * or a hung request leaves the swap target exactly as it was (empty, on
+ * first load) with no indication anything went wrong, indistinguishable
+ * from "still loading".
+ *
+ * @param {string} targetSelector - CSS selector for the swap target.
+ * @param {Event} [evt] - the htmx:responseError/sendError/timeout event, if any.
+ * @param {string} [retryOnClick] - JS to run when the Retry button is clicked;
+ *        defaults to re-submitting the shared nav filter form.
+ */
+function renderLoadFailure(targetSelector, evt, retryOnClick) {
+    var $target = $(targetSelector);
+    if (!$target.length) {
+        return;
     }
-    if (card.length) {
-        card.addClass("is-loading");
+    var reason = "";
+    if (evt && evt.type === "htmx:timeout") {
+        reason = i18nMessages.loadTimeout || "The request took too long to respond.";
+    } else if (evt && evt.detail && evt.detail.xhr && evt.detail.xhr.status) {
+        reason = (i18nMessages.loadFailedStatus || "Request failed (status %(status)s).").replace(
+            "%(status)s",
+            evt.detail.xhr.status
+        );
+    } else {
+        reason = i18nMessages.loadFailed || "Something went wrong while loading this data.";
     }
-    if (kanban.length) {
-        kanban.addClass("is-loading");
-    }
-    if (!table.length && !card.length && !kanban.length) {
-        $(target).html(`<div class="animated-background"></div>`);
-    }
+    $target.html(
+        `<div class="oh-load-error d-flex flex-column align-items-center justify-content-center text-center p-4">
+            <p class="mb-2">${reason}</p>
+            <button type="button" class="oh-btn oh-btn--secondary oh-btn--small" onclick="${retryOnClick || "$('#applyFilter').click();"}">
+                ${i18nMessages.retry || "Retry"}
+            </button>
+        </div>`
+    );
+}
+
+/** hx-on::response-error / hx-on::send-error / hx-on::timeout handler for
+ * the nav filter form -- `e` is the form element, its hx-target names the
+ * swap target that would otherwise be left showing the skeleton forever. */
+function htmxLoadFailIndicator(e, evt) {
+    renderLoadFailure($(e).attr("hx-target"), evt);
 }
 
 function hxConfirm(element, messageText) {
@@ -1286,34 +1413,6 @@ $(document).on('click', '.oh-kanban__card-body-collapse', function (e) {
 
 
 
-// $(document).on("htmx:beforeRequest", function (event, data) {
-//     var isSortTrigger = $(event.target).is(".arrow-up, .arrow-down, .arrow-up-down");
-//     if (
-//         !isSortTrigger &&
-//         !Array.from(event.target.getAttributeNames()).some((attr) =>
-//             attr.startsWith("hx-on")
-//         )
-//     ) {
-//         var response = event.detail.xhr.response;
-//         var target = $(event.detail.elt.getAttribute("hx-target"));
-//         var avoid_target_ids = [
-//             "BiometricDeviceTestFormTarget",
-//             "reloadMessages",
-//             "infinite",
-//             "OtpContainer",
-//             "attendance-activity-container"
-//         ];
-//         var avoid_target_class = ["oh-badge--small"];
-//         if (
-//             !target.closest("form").length &&
-//             !avoid_target_ids.includes(target.attr("id")) &&
-//             !avoid_target_class.some((cls) => target.hasClass(cls))
-//         ) {
-//             target.html(`<div class="animated-background"></div>`);
-//         }
-//     }
-// });
-
 $(document).on("click", ".select2-selection__choice__remove", function (event) {
     if ($('[role="tooltip"]:visible').length) {
         $('[role="tooltip"]').hide();
@@ -1394,16 +1493,27 @@ $(document).on("htmx:afterSwap", function () {
     // reason) -- this handler fires on EVERY htmx swap anywhere on the page,
     // so a modal reopened more than once was hitting this repeatedly.
     $("[data-summernote]").each(function () {
-        if ($(this).next(".note-editor").length > 0) {
+        var $source = $(this);
+        if ($source.next(".note-editor").length > 0) {
             return;
         }
-        $(this).summernote({
+        // Summernote hides the field it is attached to. The browser cannot
+        // focus a hidden control to report a constraint violation, so a
+        // `required` one aborts the whole submit ("An invalid form control
+        // ... is not focusable") — no submit event, no request, and the Save
+        // button appears dead. Leave the required check to the server, which
+        // renders its error inline under the field.
+        this.removeAttribute("required");
+        $source.summernote({
             height: 300,
             codeviewFilter: false,
             codeviewIframeFilter: false,
             callbacks: {
                 onChange: function (contents) {
-                    $('[name="body"]').val(contents);
+                    // Write back to the edited field itself — targeting
+                    // [name="body"] pushed the text into an unrelated field
+                    // whenever the editor was attached to anything else.
+                    $source.val(contents);
                 },
             },
         });
@@ -1443,6 +1553,12 @@ function initializeSummernote(candId, searchWords) {
     if ($body.next(".note-editor").length > 0) {
         $body.summernote("destroy");
     }
+    // Same hidden-required trap as the [data-summernote] init above: the
+    // browser cannot report a violation on the hidden source field, so a
+    // `required` mail body silently blocks the whole form submit.
+    $body.each(function () {
+        this.removeAttribute("required");
+    });
     $body.summernote({
         hint: {
             mentions: mentions,

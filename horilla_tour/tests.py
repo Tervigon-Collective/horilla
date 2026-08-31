@@ -9,7 +9,7 @@ tours (getting-started, dashboard-overview) which the API tests rely on.
 
 import json
 
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from base.models import Company
@@ -82,6 +82,7 @@ class TourApiTests(TestCase):
         resp = self.client.get(self.active_url, {"page": "dashboard"})
         self.assertIn(resp.status_code, (302, 401, 403))
 
+    @override_settings(DISABLE_AUTO_TOURS=False)
     def test_seeded_getting_started_autostarts_for_admin(self):
         self.client.force_login(self.admin)
         tours = self._active("dashboard")
@@ -108,6 +109,7 @@ class TourApiTests(TestCase):
         self.client.force_login(self.admin)
         self.assertNotIn("draft-tour", self._active("dashboard"))
 
+    @override_settings(DISABLE_AUTO_TOURS=False)
     def test_progress_completion_suppresses_autostart(self):
         self.client.force_login(self.admin)
         gs = Tour.objects.get(slug="getting-started")

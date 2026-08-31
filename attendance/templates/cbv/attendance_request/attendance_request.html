@@ -29,7 +29,7 @@
 
     {# Panel sizing for the tabs on this page is handled by the site-wide #}
     {# script in horilla_theme/components/header_scripts.html. #}
-    <div hx-get="{% url 'attendance-request-nav' %}" hx-trigger="load"></div>
+    <div hx-get="{% url 'attendance-request-nav' %}?{{ request.GET.urlencode }}" hx-trigger="load"></div>
 
     {% include "generic/components.html" %}
 
@@ -43,7 +43,6 @@
     </div>
 
     <div class="oh-wrapper" id="listContainer">
-        <div class="animated-background"></div>
     </div>
 
     <div class="oh-activity-sidebar" id="activitySidebar" style="z-index: 1000">

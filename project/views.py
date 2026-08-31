@@ -283,8 +283,13 @@ def change_project_status(request, project_id):
                     request,
                     _(f"{project} status updated to {project.get_status_display()}."),
                 )
-                # Notify all project managers and members
-                employees = (project.managers.all() | project.members.all()).distinct()
+                # Notify all project managers and task managers/members
+                employees = project.managers.all()
+                for task in project.task_set.all():
+                    employees = (
+                        employees | task.task_managers.all() | task.task_members.all()
+                    )
+                employees = employees.distinct()
                 for employee in employees:
                     try:
                         notify.send(
@@ -386,7 +391,6 @@ def project_import(request):
                 # getting datas from imported file
                 title = project["Title"]
                 manager_badge_id = convert_nan("Manager Badge id", project)
-                member_badge_id = convert_nan("Member Badge id", project)
                 status = project["Status"]
                 start_date = project["Start Date"]
                 end_date = project["End Date"]
@@ -418,22 +422,6 @@ def project_import(request):
                     #         f"{manager_badge_id} - This badge not exist"
                     #     )
                     #     is_save = False
-
-                # getting employee using badge id, for member
-                if member_badge_id:
-                    ids = member_badge_id.split(",")
-                    error_ids = []
-                    employees = []
-                    for id in ids:
-                        if Employee.objects.filter(badge_id=id).exists():
-                            employee = Employee.objects.filter(badge_id=id).first()
-                            employees.append(employee)
-                        else:
-                            error_ids.append(id)
-                            is_save = False
-                    if error_ids:
-                        ids = ",".join(map(str, error_ids))
-                        project["Member error"] = f"{ids} - This id not exists"
 
                 if status:
                     if status not in [stat for stat, _ in Project.PROJECT_STATUS]:
@@ -501,9 +489,6 @@ def project_import(request):
                     for manager in managers:
                         project_obj.managers.add(manager)
                     project_obj.save()
-                    for member in employees:
-                        project_obj.members.add(member)
-                    project_obj.save()
                 else:
                     error_lists.append(project)
 
@@ -557,7 +542,6 @@ def project_bulk_export(request):
     headers = [
         "Title",
         "Managers",
-        "Members",
         "Status",
         "Start Date",
         "End Date",
@@ -569,7 +553,6 @@ def project_bulk_export(request):
         data = {
             "Title": f"{project.title}",
             "Managers": f"{',' .join([manager.employee_first_name + ' ' + manager.employee_last_name for manager in project.managers.all()]) if project.managers.exists() else ''}",
-            "Members": f"{',' .join([member.employee_first_name + ' ' + member.employee_last_name for member in project.members.all()]) if project.members.exists() else ''}",
             "Status": f"{project.status}",
             "Start Date": f'{project.start_date.strftime("%Y-%m-%d")}',
             "End Date": f'{project.end_date.strftime("%Y-%m-%d") if project.end_date else ""}',
@@ -995,7 +978,7 @@ def task_filter(request, project_id):
 
 
 @login_required
-def task_stage_change(request):
+def task_stage_change(request, task_id):
     """
     This method is used to change the current stage of a task
     """
