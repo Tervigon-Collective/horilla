@@ -117,6 +117,7 @@ from base.forms import (
 )
 from base.methods import (
     check_chart_permission,
+    check_manager,
     choosesubordinates,
     closest_numbers,
     export_data,
@@ -168,6 +169,7 @@ from base.models import (
     WorkTypeRequest,
     WorkTypeRequestComment,
 )
+from employee.cbv.accessibility import can_manage_employee_action
 from employee.filters import EmployeeFilter
 from employee.forms import ActiontypeForm, EmployeeGeneralSettingPrefixForm
 from employee.models import (
@@ -238,16 +240,18 @@ def custom404(request):
 def is_reportingmanger(request, instance):
     """
     If the instance have employee id field then you can use this method to know the request
-    user employee is the reporting manager of the instance
+    user employee is the reporting manager of the instance.
+
+    Always returns a bool. The previous version returned an HttpResponse when
+    the employee had no work information; that object is truthy, so callers
+    guarding approvals with it granted the action to anyone whenever the
+    subject's work info was missing. Delegates to check_manager so nested
+    reporting lines resolve the same way as everywhere else.
     """
-    manager = request.user.employee_get
     try:
-        employee_work_info_manager = (
-            instance.employee_id.employee_work_info.reporting_manager_id
-        )
+        return check_manager(request.user.employee_get, instance)
     except Exception:
-        return HttpResponse("This Employee Dont Have any work information")
-    return manager == employee_work_info_manager
+        return False
 
 
 def initialize_database_condition():
@@ -7415,7 +7419,9 @@ def delete_shift_comment_file(request):
     if (
         request.user.employee_get == comment.employee_id
         or request.user.has_perm("base.delete_baserequestfile")
-        or is_reportingmanager(request)
+        or can_manage_employee_action(
+            request, comment.request_id.employee_id, "base.delete_baserequestfile"
+        )
     ):
         BaserequestFile.objects.filter(id__in=ids).delete()
         messages.success(request, _("File deleted successfully"))
@@ -7497,7 +7503,9 @@ def delete_work_type_comment_file(request):
     if (
         request.user.employee_get == comment.employee_id
         or request.user.has_perm("base.delete_baserequestfile")
-        or is_reportingmanager(request)
+        or can_manage_employee_action(
+            request, comment.request_id.employee_id, "base.delete_baserequestfile"
+        )
     ):
         BaserequestFile.objects.filter(id__in=ids).delete()
         messages.success(request, _("File deleted successfully"))
@@ -7529,7 +7537,9 @@ def delete_shiftrequest_comment(request, comment_id):
     if (
         request.user.employee_get == comment.employee_id
         or request.user.has_perm("base.delete_baserequestfile")
-        or is_reportingmanager(request)
+        or can_manage_employee_action(
+            request, comment.request_id.employee_id, "base.delete_baserequestfile"
+        )
     ):
         comment.delete()
         messages.success(request, _("Comment deleted successfully!"))
@@ -7672,7 +7682,9 @@ def delete_worktyperequest_comment(request, comment_id):
     if (
         request.user.employee_get == comment.employee_id
         or request.user.has_perm("base.delete_baserequestfile")
-        or is_reportingmanager(request)
+        or can_manage_employee_action(
+            request, comment.request_id.employee_id, "base.delete_baserequestfile"
+        )
     ):
         comment.delete()
         messages.success(request, _("Comment deleted successfully!"))

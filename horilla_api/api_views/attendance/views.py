@@ -735,12 +735,18 @@ class AttendanceRequestCancelView(APIView):
     permission_classes = [IsAuthenticated]
 
     def put(self, request, pk):
+        from employee.cbv.accessibility import can_manage_employee_action
+
         try:
             attendance = Attendance.objects.get(id=pk)
-            if (
-                attendance.employee_id.employee_user_id == request.user
-                or is_reportingmanager(request)
-                or request.user.has_perm("attendance.change_attendance")
+            # Mirrors cancel_attendance_request in attendance/views/requests.py.
+            # is_reportingmanager() only asks "manages anyone", which let any
+            # reporting manager cancel any employee's attendance request
+            # through the API even after the web view was fixed.
+            if attendance.employee_id.employee_user_id == request.user or (
+                can_manage_employee_action(
+                    request, attendance.employee_id, "attendance.change_attendance"
+                )
             ):
                 request_type = attendance.request_type
                 attendance.is_validate_request_approved = False

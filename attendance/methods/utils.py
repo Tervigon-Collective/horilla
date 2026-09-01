@@ -13,7 +13,6 @@ from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db import models
 from django.db.models import Q, Sum
-from django.http import HttpResponse
 from django.utils.translation import gettext_lazy as _
 
 from base.methods import get_pagination
@@ -213,16 +212,18 @@ def is_reportingmanger(request, instance):
     args :
         request : request
         instance : an object or instance of any model contain employee_id foreign key field
-    """
 
-    manager = request.user.employee_get
+    Always returns a bool. The previous version returned an HttpResponse when
+    the employee had no work information; that object is truthy, so callers
+    guarding approvals with it granted the action to anyone whenever the
+    subject's work info was missing.
+    """
+    from base.methods import check_manager
+
     try:
-        employee_workinfo_manager = (
-            instance.employee_id.employee_work_info.reporting_manager_id
-        )
+        return check_manager(request.user.employee_get, instance)
     except Exception:
-        return HttpResponse("This Employee Dont Have any work information")
-    return manager == employee_workinfo_manager
+        return False
 
 
 def validate_hh_mm_ss_format(value):

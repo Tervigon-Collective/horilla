@@ -1247,14 +1247,31 @@ def document_bulk_approve(request):
         HttpResponse: A 204 No Content response with HX-Refresh header.
     """
     if request.method == "POST":
+        from employee.cbv.accessibility import can_manage_employee_action
+
         ids = request.POST.getlist("ids")
 
+        # The bulk update used to trust the POSTed ids outright, so anyone past
+        # the manager_can_enter gate could approve any employee's documents.
+        # Keep only the rows this user may actually act on.
+        requested_docs = Document.objects.filter(id__in=ids).select_related(
+            "employee_id"
+        )
+        allowed_ids = [
+            doc.pk
+            for doc in requested_docs
+            if can_manage_employee_action(
+                request, doc.employee_id, "horilla_documents.change_document"
+            )
+        ]
+        forbidden_count = requested_docs.count() - len(allowed_ids)
+
         # Documents with uploaded files
-        approved_docs = Document.objects.filter(id__in=ids).exclude(document="")
+        approved_docs = Document.objects.filter(id__in=allowed_ids).exclude(document="")
         count_approved = approved_docs.update(status="approved")
 
         # Documents without uploaded files
-        not_uploaded_count = len(ids) - approved_docs.count()
+        not_uploaded_count = len(allowed_ids) - approved_docs.count()
 
         if count_approved:
             messages.success(
@@ -1264,6 +1281,16 @@ def document_bulk_approve(request):
         if not_uploaded_count:
             messages.info(
                 request, _(f"{not_uploaded_count} document(s) skipped (not uploaded)")
+            )
+
+        if forbidden_count:
+            messages.warning(
+                request,
+                _(
+                    "%(count)s document(s) were skipped - you can only approve "
+                    "documents of employees who report to you."
+                )
+                % {"count": forbidden_count},
             )
 
     refreshed = htmx_refresh_document_request_container(request)
@@ -1301,15 +1328,40 @@ def document_bulk_reject(request):
     )
 
     if request.method == "POST" and form.is_valid():
+        from employee.cbv.accessibility import can_manage_employee_action
+
         reject_reason = form.cleaned_data["reject_reason"]
+        # Same scoping as document_bulk_approve: the ids come straight from the
+        # POST, so without this any manager could reject any employee's
+        # documents.
+        requested_docs = Document.objects.filter(id__in=ids).select_related(
+            "employee_id"
+        )
+        allowed_ids = [
+            doc.pk
+            for doc in requested_docs
+            if can_manage_employee_action(
+                request, doc.employee_id, "horilla_documents.change_document"
+            )
+        ]
+        forbidden_count = requested_docs.count() - len(allowed_ids)
         updated_count = (
-            Document.objects.filter(id__in=ids)
+            Document.objects.filter(id__in=allowed_ids)
             .exclude(status="rejected")
             .update(status="rejected", reject_reason=reject_reason)
         )
         messages.success(
             request, _("{} Document request rejected").format(updated_count)
         )
+        if forbidden_count:
+            messages.warning(
+                request,
+                _(
+                    "%(count)s document(s) were skipped - you can only reject "
+                    "documents of employees who report to you."
+                )
+                % {"count": forbidden_count},
+            )
         refreshed = htmx_refresh_document_request_container(request)
         if refreshed is not None:
             return refreshed

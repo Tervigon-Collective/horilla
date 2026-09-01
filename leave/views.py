@@ -42,7 +42,10 @@ from base.methods import (
     sortby,
 )
 from base.models import CompanyLeaves, Holidays, PenaltyAccounts
-from employee.cbv.accessibility import employee_record_access_required
+from employee.cbv.accessibility import (
+    can_manage_employee_action,
+    employee_record_access_required,
+)
 from employee.models import Employee
 from horilla.decorators import (
     hx_request_required,
@@ -4489,11 +4492,15 @@ def view_leaverequest_comment(request, leave_id):
     """
     This method is used to show Leave request comments
     """
+    from leave.cbv.accessibility import can_access_leave_request
+
     leave_request = LeaveRequest.find(leave_id)
+    # is_reportingmanager() only asks "manages anyone", which let any manager
+    # read every employee's leave comments. Scope it to this request's owner.
     if not (
         request.user.employee_get == leave_request.employee_id
         or request.user.has_perm("leave.view_leaverequestcomment")
-        or is_reportingmanager(request)
+        or can_access_leave_request(request, leave_request)
     ):
         messages.warning(request, _("You don't have permission"))
         return render(request, "decorator_404.html")
@@ -4656,11 +4663,14 @@ def view_allocationrequest_comment(request, leave_id):
     """
     This method is used to show Allocation request comments
     """
+    from leave.cbv.accessibility import can_access_leave_request
+
     leave_alloc_request = LeaveAllocationRequest.find(leave_id)
+    # Scope to this request's owner instead of "manages anyone".
     if not (
         request.user.employee_get == leave_alloc_request.employee_id
         or request.user.has_perm("leave.view_leaveallocationrequestcomment")
-        or is_reportingmanager(request)
+        or can_access_leave_request(request, leave_alloc_request)
     ):
         messages.warning(request, _("You don't have permission"))
         return render(request, "decorator_404.html")
@@ -4707,7 +4717,11 @@ def delete_allocationrequest_comment(request, comment_id):
     if (
         request.user.employee_get == comment.employee_id
         or request.user.has_perm("leave.delete_leaveallocationrequestcomment")
-        or is_reportingmanager(request)
+        or can_manage_employee_action(
+            request,
+            comment.request_id.employee_id,
+            "leave.delete_leaveallocationrequestcomment",
+        )
     ):
         comment.delete()
         messages.success(request, _("Comment deleted successfully!"))
@@ -4736,7 +4750,9 @@ def delete_allocation_comment_file(request):
     if (
         request.user.employee_get == comment.employee_id
         or request.user.has_perm("leave.delete_leaverequestfile")
-        or is_reportingmanager(request)
+        or can_manage_employee_action(
+            request, comment.request_id.employee_id, "leave.delete_leaverequestfile"
+        )
     ):
         LeaverequestFile.objects.filter(id__in=ids).delete()
         messages.success(request, _("File deleted successfully"))
@@ -4952,7 +4968,9 @@ def delete_leaverequest_comment(request, comment_id):
     if (
         request.user.employee_get == comment.employee_id
         or request.user.has_perm("leave.delete_leaverequestcomment")
-        or is_reportingmanager(request)
+        or can_manage_employee_action(
+            request, comment.request_id.employee_id, "leave.delete_leaverequestcomment"
+        )
     ):
         comment.delete()
         messages.success(request, _("Comment deleted successfully!"))
@@ -4979,7 +4997,9 @@ def delete_leave_comment_file(request):
     if (
         request.user.employee_get == comment.employee_id
         or request.user.has_perm("leave.delete_leaverequestfile")
-        or is_reportingmanager(request)
+        or can_manage_employee_action(
+            request, comment.request_id.employee_id, "leave.delete_leaverequestfile"
+        )
     ):
         LeaverequestFile.objects.filter(id__in=ids).delete()
         messages.success(request, _("File deleted successfully"))
