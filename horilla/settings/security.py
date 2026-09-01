@@ -74,13 +74,14 @@ def apply_secure_defaults(env, debug: bool) -> dict:
     SECURE_SSL_REDIRECT / HSTS stay off unless SECURE_SSL_REDIRECT=true so
     plain-HTTP Docker + nginx :80 installs keep working.
     """
+    ssl_redirect = env.bool("SECURE_SSL_REDIRECT", default=False)
     settings = {
-        "SESSION_COOKIE_SECURE": True,
-        "CSRF_COOKIE_SECURE": True,
+        "SESSION_COOKIE_SECURE": ssl_redirect,
+        "CSRF_COOKIE_SECURE": ssl_redirect,
         "SECURE_CONTENT_TYPE_NOSNIFF": True,
         "SECURE_REFERRER_POLICY": "strict-origin-when-cross-origin",
         "SECURE_PROXY_SSL_HEADER": ("HTTP_X_FORWARDED_PROTO", "https"),
-        "SECURE_SSL_REDIRECT": env.bool("SECURE_SSL_REDIRECT", default=False),
+        "SECURE_SSL_REDIRECT": ssl_redirect,
     }
     if settings["SECURE_SSL_REDIRECT"]:
         settings["SECURE_HSTS_SECONDS"] = env.int(

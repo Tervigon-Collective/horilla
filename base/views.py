@@ -94,6 +94,7 @@ from base.forms import (
     MultipleApproveConditionForm,
     PassWordResetForm,
     ResetPasswordForm,
+    resolve_password_reset_user,
     RotatingShiftAssign,
     RotatingShiftAssignExportForm,
     RotatingShiftAssignForm,
@@ -864,6 +865,31 @@ def reset_send_success(request):
     return render(request, "reset_send.html")
 
 
+def _password_reset_mail_configured():
+    email_backend = ConfiguredEmailBackend()
+    default = "base.backends.ConfiguredEmailBackend"
+    is_default_backend = True
+    email_backend_setting = getattr(settings, "EMAIL_BACKEND", "")
+    if email_backend_setting and default != email_backend_setting:
+        is_default_backend = False
+    if is_default_backend and not email_backend.configuration:
+        return None, is_default_backend
+    return email_backend, is_default_backend
+
+
+def _password_reset_email_opts(request, view, email_backend):
+    return {
+        "use_https": request.is_secure(),
+        "token_generator": view.token_generator,
+        "from_email": email_backend.dynamic_from_email_with_display_name,
+        "email_template_name": view.email_template_name,
+        "subject_template_name": view.subject_template_name,
+        "request": request,
+        "html_email_template_name": view.html_email_template_name,
+        "extra_email_context": view.extra_email_context,
+    }
+
+
 class HorillaPasswordResetView(PasswordResetView):
     """
     Horilla View for Reset Password
@@ -874,30 +900,30 @@ class HorillaPasswordResetView(PasswordResetView):
     success_url = reverse_lazy("reset-send-success")
 
     def form_valid(self, form):
-        email_backend = ConfiguredEmailBackend()
-        default = "base.backends.ConfiguredEmailBackend"
-        is_default_backend = True
-        EMAIL_BACKEND = getattr(settings, "EMAIL_BACKEND", "")
-        if EMAIL_BACKEND and default != EMAIL_BACKEND:
-            is_default_backend = False
-        if is_default_backend and not email_backend.configuration:
+        email_backend, _is_default_backend = _password_reset_mail_configured()
+        if email_backend is None:
             messages.error(self.request, _("Primary mail server is not configured"))
             return redirect("forgot-password")
 
-        username = form.cleaned_data["email"]
-        user = HorillaUser.objects.filter(username=username).first()
+        user = resolve_password_reset_user(form.cleaned_data["email"])
         if user:
-            opts = {
-                "use_https": self.request.is_secure(),
-                "token_generator": self.token_generator,
-                "from_email": email_backend.dynamic_from_email_with_display_name,
-                "email_template_name": self.email_template_name,
-                "subject_template_name": self.subject_template_name,
-                "request": self.request,
-                "html_email_template_name": self.html_email_template_name,
-                "extra_email_context": self.extra_email_context,
-            }
-            form.save(**opts)
+            try:
+                sent = form.save(**_password_reset_email_opts(self.request, self, email_backend))
+            except Exception:
+                logger.exception("Password reset email failed for user %s", user.pk)
+                messages.error(
+                    self.request,
+                    _("Failed to send password reset email. Please contact your administrator."),
+                )
+                return redirect("forgot-password")
+
+            if not sent:
+                messages.error(
+                    self.request,
+                    _("No email address is registered for this account."),
+                )
+                return redirect("forgot-password")
+
             if self.request.user.is_authenticated:
                 messages.success(
                     self.request, _("Password reset link sent successfully")
@@ -917,37 +943,29 @@ class EmployeePasswordResetView(PasswordResetView):
 
     def form_valid(self, form):
         try:
-            email_backend = ConfiguredEmailBackend()
-            default = "base.backends.ConfiguredEmailBackend"
-            is_default_backend = True
-            EMAIL_BACKEND = getattr(settings, "EMAIL_BACKEND", "")
-            if EMAIL_BACKEND and default != EMAIL_BACKEND:
-                is_default_backend = False
-            if is_default_backend and not email_backend.configuration:
+            email_backend, _is_default_backend = _password_reset_mail_configured()
+            if email_backend is None:
                 messages.error(self.request, _("Primary mail server is not configured"))
                 return HorillaRedirect(self.request)
 
-            username = form.cleaned_data["email"]
-            user = HorillaUser.objects.filter(username=username).first()
+            user = resolve_password_reset_user(form.cleaned_data["email"])
             if user:
-                opts = {
-                    "use_https": self.request.is_secure(),
-                    "token_generator": self.token_generator,
-                    "from_email": email_backend.dynamic_from_email_with_display_name,
-                    "email_template_name": self.email_template_name,
-                    "subject_template_name": self.subject_template_name,
-                    "request": self.request,
-                    "html_email_template_name": self.html_email_template_name,
-                    "extra_email_context": self.extra_email_context,
-                }
-                form.save(**opts)
+                sent = form.save(**_password_reset_email_opts(self.request, self, email_backend))
+                if not sent:
+                    messages.error(
+                        self.request,
+                        _("No email address is registered for this account."),
+                    )
+                    return HorillaRedirect(self.request)
+
             messages.success(
                 self.request,
                 _("If your account exists, a password reset link has been sent"),
             )
             return HorillaRedirect(self.request)
 
-        except Exception as e:
+        except Exception:
+            logger.exception("Employee password reset email failed")
             messages.error(self.request, _("Something went wrong....."))
             return HorillaRedirect(self.request)
 

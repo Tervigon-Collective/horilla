@@ -3103,6 +3103,44 @@ class DriverForm(forms.ModelForm):
 UserModel = get_user_model()
 
 
+def resolve_password_reset_user(identifier):
+    """Match a user by username or email (case-insensitive)."""
+    identifier = (identifier or "").strip()
+    if not identifier:
+        return None
+    user = HorillaUser.objects.filter(username__iexact=identifier).first()
+    if user is None:
+        user = HorillaUser.objects.filter(email__iexact=identifier).first()
+    return user
+
+
+def password_reset_recipient_email(user):
+    """Return the best email address to deliver a password reset link."""
+    employee = getattr(user, "employee_get", None)
+    email = None
+    if employee:
+        email = employee.email
+        try:
+            work_mail = employee.employee_work_info.email
+            if work_mail:
+                email = work_mail
+        except Exception:
+            pass
+    return email or getattr(user, "email", None)
+
+
+def password_reset_site_context(request):
+    """Use the public request host for reset links instead of django Site defaults."""
+    from horilla_dbtemplate.utils.site import get_request_host
+
+    if request:
+        host = get_request_host(request)
+        if host:
+            return host, host
+    current_site = get_current_site(request)
+    return current_site.domain, current_site.name
+
+
 class PassWordResetForm(forms.Form):
     email = forms.CharField()
 
@@ -3168,22 +3206,16 @@ class PassWordResetForm(forms.Form):
         Generate a one-use only link for resetting password and send it to the
         user.
         """
-        username = self.cleaned_data["email"]
-        user = HorillaUser.objects.get(username=username)
-        employee = user.employee_get
-        email = employee.email
-        work_mail = None
-        try:
-            work_mail = employee.employee_work_info.email
-        except Exception as e:
-            pass
-        if work_mail:
-            email = work_mail
+        user = resolve_password_reset_user(self.cleaned_data["email"])
+        if not user:
+            return False
+
+        email = password_reset_recipient_email(user)
+        if not email:
+            return False
 
         if not domain_override:
-            current_site = get_current_site(request)
-            site_name = current_site.name
-            domain = current_site.domain
+            domain, site_name = password_reset_site_context(request)
         else:
             site_name = domain = domain_override
         if email:
@@ -3206,6 +3238,8 @@ class PassWordResetForm(forms.Form):
                 email,
                 html_email_template_name=html_email_template_name,
             )
+            return True
+        return False
 
 
 def validate_ip_or_cidr(value):
