@@ -464,9 +464,20 @@ class TimeSheetCardView(HorillaCardView):
 
     model = TimeSheet
     filter_class = TimeSheetFilter
+    records_per_page = 20
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = (
+            super()
+            .get_queryset()
+            .select_related(
+                "employee_id",
+                "employee_id__employee_work_info",
+                "employee_id__employee_work_info__company_id",
+                "project_id",
+                "task_id",
+            )
+        )
         from project.methods import accessible_timesheets_queryset, can_view_all_projects
 
         if not can_view_all_projects(self.request):

@@ -12,12 +12,12 @@ from uuid import uuid4
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.core import serializers
-from django.core.cache import cache as CACHE
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db.models import ProtectedError
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
+from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
 from base.methods import closest_numbers
@@ -220,88 +220,133 @@ def candidate_survey(request):
     )
 
 
-# Superseded by recruitment.cbv.surveys.SurveyTemplateSettingsView/
-# SurveyTemplateTabView, which render the same "survey/view_question_templates.html"
-# page but as separate Template/Questions tabs. Left here commented out
-# (rather than edited in place) so the previous combined accordion+grid page
-# can be restored easily.
-#
-# @login_required
-# @is_recruitment_manager(perm="recruitment.view_recruitmentsurvey")
-# def view_question_template(request):
-#     """
-#     This method is used to view the question template
-#     """
-#     recs = Recruitment.objects.all()
-#     ids = []
-#     for i in recs:
-#         for manager in i.recruitment_managers.all():
-#             if request.user.employee_get == manager:
-#                 ids.append(i.id)
-#     if request.user.has_perm("recruitment.view_recruitmentsurvey"):
-#         questions = RecruitmentSurvey.objects.all()
-#     else:
-#         questions = RecruitmentSurvey.objects.filter(recruitment_ids__in=ids)
-#     # See the matching fix/comment in recruitment/views/search.py's
-#     # filter_survey() - group_by_queryset() already paginates correctly, but
-#     # the unused (0-question) templates it can't see get appended afterward
-#     # and the combined list gets paginated a second time on the same
-#     # "template_page" param, so page 2+ silently lost has_previous. Fetch
-#     # every templates-with-questions group here (unpaginated) and paginate
-#     # the merged list exactly once below instead.
-#     templates = group_by_queryset(
-#         questions.filter(template_id__isnull=False).distinct(),
-#         "template_id__title",
-#         page=1,
-#         page_name="template_page",
-#         records_per_page=1000000,
-#     )
-#     all_template_object_list = []
-#     for template in templates:
-#         all_template_object_list.append(template)
-#
-#     survey_templates = SurveyTemplate.objects.all()
-#     all_templates = survey_templates.values_list("title", flat=True)
-#     used_templates = questions.values_list("template_id__title", flat=True)
-#
-#     unused_templates = list(set(all_templates) - set(used_templates))
-#     unused_groups = []
-#     for template_name in unused_templates:
-#         unused_groups.append(
-#             {
-#                 "grouper": template_name,
-#                 "list": [],
-#                 "dynamic_name": "",
-#             }
-#         )
-#     all_template_object_list = all_template_object_list + unused_groups
-#
-#     templates = paginator_qry(
-#         all_template_object_list, request.GET.get("template_page")
-#     )
-#     survey_templates = paginator_qry(
-#         survey_templates, request.GET.get("survey_template_page")
-#     )
-#     filter_obj = SurveyFilter()
-#     requests_ids = json.dumps(
-#         [
-#             instance.id
-#             for instance in paginator_qry(
-#                 questions, request.GET.get("page")
-#             ).object_list
-#         ]
-#     )
-#     return render(
-#         request,
-#         "survey/view_question_templates.html",
-#         {
-#             "questions": paginator_qry(questions, request.GET.get("page")),
-#             "templates": templates,
-#             "survey_templates": survey_templates,
-#             "f": filter_obj,
-#             "requests_ids": requests_ids,
-#         },
-#     )
+@login_required
+@is_recruitment_manager(perm="recruitment.view_recruitmentsurvey")
+def view_question_template(request):
+    """
+    This method is used to view the question template
+    """
+    recs = Recruitment.objects.all()
+    ids = []
+    for i in recs:
+        for manager in i.recruitment_managers.all():
+            if request.user.employee_get == manager:
+                ids.append(i.id)
+    if request.user.has_perm("recruitment.view_recruitmentsurvey"):
+        questions = RecruitmentSurvey.objects.all()
+    else:
+        questions = RecruitmentSurvey.objects.filter(recruitment_ids__in=ids)
+    # See the matching fix/comment in recruitment/views/search.py's
+    # filter_survey() - group_by_queryset() already paginates correctly, but
+    # the unused (0-question) templates it can't see get appended afterward
+    # and the combined list gets paginated a second time on the same
+    # "template_page" param, so page 2+ silently lost has_previous. Fetch
+    # every templates-with-questions group here (unpaginated) and paginate
+    # the merged list exactly once below instead.
+    templates = group_by_queryset(
+        questions.filter(template_id__isnull=False).distinct(),
+        "template_id__title",
+        page=1,
+        page_name="template_page",
+        records_per_page=1000000,
+    )
+    all_template_object_list = []
+    for template in templates:
+        all_template_object_list.append(template)
+
+    survey_templates = SurveyTemplate.objects.all()
+    all_templates = survey_templates.values_list("title", flat=True)
+    used_templates = questions.values_list("template_id__title", flat=True)
+
+    unused_templates = list(set(all_templates) - set(used_templates))
+    unused_groups = []
+    for template_name in unused_templates:
+        unused_groups.append(
+            {
+                "grouper": template_name,
+                "list": [],
+                "dynamic_name": "",
+            }
+        )
+    all_template_object_list = all_template_object_list + unused_groups
+
+    templates = paginator_qry(
+        all_template_object_list, request.GET.get("template_page")
+    )
+    survey_templates = paginator_qry(
+        survey_templates, request.GET.get("survey_template_page")
+    )
+    filter_obj = SurveyFilter()
+    requests_ids = json.dumps(
+        [
+            instance.id
+            for instance in paginator_qry(
+                questions, request.GET.get("page")
+            ).object_list
+        ]
+    )
+    return render(
+        request,
+        "survey/view_question_templates.html",
+        {
+            "questions": paginator_qry(questions, request.GET.get("page")),
+            "templates": templates,
+            "survey_templates": survey_templates,
+            "f": filter_obj,
+            "requests_ids": requests_ids,
+        },
+    )
+
+
+@login_required
+@hx_request_required
+@permission_required(perm="recruitment.change_recruitmentsurvey")
+def update_question_template(request, survey_id):
+    """
+    This view method is used to update question template
+    """
+    instance = RecruitmentSurvey.objects.get(id=survey_id)
+    form = QuestionForm(
+        instance=instance,
+    )
+    if request.method == "POST":
+        form = QuestionForm(request.POST, instance=instance)
+        if form.is_valid():
+            instance = form.save(commit=False)
+            instance.save()
+            instance.template_id.set(form.cleaned_data["template_id"])
+            instance.recruitment_ids.set(form.recruitment)
+            # instance.job_position_ids.set(form.job_positions)
+            messages.success(request, _("New survey question updated."))
+            return HorillaRedirect(request)
+    return render(request, "survey/template_update_form.html", {"form": form})
+
+
+@login_required
+@hx_request_required
+@permission_required(perm="recruitment.add_recruitmentsurvey")
+def create_question_template(request):
+    """
+    This view method is used to create question template
+    """
+    form = QuestionForm()
+    if request.method == "POST":
+        form = QuestionForm(request.POST)
+        if form.is_valid():
+            instance = form.save(commit=False)
+            instance.save()
+            instance.recruitment_ids.set(form.recruitment)
+            instance.template_id.set(form.cleaned_data["template_id"])
+            # instance.job_position_ids.set(form.job_positions)
+            messages.success(request, _("New survey question created."))
+            return HorillaRedirect(request)
+    return render(request, "survey/template_form.html", {"form": form})
+
+
+# --- Restored: previous Survey Templates page implementation (function
+# views backing recruitment.cbv.recruitment_survey.SurveyTemplateTabView /
+# SurveyTemplateNavView / SurveyQuestionNavView). Kept side-by-side with the
+# newer shell-based list views rather than removed.
 
 
 @login_required
@@ -310,8 +355,7 @@ def candidate_survey(request):
 def survey_template_tab(request):
     """
     Root of the Template tab: loads its own navbar, then its own list
-    container - the same nav+list split used by the recruitment settings
-    tabs (see recruitment/cbv/settings_tabs.py).
+    container.
     """
     return render(request, "survey/template_tab_root.html", {})
 
@@ -322,7 +366,7 @@ def survey_template_tab(request):
 def survey_template_tab_list(request):
     """
     Template accordion content for the Template tab, and the hx-get target
-    for that tab's own navbar (recruitment.cbv.surveys.SurveyTemplateNavView)
+    for that tab's own navbar (recruitment.cbv.recruitment_survey.SurveyTemplateNavView)
     search box and pagination.
     """
     survey_templates = SurveyTemplate.objects.all()
@@ -388,7 +432,7 @@ def survey_question_tab(request):
 def survey_question_tab_list(request):
     """
     Question grid content for the Questions tab, and the hx-get target for
-    that tab's own navbar (recruitment.cbv.surveys.SurveyQuestionNavView)
+    that tab's own navbar (recruitment.cbv.recruitment_survey.SurveyQuestionNavView)
     search box and pagination.
     """
     if request.user.has_perm("recruitment.view_recruitmentsurvey"):
@@ -424,51 +468,6 @@ def survey_question_tab_list(request):
 
 
 @login_required
-@hx_request_required
-@permission_required(perm="recruitment.change_recruitmentsurvey")
-def update_question_template(request, survey_id):
-    """
-    This view method is used to update question template
-    """
-    instance = RecruitmentSurvey.objects.get(id=survey_id)
-    form = QuestionForm(
-        instance=instance,
-    )
-    if request.method == "POST":
-        form = QuestionForm(request.POST, instance=instance)
-        if form.is_valid():
-            instance = form.save(commit=False)
-            instance.save()
-            instance.template_id.set(form.cleaned_data["template_id"])
-            instance.recruitment_ids.set(form.recruitment)
-            # instance.job_position_ids.set(form.job_positions)
-            messages.success(request, _("New survey question updated."))
-            return HorillaRedirect(request)
-    return render(request, "survey/template_update_form.html", {"form": form})
-
-
-@login_required
-@hx_request_required
-@permission_required(perm="recruitment.add_recruitmentsurvey")
-def create_question_template(request):
-    """
-    This view method is used to create question template
-    """
-    form = QuestionForm()
-    if request.method == "POST":
-        form = QuestionForm(request.POST)
-        if form.is_valid():
-            instance = form.save(commit=False)
-            instance.save()
-            instance.recruitment_ids.set(form.recruitment)
-            instance.template_id.set(form.cleaned_data["template_id"])
-            # instance.job_position_ids.set(form.job_positions)
-            messages.success(request, _("New survey question created."))
-            return HorillaRedirect(request)
-    return render(request, "survey/template_form.html", {"form": form})
-
-
-@login_required
 @permission_required(perm="recruitment.delete_recruitmentsurvey")
 def delete_survey_question(request, survey_id):
     """
@@ -482,7 +481,20 @@ def delete_survey_question(request, survey_id):
     except ProtectedError:
         messages.error(request, _("You cannot delete this question"))
     if request.META.get("HTTP_HX_REQUEST") == "true":
-        return HttpResponse("")
+        # Reached from two different places sharing this one delete route -
+        # a question row nested inside the Templates accordion, and a
+        # question card on the Questions tab - each targeting its own list
+        # container. Redirect back to whichever list actually asked, so
+        # only that container is refreshed.
+        hx_target = request.META.get("HTTP_HX_TARGET")
+        if hx_target == "survey-templates-container":
+            return redirect(reverse("list-survey-templates"))
+        # Restored previous implementation's containers (view_question_templates.html)
+        if hx_target == "view-container":
+            return redirect(reverse("survey-template-tab-list"))
+        if hx_target == "questionViewContainer":
+            return redirect(reverse("survey-question-tab-list"))
+        return redirect(reverse("list-survey-questions"))
     return redirect("recruitment-survey-question-template-view")
 
 
@@ -539,11 +551,6 @@ def application_form(request):
             request.session["candidate"] = serializers.serialize(
                 "json", [candidate_obj]
             )
-            if resume_obj:
-                resume_obj.is_candidate = True
-                resume_obj.save()
-                CACHE.delete(f"matching_resumes_{resume_obj.recruitment_id_id}")
-
             has_direct_survey = RecruitmentSurvey.objects.filter(
                 recruitment_ids=recruitment_id
             ).exists()
@@ -553,6 +560,10 @@ def application_form(request):
             if has_direct_survey or has_template_survey:
                 return redirect(candidate_survey)
             candidate_obj.save()
+
+            if resume_obj:
+                resume_obj.is_candidate = True
+                resume_obj.save()
 
             return render(request, "candidate/success.html")
         for field_name, field_errors in form.errors.items():
@@ -660,6 +671,29 @@ def delete_template(request):
 
 
 @login_required
+@permission_required("recruitment.delete_surveytemplate")
+def delete_survey_template(request, pk):
+    """
+    This method is used to delete a single survey template by its pk, used
+    by the Survey Templates page's Templates accordion.
+    """
+    template = SurveyTemplate.objects.filter(pk=pk).first()
+    if template is None:
+        messages.error(request, _("Template not found."))
+    elif template.is_general_template:
+        messages.info(request, _("This template group cannot be deleted"))
+    else:
+        template.delete()
+        messages.success(request, _("Template group deleted"))
+
+    if request.META.get("HTTP_HX_REQUEST") == "true":
+        return HttpResponse(
+            "<script>$('#templateTabRoot .filterButton').click();</script>"
+        )
+    return HorillaRedirect(request)
+
+
+@login_required
 @hx_request_required
 @permission_required("recruitment.change_surveytemplate")
 def question_add(request):
@@ -669,7 +703,7 @@ def question_add(request):
     template = None
     title = request.GET.get("title")
     if title:
-        template = SurveyTemplate.objects.filter(title=title).first
+        template = SurveyTemplate.objects.filter(title=title).first()
 
     form = AddQuestionForm(initial={"template_ids": template})
     if request.method == "POST":
@@ -680,9 +714,9 @@ def question_add(request):
             if request.META.get("HTTP_HX_REQUEST") == "true":
                 return HttpResponse(
                     "<script>"
-                    "$('#templateModal').removeClass('oh-modal--show');"
                     "$('#genericModal').removeClass('oh-modal--show');"
-                    "$('#templateTabRoot .filterButton').click();"
+                    "$('#reloadMessagesButton').click();"
+                    "$('.reload-record').click();"
                     "</script>"
                 )
             return HorillaRedirect(request)

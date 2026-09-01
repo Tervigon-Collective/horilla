@@ -16,6 +16,7 @@ from django.utils.translation import gettext_lazy as _
 
 from attendance.cbv.attendance_activity import AttendanceActivityListView
 from attendance.cbv.attendance_tab import AttendanceTabView
+from attendance.cbv.tab_shell import AttendanceTabContentShell
 from attendance.filters import AttendanceFilters
 from attendance.forms import AttendanceExportForm, AttendanceForm, AttendanceUpdateForm
 from attendance.models import Attendance, AttendanceValidationCondition, strtime_seconds
@@ -28,7 +29,6 @@ from base.methods import (
     is_reportingmanager,
 )
 from base.models import PenaltyAccounts
-from employee.cbv.accessibility import EmployeeRecordAccessDispatchMixin
 from employee.cbv.employee_profile import EmployeeProfileView
 from employee.cbv.employees import EmployeeCard, EmployeeNav, EmployeesList
 from employee.filters import EmployeeFilter
@@ -84,10 +84,8 @@ class AttendancesListView(HorillaListView):
         (_("Day"), "attendance_day"),
         (_("Check-In"), "attendance_clock_in"),
         (_("In Date"), "attendance_clock_in_date"),
-        (_("In Location"), "clock_in_location_col"),
         (_("Check-Out"), "attendance_clock_out"),
         (_("Out Date"), "attendance_clock_out_date"),
-        (_("Out Location"), "clock_out_location_col"),
         (_("Shift"), "shift_id"),
         (_("Work Type"), "work_type_id"),
         (_("Min Hour"), "minimum_hour"),
@@ -99,9 +97,7 @@ class AttendancesListView(HorillaListView):
         (_("Employee"), "employee_id", "employee_id__get_avatar"),
         (_("Date"), "attendance_date"),
         (_("Check-In"), "attendance_clock_in"),
-        (_("In Location"), "clock_in_location_col"),
         (_("Check-Out"), "attendance_clock_out"),
-        (_("Out Location"), "clock_out_location_col"),
         (_("Shift"), "shift_id"),
         (_("At Work"), "attendance_worked_hour"),
     ]
@@ -143,16 +139,6 @@ class AttendancesListView(HorillaListView):
         ),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
-
-    def get_queryset(self, queryset=None, filtered=False, *args, **kwargs):
-        if not self.queryset:
-            self.queryset = super().get_queryset(
-                queryset=queryset, filtered=filtered, *args, **kwargs
-            )
-            self.queryset = filtersubordinates(
-                self.request, self.queryset, "attendance.view_attendance"
-            )
-        return self.queryset
 
     # def get_queryset(self, queryset=None, filtered=False, *args, **kwargs):
     #     """
@@ -198,37 +184,15 @@ class AttendancesTabView(HorillaTabView):
         self.tabs = [
             {
                 "title": _("Attendance To Validate"),
-                "url": f"{reverse('validate-attendance-tab')}",
-                "actions": [
-                    {
-                        "action": _("Validate"),
-                        "attrs": """
-                    onclick="
-                    bulkValidateTabAttendance();
-                    "
-                    style="cursor: pointer;"
-                """,
-                    }
-                ],
+                "url": f"{reverse('validate-attendance-tab-shell')}",
             },
             {
                 "title": _(" OT Attendances"),
-                "url": f"{reverse('ot-attendance-tab')}",
-                "actions": [
-                    {
-                        "action": _("Approve OT"),
-                        "attrs": """
-                    onclick="
-                    otBulkValidateTabAttendance();
-                    "
-                    style="cursor: pointer;"
-                """,
-                    }
-                ],
+                "url": f"{reverse('ot-attendance-tab-shell')}",
             },
             {
                 "title": _(" Validated Attendances"),
-                "url": f"{reverse('validated-attendance-tab')}",
+                "url": f"{reverse('validated-attendance-tab-shell')}",
             },
         ]
 
@@ -243,83 +207,97 @@ class AttendancesTabView(HorillaTabView):
         return context
 
 
-@method_decorator(login_required, name="dispatch")
-@method_decorator(manager_can_enter("attendance.view_attendance"), name="dispatch")
-class AttendancesNavView(HorillaNavView):
+def _attendance_nav_common_actions(request, extra_action=None):
     """
-    nav bar
+    Import/Export/Delete, plus one optional bulk action that only makes
+    sense on one specific tab (Validate on the Validate tab, Approve OT on
+    the OT tab) - duplicated into every Attendances tab's own Nav now that
+    each tab carries its own independent Search/Filter/Actions bar instead
+    of one bar shared above all three (matches Employee Configuration,
+    where every settings tab loads its own Nav rather than sharing one).
     """
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.search_url = reverse("attendances-tab-view")
-        self.search_in = [
-            ("attendance_day", _("Day")),
-            ("shift_id", _("Shift")),
-            ("work_type_id", _("Work Type")),
-            ("employee_id__employee_work_info__department_id", _("Department")),
-            (
-                "employee_id__employee_work_info__job_position_id",
-                _("Job Position"),
-            ),
-            ("employee_id__employee_work_info__company_id", _("Company")),
-        ]
-        self.create_attrs = f"""
-             hx-get="{reverse_lazy("attendance-create")}"
-             hx-target="#genericModalBody"
-             data-target="#genericModal"
-             data-toggle="oh-modal-toggle"
-         """
-        actions = [
+    actions = []
+    if extra_action:
+        actions.append(extra_action)
+    actions.append(
+        {
+            "action": _("Import"),
+            "attrs": """
+                onclick="
+                importAttendanceNav();
+                "
+                data-toggle = "oh-modal-toggle"
+                data-target = "#attendanceImport
+                "
+                style="cursor: pointer;"
+            """,
+        }
+    )
+    if has_export_access(request, Attendance):
+        actions.append(
             {
-                "action": _("Import"),
+                "action": _("Export"),
+                "attrs": f"""
+                data-toggle = "oh-modal-toggle"
+                data-target = "#genericModal"
+                hx-target="#genericModalBody"
+                hx-get ="{reverse('attendences-navbar-export')}"
+                hx-vals='js:{{"has_selection": (function(){{var t=document.querySelector(".oh-tabs__content--active");var l=(t||document).querySelector("[data-selected-instances-key]");var k=(l&&l.getAttribute("data-selected-instances-key"))||"selectedInstances";var el=document.getElementById(k);return JSON.parse((el&&el.getAttribute("data-ids"))||"[]").length>0;}})()}}'
+                style="cursor: pointer;"
+            """,
+            }
+        )
+    if request.user.has_perm("attendance.add_attendance"):
+        actions.append(
+            {
+                "action": _("Delete"),
                 "attrs": """
                     onclick="
-                    importAttendanceNav();
+                    bulkDeleteAttendanceNav();
                     "
-                    data-toggle = "oh-modal-toggle"
-                    data-target = "#attendanceImport
-                    "
-                    style="cursor: pointer;"
+                    data-action="delete"
+                    style="cursor: pointer; color:red !important"
                 """,
-            },
-        ]
-        if has_export_access(self.request, Attendance):
-            actions.append(
-                {
-                    "action": _("Export"),
-                    "attrs": f"""
-                    data-toggle = "oh-modal-toggle"
-                    data-target = "#genericModal"
-                    hx-target="#genericModalBody"
-                    hx-get ="{reverse('attendences-navbar-export')}"
-                    hx-vals='js:{{"has_selection": (function(){{var t=document.querySelector(".oh-tabs__content--active");var l=(t||document).querySelector("[data-selected-instances-key]");var k=(l&&l.getAttribute("data-selected-instances-key"))||"selectedInstances";var el=document.getElementById(k);return JSON.parse((el&&el.getAttribute("data-ids"))||"[]").length>0;}})()}}'
-                    style="cursor: pointer;"
-                """,
-                }
-            )
-        if self.request.user.has_perm("attendance.delete_attendance") or is_reportingmanager(
-            self.request
-        ):
-            actions.append(
-                {
-                    "action": _("Delete"),
-                    "attrs": """
-                        onclick="
-                        bulkDeleteAttendanceNav();
-                        "
-                        data-action="delete"
-                        style="cursor: pointer; color:red !important"
-                    """,
-                }
-            )
-        self.actions = actions
+            }
+        )
+    return actions
+
+
+def _attendance_validate_bulk_action():
+    return {
+        "action": _("Validate"),
+        "attrs": """
+            onclick="
+            bulkValidateTabAttendance();
+            "
+            style="cursor: pointer;"
+        """,
+    }
+
+
+def _attendance_ot_bulk_action():
+    return {
+        "action": _("Approve OT"),
+        "attrs": """
+            onclick="
+            otBulkValidateTabAttendance();
+            "
+            style="cursor: pointer;"
+        """,
+    }
+
+
+class _AttendanceTabNavBase(HorillaNavView):
+    """
+    Shared Search/Filter/Create wiring for each Attendances tab's own,
+    independent Nav - only search_url/search_swap_target/actions differ
+    per tab.
+    """
 
     nav_title = _("Attendances")
     filter_body_template = "cbv/attendances/attendances_filter_page.html"
     filter_instance = AttendanceFilters()
     filter_form_context_name = "form"
-    search_swap_target = "#listContainer"
 
     group_by_fields = [
         ("employee_id", _("Employee")),
@@ -366,6 +344,93 @@ class AttendancesNavView(HorillaNavView):
         ),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.search_in = [
+            ("attendance_day", _("Day")),
+            ("shift_id", _("Shift")),
+            ("work_type_id", _("Work Type")),
+            ("employee_id__employee_work_info__department_id", _("Department")),
+            (
+                "employee_id__employee_work_info__job_position_id",
+                _("Job Position"),
+            ),
+            ("employee_id__employee_work_info__company_id", _("Company")),
+        ]
+        self.create_attrs = f"""
+             hx-get="{reverse_lazy("attendance-create")}"
+             hx-target="#genericModalBody"
+             data-target="#genericModal"
+             data-toggle="oh-modal-toggle"
+         """
+
+
+@method_decorator(login_required, name="dispatch")
+@method_decorator(manager_can_enter("attendance.view_attendance"), name="dispatch")
+class ValidateAttendanceNav(_AttendanceTabNavBase):
+    """
+    Independent Nav for the Attendance To Validate tab.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.search_url = reverse("validate-attendance-tab")
+        self.search_swap_target = "#validateListContainer"
+        self.actions = _attendance_nav_common_actions(
+            self.request, _attendance_validate_bulk_action()
+        )
+
+
+@method_decorator(login_required, name="dispatch")
+@method_decorator(manager_can_enter("attendance.view_attendance"), name="dispatch")
+class OTAttendanceNav(_AttendanceTabNavBase):
+    """
+    Independent Nav for the OT Attendances tab.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.search_url = reverse("ot-attendance-tab")
+        self.search_swap_target = "#otListContainer"
+        self.actions = _attendance_nav_common_actions(
+            self.request, _attendance_ot_bulk_action()
+        )
+
+
+@method_decorator(login_required, name="dispatch")
+@method_decorator(manager_can_enter("attendance.view_attendance"), name="dispatch")
+class ValidatedAttendanceNav(_AttendanceTabNavBase):
+    """
+    Independent Nav for the Validated Attendances tab.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.search_url = reverse("validated-attendance-tab")
+        self.search_swap_target = "#validatedListContainer"
+        self.actions = _attendance_nav_common_actions(self.request)
+
+
+class ValidateAttendanceTabShell(AttendanceTabContentShell):
+    nav_url_name = "validate-attendance-nav"
+    container_id = "validateListContainer"
+    tabs_root_id = "attendances-tab"
+    selected_instances_key_id = "validateselectedInstances"
+
+
+class OTAttendanceTabShell(AttendanceTabContentShell):
+    nav_url_name = "ot-attendance-nav"
+    container_id = "otListContainer"
+    tabs_root_id = "attendances-tab"
+    selected_instances_key_id = "overtimeselectedInstances"
+
+
+class ValidatedAttendanceTabShell(AttendanceTabContentShell):
+    nav_url_name = "validated-attendance-nav"
+    container_id = "validatedListContainer"
+    tabs_root_id = "attendances-tab"
+    selected_instances_key_id = "validatedselectedInstances"
 
 
 @method_decorator(login_required, name="dispatch")
@@ -651,10 +716,6 @@ class AttendanceUpdateFormView(HorillaFormView):
         if self.form.instance.pk:
             self.form_class.verbose_name = _("Edit Attendance")
 
-        self.form = choosesubordinates(
-            self.request, self.form, "attendance.change_attendance"
-        )
-        context["form"] = self.form
         context["view_id"] = "attendanceUpdate"
 
         return context
@@ -745,14 +806,6 @@ class PenaltyAccountListView(HorillaListView):
         pk = self.request.resolver_match.kwargs.get("pk")
         self.search_url = reverse("individual-panalty-list-view", kwargs={"pk": pk})
 
-    def dispatch(self, request, *args, **kwargs):
-        from employee.cbv.accessibility import deny_without_employee_record_access
-
-        blocked = deny_without_employee_record_access(request, kwargs.get("pk"))
-        if blocked:
-            return blocked
-        return super().dispatch(request, *args, **kwargs)
-
     def get_queryset(self):
         queryset = super().get_queryset()
         pk = self.kwargs.get("pk")
@@ -761,9 +814,7 @@ class PenaltyAccountListView(HorillaListView):
 
 
 @method_decorator(login_required, name="dispatch")
-class ValidateAttendancesIndividualTabView(
-    EmployeeRecordAccessDispatchMixin, AttendancesListView
-):
+class ValidateAttendancesIndividualTabView(AttendancesListView):
     """
     list view for validate attendance tab view
     """

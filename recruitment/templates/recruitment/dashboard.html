@@ -5,7 +5,7 @@
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
     <style>
         :root {
-            --rd-indigo: #E54F38;
+            --rd-indigo: var(--primary-600, #E54F38);
             --rd-green: #22c55e;
             --rd-amber: #f59e0b;
             --rd-red: #ef4444;
@@ -365,14 +365,15 @@
             min-width: 50px;
             padding: 6px 8px;
             border-radius: 8px;
-            background: #eef2ff;
-            color: var(--rd-indigo);
+            background: color-mix(in srgb, var(--primary-600, #E54F38) 12%, transparent);
+            color: var(--primary-600, #E54F38);
             font-weight: 700;
             font-size: 11px;
             text-align: center;
         }
         .dark .rd-interview-item__date {
-            background: #312e81;
+            background: color-mix(in srgb, var(--primary-600, #E54F38) 25%, transparent);
+            color: var(--primary-300, #fcedeb);
         }
         .rd-interview-item__info {
             flex: 1;
@@ -419,6 +420,7 @@
             display: flex;
             align-items: center;
             height: 28px;
+            min-width: 26px;
             padding: 0 10px;
             border-radius: 6px;
             color: #fff;
@@ -752,13 +754,14 @@
             transition: all 0.15s;
         }
         .rd-period-preset:hover {
-            border-color: var(--rd-indigo);
-            color: var(--rd-indigo);
+            border-color: var(--primary-600, #E54F38);
+            color: var(--primary-600, #E54F38);
         }
-        .rd-period-preset--active {
-            border-color: var(--rd-indigo);
-            background: var(--rd-indigo);
-            color: #fff;
+        .rd-period-preset--active,
+        .rd-period-preset--active:hover {
+            border-color: var(--primary-600, #E54F38) !important;
+            background: var(--primary-600, #E54F38) !important;
+            color: #ffffff !important;
         }
         .dark .rd-period-picker input[type='date'] {
             color-scheme: dark;
@@ -1311,7 +1314,13 @@
                     const funnelColors = { initial: '#94a3b8', test: '#3b82f6', interview: '#f59e0b', hired: '#22c55e', cancelled: '#ef4444' };
                     let html = '<div class="rd-funnel">';
                     data.conversions.forEach(c => {
-                        const pct = Math.max(20, (c.count / maxCount) * 100);
+                        // True-to-value width, not a fixed floor -- a 20%-min
+                        // floor made every small count (e.g. 0 vs 1 out of a
+                        // max of 7) render as the same-length bar. Only a
+                        // real zero collapses to 0; any actual count still
+                        // gets a thin sliver (via the CSS min-width) so it
+                        // stays visible instead of vanishing at very low %.
+                        const pct = c.count > 0 ? (c.count / maxCount) * 100 : 0;
                         const color = funnelColors[c.type] || '#E54F38';
                         const url = "{% url 'candidate-view' %}?stage_id__stage_type=" + encodeURIComponent(c.type);
                         html += `<div class="rd-funnel-step" onclick="window.location.href='${url}'" title="{% trans 'View ${c.stage} candidates' %}">
