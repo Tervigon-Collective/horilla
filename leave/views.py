@@ -5051,7 +5051,29 @@ if apps.is_installed("attendance"):
         Used to delete attachment
         """
         ids = request.GET.getlist("ids")
-        LeaverequestFile.objects.filter(id__in=ids).delete()
+        # This deleted whatever ids were passed with no permission check at
+        # all, so any authenticated user could delete any leave attachment.
+        # Keep only files hanging off a comment this user may act on.
+        actor = getattr(request.user, "employee_get", None)
+        deletable_ids = set()
+        for comment in (
+            CompensatoryLeaverequestComment.objects.filter(files__id__in=ids)
+            .select_related("employee_id", "request_id__employee_id")
+            .distinct()
+        ):
+            if (
+                (actor is not None and comment.employee_id == actor)
+                or request.user.has_perm("leave.delete_leaverequestfile")
+                or can_manage_employee_action(
+                    request,
+                    comment.request_id.employee_id,
+                    "leave.delete_leaverequestfile",
+                )
+            ):
+                deletable_ids.update(
+                    comment.files.filter(id__in=ids).values_list("id", flat=True)
+                )
+        LeaverequestFile.objects.filter(id__in=deletable_ids).delete()
         leave_id = request.GET.get("leave_id")
         if not leave_id:
             return HorillaRedirect(

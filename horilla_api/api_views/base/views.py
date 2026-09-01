@@ -1161,18 +1161,44 @@ class ShiftRequestBulkCancelView(APIView):
 class ShiftRequestDeleteView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def _may_delete(self, request, shift_request):
+        """Owner, holder of the delete perm, or that employee's manager."""
+        return (
+            shift_request.employee_id == request.user.employee_get
+            or request.user.has_perm("base.delete_shiftrequest")
+            or is_reportingmanger(request, shift_request)
+        )
+
     def delete(self, request, pk=None):
 
         if pk is None:
             try:
                 ids = request.data["ids"]
-                shift_requests = ShiftRequest.objects.filter(id__in=ids)
-                shift_requests.delete()
+                # This deleted every id in the payload with only
+                # IsAuthenticated, so any logged-in user could wipe other
+                # employees' shift requests.
+                shift_requests = ShiftRequest.objects.filter(
+                    id__in=ids
+                ).select_related("employee_id")
+                deletable = [
+                    sr.pk for sr in shift_requests if self._may_delete(request, sr)
+                ]
+                if len(deletable) != len(shift_requests):
+                    return Response(
+                        {"status": "failed", "error": _("You don't have permission")},
+                        status=403,
+                    )
+                ShiftRequest.objects.filter(id__in=deletable).delete()
             except Exception as e:
                 return Response({"status": "failed", "error": str(e)}, status=400)
             return Response({"status": "success"}, status=200)
         try:
             shift_request = ShiftRequest.objects.get(id=pk)
+            if not self._may_delete(request, shift_request):
+                return Response(
+                    {"status": "failed", "error": _("You don't have permission")},
+                    status=403,
+                )
             if not shift_request.approved:
                 raise
             shift_request.delete()
@@ -1215,6 +1241,9 @@ class RotatingShiftAssignExport(APIView):
 class RotatingShiftAssignBulkArchive(APIView):
     permission_classes = [IsAuthenticated]
 
+    # Was IsAuthenticated only, while the web view behind the same action
+    # requires manager_can_enter("base.change_rotatingshiftassign").
+    @manager_permission_required("base.change_rotatingshiftassign")
     def put(self, request, status):
         ids = request.data.get("ids", None)
         try:
@@ -1228,6 +1257,9 @@ class RotatingShiftAssignBulkArchive(APIView):
 class RotatingShiftAssignBulkDelete(APIView):
     permission_classes = [IsAuthenticated]
 
+    # Was IsAuthenticated only, while the web view behind the same action
+    # requires manager_can_enter("base.delete_rotatingshiftassign").
+    @manager_permission_required("base.delete_rotatingshiftassign")
     def delete(self, request):
         ids = request.data.get("ids", None)
         try:

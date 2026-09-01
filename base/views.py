@@ -5762,6 +5762,16 @@ def shift_request_delete(request, id):
         messages.error(request, _("Shift request not found."))
         return HorillaRedirect(request)
 
+    # This view only had @login_required, so any authenticated user could
+    # delete any employee's shift request by id.
+    if not (
+        shift_request.employee_id == request.user.employee_get
+        or request.user.has_perm("base.delete_shiftrequest")
+        or is_reportingmanger(request, shift_request)
+    ):
+        messages.error(request, _("You don't have permission"))
+        return HorillaRedirect(request)
+
     try:
         user = shift_request.employee_id.employee_user_id
         messages.success(request, _("Shift request deleted"))

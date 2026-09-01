@@ -927,7 +927,17 @@ class DocumentRequestApproveRejectView(APIView):
 
     @manager_permission_required("horilla_documents.add_document")
     def post(self, request, id, status):
+        from employee.cbv.accessibility import can_manage_employee_action
+
         document = Document.objects.filter(id=id).first()
+        if not document:
+            return Response({"error": _("Document not found")}, status=404)
+        # The manager gate only asks "manages anyone", so without this any
+        # manager could approve or reject any employee's document.
+        if not can_manage_employee_action(
+            request, document.employee_id, "horilla_documents.change_document"
+        ):
+            return Response({"error": _("You don't have permission")}, status=403)
         document.status = status
         document.save()
         return Response({"status": "success"}, status=200)
@@ -938,14 +948,30 @@ class DocumentBulkApproveRejectAPIView(APIView):
 
     @manager_permission_required("horilla_documents.add_document")
     def put(self, request):
+        from employee.cbv.accessibility import can_manage_employee_action
+
         ids = request.data.get("ids", None)
         status = request.data.get("status", None)
         status_code = 200
+        # `response` used to be bound only inside `if ids:`, so a request
+        # without ids raised UnboundLocalError instead of returning cleanly.
+        response = []
 
         if ids:
-            documents = Document.objects.filter(id__in=ids)
-            response = []
+            documents = Document.objects.filter(id__in=ids).select_related(
+                "employee_id"
+            )
             for document in documents:
+                # Same scoping as the web document_bulk_approve: the ids come
+                # straight from the payload.
+                if not can_manage_employee_action(
+                    request, document.employee_id, "horilla_documents.change_document"
+                ):
+                    status_code = 400
+                    response.append(
+                        {"id": document.id, "error": _("You don't have permission")}
+                    )
+                    continue
                 if not document.document:
                     status_code = 400
                     response.append({"id": document.id, "error": _("No documents")})
