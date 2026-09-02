@@ -6,6 +6,7 @@ This module is used register endpoints to the check-in check-out functionalities
 
 import ipaddress
 import logging
+import threading
 
 from django.shortcuts import render
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 from datetime import date, datetime, timedelta
 
 from django.contrib import messages
+from django.db import connections
 from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
@@ -59,6 +61,42 @@ def _client_ip(request):
     return request.META.get("REMOTE_ADDR")
 
 
+# Reverse geocoding is a third party HTTP round trip, so it never runs while a
+# punch request is being served. Addresses already seen (an office, a site the
+# team visits daily) are answered from this process-local cache; anything else
+# is resolved by a background thread after the response has been sent.
+_ADDRESS_CACHE = {}
+_ADDRESS_CACHE_LOCK = threading.Lock()
+_ADDRESS_CACHE_MAX = 512
+
+
+def _address_cache_key(lat, lng):
+    """Round to ~11 metres so punches from the same spot share one lookup."""
+    return (round(float(lat), 4), round(float(lng), 4))
+
+
+def _cached_address(lat, lng):
+    try:
+        key = _address_cache_key(lat, lng)
+    except (TypeError, ValueError):
+        return ""
+    with _ADDRESS_CACHE_LOCK:
+        return _ADDRESS_CACHE.get(key, "")
+
+
+def _cache_address(lat, lng, address):
+    if not address:
+        return
+    try:
+        key = _address_cache_key(lat, lng)
+    except (TypeError, ValueError):
+        return
+    with _ADDRESS_CACHE_LOCK:
+        if len(_ADDRESS_CACHE) >= _ADDRESS_CACHE_MAX:
+            _ADDRESS_CACHE.clear()
+        _ADDRESS_CACHE[key] = address
+
+
 def reverse_punch_address(lat, lng):
     """Turn coordinates into a readable address. Empty string on failure."""
     try:
@@ -87,7 +125,9 @@ def reverse_punch_address(lat, lng):
         for part in ordered:
             if part and part not in cleaned:
                 cleaned.append(part)
-        return ", ".join(cleaned) or location.address or ""
+        address = ", ".join(cleaned) or location.address or ""
+        _cache_address(lat, lng, address)
+        return address
     except Exception:
         logger.exception("Punch reverse-geocode failed")
         return ""
@@ -195,7 +235,13 @@ def ip_approx_location(ip):
 
 
 def punch_point_from_request(request):
-    """GPS, reverse-geocoded address, and client IP (web GET or app POST)."""
+    """GPS and client IP (web GET or app POST), with no blocking network call.
+
+    Resolving the address used to happen right here, so every clock-in waited on
+    Nominatim (or ip-api when there was no GPS) before the button could come
+    back. Only an already cached address is attached synchronously now; anything
+    else is filled in by queue_punch_address after the response is sent.
+    """
     if request is None:
         request = getattr(_thread_locals, "request", None)
     if request is None:
@@ -205,12 +251,66 @@ def punch_point_from_request(request):
     if lat is not None and lng is not None:
         point["lat"] = lat
         point["lng"] = lng
-        address = reverse_punch_address(lat, lng)
+        address = _cached_address(lat, lng)
         if address:
             point["address"] = address
-    else:
-        point.update(ip_approx_location(point.get("ip")))
     return point
+
+
+def _backfill_punch_address(targets, key, lat, lng, ip):
+    """Resolve the punch address off-request and write it onto the saved rows.
+
+    targets: list of (model, pk) that carry the same punch point.
+    """
+    try:
+        if lat is not None and lng is not None:
+            address = reverse_punch_address(lat, lng)
+            if not address:
+                return
+            _cache_address(lat, lng, address)
+            extra = {"address": address}
+        else:
+            extra = ip_approx_location(ip)
+        if not extra:
+            return
+        for model, pk in targets:
+            try:
+                instance = model.objects.filter(pk=pk).first()
+                if instance is None:
+                    continue
+                meta = dict(instance.punch_location or {})
+                point = dict(meta.get(key) or {})
+                point.update(extra)
+                meta[key] = point
+                model.objects.filter(pk=pk).update(punch_location=meta)
+            except Exception:
+                logger.exception("Punch address backfill failed for %s %s", model, pk)
+    finally:
+        # A thread of our own owns its DB connections; leaving them open leaks
+        # a connection per punch.
+        connections.close_all()
+
+
+def queue_punch_address(instances, key, point):
+    """Resolve the address for an already saved punch in the background."""
+    if not point or point.get("address"):
+        return
+    lat, lng = point.get("lat"), point.get("lng")
+    ip = point.get("ip")
+    if (lat is None or lng is None) and not _is_public_ip(ip):
+        return
+    targets = [
+        (type(instance), instance.pk)
+        for instance in instances
+        if instance is not None and instance.pk
+    ]
+    if not targets:
+        return
+    threading.Thread(
+        target=_backfill_punch_address,
+        args=(targets, key, lat, lng, ip),
+        daemon=True,
+    ).start()
 
 
 def merge_punch_location(instance, key, point):
@@ -333,6 +433,9 @@ def clock_in_attendance_and_activity(
         activity.clock_out_date = date_today
         activity.save()
 
+    # Resolve the punch point before the insert: saving a second time just to
+    # attach it re-fired the post_save refresh and wrote another history row.
+    point = punch_point_from_request(request)
     new_activity = AttendanceActivity.objects.create(
         employee_id=employee,
         attendance_date=attendance_date,
@@ -340,11 +443,8 @@ def clock_in_attendance_and_activity(
         shift_day=day,
         clock_in=in_datetime,
         in_datetime=in_datetime,
+        punch_location={"in": point} if point else None,
     )
-    point = punch_point_from_request(request)
-    if point:
-        merge_punch_location(new_activity, "in", point)
-        new_activity.save(update_fields=["punch_location"])
     # create attendance if not exist
     attendance = Attendance.objects.filter(
         employee_id=employee, attendance_date=attendance_date
@@ -379,6 +479,7 @@ def clock_in_attendance_and_activity(
         early_out_instance = attendance.late_come_early_out.filter(type="early_out")
         if early_out_instance.exists():
             early_out_instance[0].delete()
+    queue_punch_address([new_activity, attendance], "in", point)
     return attendance
 
 
@@ -612,6 +713,7 @@ def clock_out_attendance_and_activity(
         attendance.attendance_validated = attendance_validate(attendance)
         attendance.save()
 
+        queue_punch_address([attendance_activity, attendance], "out", point)
         return attendance
 
     logger.error("No attendance clock in activity found that needs clocking out.")

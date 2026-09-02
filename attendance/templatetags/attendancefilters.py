@@ -28,6 +28,24 @@ def is_string(value):
     return isinstance(value, str)
 
 
+@register.filter(name="is_geofencing_enabled")
+def is_geofencing_enabled(request):
+    """
+    Whether the punch has to be inside a geofence for this user's company.
+
+    The check-in button only pays for a slow high-accuracy GPS fix when the
+    answer is yes; a coarse fix is plenty for recording where a punch happened.
+    """
+    try:
+        from geofencing.utils import get_company_geofencing
+    except ImportError:
+        return False
+    try:
+        return get_company_geofencing(request) is not None
+    except Exception:
+        return False
+
+
 @register.filter(name="checkminimumot")
 def checkminimumot(ot=None):
     """

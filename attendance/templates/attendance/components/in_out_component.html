@@ -16,6 +16,7 @@
                         hx-target="#attendance-activity-container"
                         hx-swap="innerHTML"
                         onclick="return punchWithLocation(event, this)"
+                        {% if request|is_geofencing_enabled %}data-punch-precise="1"{% endif %}
                     >
                         <ion-icon class="oh-navbar__clock-icon mr-2 text-white" name="exit-outline"></ion-icon>
                         <span
@@ -46,6 +47,7 @@
                         hx-target="#attendance-activity-container"
                         hx-swap="innerHTML"
                         onclick="return punchWithLocation(event, this)"
+                        {% if request|is_geofencing_enabled %}data-punch-precise="1"{% endif %}
                     >
                         <ion-icon class="oh-navbar__clock-icon mr-2 text-white" name="enter-outline"></ion-icon>
                         <span
@@ -71,27 +73,126 @@
 {% endif %}
 
 <script>
+// The punch used to block on a high-accuracy GPS fix (up to 8s) before the
+// request was even sent, with nothing on screen in the meantime. Now the button
+// goes busy immediately, a recent fix is reused when we have one, and the
+// lookup itself is coarse and short so it cannot hold the punch hostage.
+window.PUNCH_POSITION_MAX_AGE = window.PUNCH_POSITION_MAX_AGE || 300000; // 5 min
+window.PUNCH_POSITION_TIMEOUT = window.PUNCH_POSITION_TIMEOUT || 2500;
+
+window.rememberPunchPosition = window.rememberPunchPosition || function (p) {
+    window.__punchPosition = {
+        latitude: p.coords.latitude,
+        longitude: p.coords.longitude,
+        at: Date.now()
+    };
+    return window.__punchPosition;
+};
+
+window.freshPunchPosition = window.freshPunchPosition || function () {
+    var pos = window.__punchPosition;
+    if (pos && Date.now() - pos.at < window.PUNCH_POSITION_MAX_AGE) {
+        return pos;
+    }
+    return null;
+};
+
+// Warm the cache on load, but only when the browser already holds the
+// permission, so nobody gets an unprompted location dialog.
+window.warmPunchPosition = window.warmPunchPosition || function () {
+    if (!navigator.geolocation || !navigator.permissions || window.freshPunchPosition()) {
+        return;
+    }
+    try {
+        navigator.permissions.query({ name: "geolocation" }).then(function (status) {
+            if (status.state !== "granted") {
+                return;
+            }
+            navigator.geolocation.getCurrentPosition(
+                window.rememberPunchPosition,
+                function () {},
+                {
+                    enableHighAccuracy: false,
+                    timeout: window.PUNCH_POSITION_TIMEOUT,
+                    maximumAge: window.PUNCH_POSITION_MAX_AGE
+                }
+            );
+        }).catch(function () {});
+    } catch (e) {}
+};
+
 window.punchWithLocation = window.punchWithLocation || function (event, el) {
     event.preventDefault();
     event.stopPropagation();
+    if (el.dataset.punchBusy === "1") {
+        return false;
+    }
+    el.dataset.punchBusy = "1";
+    el.disabled = true;
+    el.style.opacity = "0.6";
+    el.style.pointerEvents = "none";
+
     var url = el.getAttribute("data-punch-url");
     var target = el.getAttribute("hx-target") || "#attendance-activity-container";
+    var done = false;
     function go(qs) {
-        htmx.ajax("GET", url + qs, { target: target, swap: "innerHTML" });
+        if (done) {
+            return;
+        }
+        done = true;
+        var pending = htmx.ajax("GET", url + qs, { target: target, swap: "innerHTML" });
+        if (pending && pending.catch) {
+            pending.catch(function () {
+                // The swap never happened, so hand the button back.
+                delete el.dataset.punchBusy;
+                el.disabled = false;
+                el.style.opacity = "";
+                el.style.pointerEvents = "";
+            });
+        }
+    }
+    function goWith(pos) {
+        go(pos ? "?latitude=" + pos.latitude + "&longitude=" + pos.longitude : "");
+    }
+
+    // A geofenced company needs a fix accurate enough to trust, so it gets the
+    // slower high-accuracy lookup. Everyone else only records where the punch
+    // happened, and a coarse fix is good enough for that.
+    var precise = el.getAttribute("data-punch-precise") === "1";
+    var timeout = precise ? 8000 : window.PUNCH_POSITION_TIMEOUT;
+
+    if (!precise) {
+        var cached = window.freshPunchPosition();
+        if (cached) {
+            goWith(cached);
+            return false;
+        }
     }
     if (!navigator.geolocation) {
         go("");
         return false;
     }
+    // Hard stop: punch anyway if the fix is slower than the timeout.
+    var guard = setTimeout(function () {
+        go("");
+    }, timeout + 300);
     navigator.geolocation.getCurrentPosition(
         function (p) {
-            go("?latitude=" + p.coords.latitude + "&longitude=" + p.coords.longitude);
+            clearTimeout(guard);
+            goWith(window.rememberPunchPosition(p));
         },
         function () {
+            clearTimeout(guard);
             go("");
         },
-        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+        {
+            enableHighAccuracy: precise,
+            timeout: timeout,
+            maximumAge: precise ? 0 : window.PUNCH_POSITION_MAX_AGE
+        }
     );
     return false;
 };
+
+window.warmPunchPosition();
 </script>
