@@ -18,13 +18,16 @@ workers = int(
 worker_class = "gthread"
 threads = 4
 worker_connections = 1000
-max_requests = 1000
-max_requests_jitter = 50
+# Higher recycle threshold: notification polling + dashboard fan-out was
+# recycling workers often enough to surface as nginx 502 / connection resets.
+max_requests = int(os.environ.get("GUNICORN_MAX_REQUESTS", "5000"))
+max_requests_jitter = int(os.environ.get("GUNICORN_MAX_REQUESTS_JITTER", "200"))
 # preload_app is disabled with gthread workers to avoid ORM connection issues
 preload_app = False
 
 # Timeout settings
-timeout = 120
+timeout = int(os.environ.get("GUNICORN_TIMEOUT", "120"))
+graceful_timeout = int(os.environ.get("GUNICORN_GRACEFUL_TIMEOUT", "30"))
 keepalive = 5
 
 # Logging

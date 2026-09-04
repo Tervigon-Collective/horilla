@@ -44,7 +44,7 @@
                 <button class="py-1.5 hover:text-primary-600 transition duration-300 text-sm gap-4 items-center flex w-full">
                     <a
                         class="text-[13px]"
-                        hx-get="{% url 'employee-profile' request.user.employee_get.id %}"
+                        hx-get="{% url 'employee-profile-view' request.user.employee_get.id %}"
                         hx-target="#ohMainContent"
                         hx-swap="innerHTML show:window:top"
                         hx-push-url="{% url 'employee-profile' %}"

@@ -164,3 +164,7 @@ CLAUDE.md
 .mcp.safe.json
 .claudeignore
 .specify/
+
+# Runtime Django logs
+logs/*.log
+logs/*.log.*

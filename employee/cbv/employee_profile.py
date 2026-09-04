@@ -132,6 +132,18 @@ class EmployeeProfileView(HorillaProfileView):
 
 
 class UserProfileView(EmployeeProfileView):
+    """
+    Own-profile CBV used from the navbar (HTMX into #ohMainContent).
+
+    Full-page GETs (refresh/bookmark) are redirected to ``employee-profile``,
+    which shells into this view via hx-trigger=load — HorillaProfileView
+    otherwise returns 405 for non-HTMX requests.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        if "HTTP_HX_REQUEST" not in request.META:
+            return redirect("employee-profile")
+        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
