@@ -94,6 +94,7 @@ from base.forms import (
     MultipleApproveConditionForm,
     PassWordResetForm,
     ResetPasswordForm,
+    password_reset_use_https,
     resolve_password_reset_user,
     RotatingShiftAssign,
     RotatingShiftAssignExportForm,
@@ -883,7 +884,7 @@ def _password_reset_mail_configured():
 
 def _password_reset_email_opts(request, view, email_backend):
     return {
-        "use_https": request.is_secure(),
+        "use_https": password_reset_use_https(request),
         "token_generator": view.token_generator,
         "from_email": email_backend.dynamic_from_email_with_display_name,
         "email_template_name": view.email_template_name,
@@ -945,6 +946,10 @@ class EmployeePasswordResetView(PasswordResetView):
     template_name = "forgot_password.html"
     form_class = PassWordResetForm
 
+    @method_decorator(login_required)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+
     def form_valid(self, form):
         try:
             email_backend, _is_default_backend = _password_reset_mail_configured()
@@ -953,24 +958,27 @@ class EmployeePasswordResetView(PasswordResetView):
                 return HorillaRedirect(self.request)
 
             user = resolve_password_reset_user(form.cleaned_data["email"])
-            if user:
-                sent = form.save(**_password_reset_email_opts(self.request, self, email_backend))
-                if not sent:
-                    messages.error(
-                        self.request,
-                        _("No email address is registered for this account."),
-                    )
-                    return HorillaRedirect(self.request)
+            if not user:
+                messages.error(self.request, _("User not found for this employee"))
+                return HorillaRedirect(self.request)
+
+            sent = form.save(**_password_reset_email_opts(self.request, self, email_backend))
+            if not sent:
+                messages.error(
+                    self.request,
+                    _("No email address is registered for this account."),
+                )
+                return HorillaRedirect(self.request)
 
             messages.success(
                 self.request,
-                _("If your account exists, a password reset link has been sent"),
+                _("Password reset link sent successfully"),
             )
             return HorillaRedirect(self.request)
 
         except Exception:
             logger.exception("Employee password reset email failed")
-            messages.error(self.request, _("Something went wrong....."))
+            messages.error(self.request, _("Failed to send password reset email. Please contact your administrator."))
             return HorillaRedirect(self.request)
 
 

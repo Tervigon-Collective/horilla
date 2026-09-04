@@ -85,7 +85,11 @@ class EmployeeProfileView(HorillaProfileView):
                     "title": _("Send password reset link"),
                     "src": f"/{settings.STATIC_URL}images/ui/key.png",
                     "accessibility": "employee.cbv.accessibility.password_reset_accessibility",
-                    "attrs": """href="#" onclick="$('#reset-button').click();" """,
+                    "attrs": """
+                        href="#"
+                        role="button"
+                        onclick="event.preventDefault();event.stopPropagation();window.horillaSendPasswordReset && window.horillaSendPasswordReset();return false;"
+                    """,
                 },
                 {
                     "divider": True,

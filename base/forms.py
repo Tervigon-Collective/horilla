@@ -3104,13 +3104,29 @@ UserModel = get_user_model()
 
 
 def resolve_password_reset_user(identifier):
-    """Match a user by username or email (case-insensitive)."""
+    """Match a user by username, user email, or employee personal/work email."""
     identifier = (identifier or "").strip()
     if not identifier:
         return None
     user = HorillaUser.objects.filter(username__iexact=identifier).first()
     if user is None:
         user = HorillaUser.objects.filter(email__iexact=identifier).first()
+    if user is None:
+        from employee.models import Employee
+
+        employee = (
+            Employee.objects.filter(email__iexact=identifier)
+            .select_related("employee_user_id", "employee_work_info")
+            .first()
+        )
+        if employee is None:
+            employee = (
+                Employee.objects.filter(employee_work_info__email__iexact=identifier)
+                .select_related("employee_user_id", "employee_work_info")
+                .first()
+            )
+        if employee and employee.employee_user_id_id:
+            user = employee.employee_user_id
     return user
 
 
@@ -3136,9 +3152,34 @@ def password_reset_site_context(request):
     if request:
         host = get_request_host(request)
         if host:
-            return host, host
+            domain = host.split(":")[0] if ":" in host else host
+            try:
+                current_site = get_current_site(request)
+                site_name = current_site.name or domain
+            except Exception:
+                site_name = domain
+            return domain, site_name
     current_site = get_current_site(request)
     return current_site.domain, current_site.name
+
+
+def password_reset_use_https(request) -> bool:
+    """Prefer HTTPS for reset links when the request or trusted origins use it."""
+    from django.conf import settings as dj_settings
+
+    if request is None:
+        return True
+    if request.is_secure():
+        return True
+    forwarded = (request.META.get("HTTP_X_FORWARDED_PROTO") or "").split(",")[0].strip()
+    if forwarded.lower() == "https":
+        return True
+    host = (request.get_host() or "").split(":")[0].lower()
+    for origin in getattr(dj_settings, "CSRF_TRUSTED_ORIGINS", []) or []:
+        origin = (origin or "").lower()
+        if origin.startswith("https://") and host and host in origin:
+            return True
+    return False
 
 
 class PassWordResetForm(forms.Form):

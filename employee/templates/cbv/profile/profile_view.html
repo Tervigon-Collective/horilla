@@ -3,11 +3,14 @@
     {% include "generic/horilla_profile_view.html" %}
 </div>
 
-<form  hidden action="{% url 'employee-reset-password' %}" method="post" role="button"
-style="display: flex;">
+<form id="employee-reset-password-form"
+      action="{% url 'employee-reset-password' %}"
+      method="post"
+      class="hidden"
+      style="display:none;">
 {% csrf_token %}
-<input name="email" hidden value="{{instance.employee_user_id.username}}" />
-<button  id="reset-button" type="submit" style="border: none; background: transparent;"></button>
+<input type="hidden" name="email" value="{% firstof instance.employee_user_id.username instance.email '' %}" />
+<button id="reset-button" type="submit" tabindex="-1" aria-hidden="true"></button>
 </form>
 
 
@@ -26,6 +29,37 @@ style="display: flex;">
 </script> {% endcomment %}
 
 <script>
+    window.horillaSendPasswordReset = function () {
+        var form = document.getElementById('employee-reset-password-form');
+        if (!form) {
+            alert('{% trans "Password reset form is missing on this page." %}');
+            return;
+        }
+        var emailInput = form.querySelector('[name=email]');
+        var email = emailInput ? (emailInput.value || '') : '';
+        if (!email) {
+            alert('{% trans "This employee has no login username/email to send a reset link." %}');
+            return;
+        }
+        var confirmText = '{% trans "Send a password reset link to this employee\'s registered email?" %}';
+        if (window.Swal) {
+            Swal.fire({
+                text: confirmText,
+                icon: "question",
+                showCancelButton: true,
+                confirmButtonColor: "#008000",
+                cancelButtonColor: "#6c757d",
+                confirmButtonText: (window.i18nMessages && i18nMessages.confirm) || '{% trans "Confirm" %}',
+                cancelButtonText: (window.i18nMessages && i18nMessages.cancel) || '{% trans "Cancel" %}'
+            }).then(function (result) {
+                if (result.isConfirmed) {
+                    form.submit();
+                }
+            });
+        } else if (confirm(confirmText)) {
+            form.submit();
+        }
+    };
     $('#block-account').click(function() {
     var message = '{% if instance.employee_user_id.is_active %}{% trans "Do you really want to prevent this employee from accessing and logging into this webpage?" %}{% else %}{% trans "Do you really want to allow this employee to access and log into this webpage?" %}{% endif %}';
 
