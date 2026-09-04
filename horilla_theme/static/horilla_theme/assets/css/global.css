@@ -297,18 +297,41 @@
   z-index: 2;
 }
 
-/* On hover: show .con, hide .date */
-.check:hover .date {
-  opacity: 0;
+/* On hover (desktop): show action label, hide timer */
+@media (hover: hover) and (pointer: fine) {
+  .check:hover .date {
+    opacity: 0;
+  }
+
+  .check:hover .con {
+    opacity: 1;
+  }
 }
 
-.check:hover .con {
-  opacity: 1;
-}
-
+/* Keep Check In / Check Out visible on phones & tablets (was display:none). */
 @media (max-width: 991px) {
   .check {
-    display: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    min-width: 5.5rem;
+    max-width: 9rem;
+    padding: 8px 10px;
+    height: 36px;
+    font-size: 0.8rem;
+    flex-shrink: 0;
+  }
+
+  /* Touch has no hover — always show Check In / Check Out label. */
+  .check .date {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .check .con {
+    opacity: 1;
+    display: flex !important; /* overrides inline display:none from timerunner */
   }
 }
 
