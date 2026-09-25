@@ -28,6 +28,7 @@ from attendance.methods.utils import (
     activity_datetime,
     employee_exists,
     format_time,
+    get_client_ip,
     overtime_calculation,
     shift_schedule_today,
     strtime_seconds,
@@ -52,13 +53,6 @@ try:
 except ImportError:
     validate_request_location = None
 from horilla.horilla_middlewares import _thread_locals
-
-
-def _client_ip(request):
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR")
 
 
 # Reverse geocoding is a third party HTTP round trip, so it never runs while a
@@ -246,7 +240,7 @@ def punch_point_from_request(request):
         request = getattr(_thread_locals, "request", None)
     if request is None:
         return {}
-    point = {"ip": _client_ip(request)}
+    point = {"ip": get_client_ip(request)}
     lat, lng = punch_coords_from_request(request)
     if lat is not None and lng is not None:
         point["lat"] = lat
@@ -516,10 +510,7 @@ def clock_in(request):
             and allowed_attendance_ips
             and allowed_attendance_ips.is_enabled
         ):
-            x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
-            ip = request.META.get("REMOTE_ADDR")
-            if x_forwarded_for:
-                ip = x_forwarded_for.split(",")[0]
+            ip = get_client_ip(request)
 
             allowed_ips = (allowed_attendance_ips.additional_data or {}).get(
                 "allowed_ips", []
@@ -907,10 +898,7 @@ def clock_out(request):
             and allowed_attendance_ips
             and allowed_attendance_ips.is_enabled
         ):
-            x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
-            ip = request.META.get("REMOTE_ADDR")
-            if x_forwarded_for:
-                ip = x_forwarded_for.split(",")[0]
+            ip = get_client_ip(request)
 
             allowed_ips = (allowed_attendance_ips.additional_data or {}).get(
                 "allowed_ips", []

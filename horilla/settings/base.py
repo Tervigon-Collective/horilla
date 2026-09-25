@@ -36,6 +36,9 @@ ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 CSRF_TRUSTED_ORIGINS = env("CSRF_TRUSTED_ORIGINS")
 HORILLA_ENV = env("HORILLA_ENV", default="")
 REDIS_URL = env("REDIS_URL", default=None)
+# Number of reverse proxies in front of gunicorn that append to
+# X-Forwarded-For; 0 means the header is never trusted.
+ATTENDANCE_TRUSTED_PROXY_COUNT = env.int("ATTENDANCE_TRUSTED_PROXY_COUNT", default=0)
 
 # Default site ID for django.contrib.sites framework.
 SITE_ID = 1

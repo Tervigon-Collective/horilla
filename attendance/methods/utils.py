@@ -157,6 +157,28 @@ def get_diff_dict(first_dict, other_dict, model=None):
     return difference
 
 
+def get_client_ip(request):
+    """
+    The caller's IP. X-Forwarded-For is client-supplied, so only the entries
+    appended by the ATTENDANCE_TRUSTED_PROXY_COUNT reverse proxies in front of
+    the app (nginx's $proxy_add_x_forwarded_for appends the address it saw)
+    are trusted, counting from the right. Anything a client prepends is
+    ignored, so nobody can claim to be on the office network.
+    """
+    proxy_count = getattr(settings, "ATTENDANCE_TRUSTED_PROXY_COUNT", 0) or 0
+    remote_addr = request.META.get("REMOTE_ADDR")
+    if proxy_count <= 0:
+        return remote_addr
+    forwarded = [
+        part.strip()
+        for part in request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")
+        if part.strip()
+    ]
+    if len(forwarded) < proxy_count:
+        return remote_addr
+    return forwarded[-proxy_count]
+
+
 def employee_exists(request):
     """
     This method return the employee instance and work info if not exists return None instead
