@@ -14,8 +14,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Docker CI's Trivy gate (--ignore-unfixed, CRITICAL) caught: a fixed
 # perl-base existed in Debian's repos and was not in the image.
 # This host has no IPv6 route, and the legacy builder resolves deb.debian.org
-# to IPv6 first, so apt fails without this.
-RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4 \
+# to IPv6 first; the Debian CDN also drops IPv4 connections from here, so retry.
+RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "10";\n' > /etc/apt/apt.conf.d/99network \
     && apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
@@ -70,8 +70,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # `upgrade` first -- see the builder stage's comment. This is the stage
 # Trivy actually scans, so it is the one the CI gate needs.
 # This host has no IPv6 route, and the legacy builder resolves deb.debian.org
-# to IPv6 first, so apt fails without this.
-RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4 \
+# to IPv6 first; the Debian CDN also drops IPv4 connections from here, so retry.
+RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "10";\n' > /etc/apt/apt.conf.d/99network \
     && apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
