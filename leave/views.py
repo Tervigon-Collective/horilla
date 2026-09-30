@@ -2759,7 +2759,16 @@ def user_request_delete(request, id):
     previous_data = request.GET.urlencode()
     try:
         leave_request = LeaveRequest.objects.get(id=id)
-        if request.user.employee_get == leave_request.employee_id:
+        if request.user.employee_get != leave_request.employee_id:
+            messages.error(request, _("You don't have permission"))
+        elif leave_request.status != "requested":
+            # The button only shows while pending, but a stale page (or a
+            # direct POST) could delete an approved/rejected leave.
+            messages.error(
+                request,
+                _("Only pending leave requests can be deleted. Ask your manager to cancel it."),
+            )
+        else:
             messages.success(request, _("Leave request deleted successfully.."))
             leave_request.delete()
     except LeaveRequest.DoesNotExist:
@@ -4211,7 +4220,10 @@ def user_request_bulk_delete(request):
     ids = json.loads(ids)
     for leave_request_id in ids:
         try:
-            leave_request = LeaveRequest.objects.get(id=leave_request_id)
+            # Only the requester's own leaves; this ran on any id posted.
+            leave_request = LeaveRequest.objects.get(
+                id=leave_request_id, employee_id__employee_user_id=request.user
+            )
             status = leave_request.status
             if leave_request.status == "requested":
                 leave_request.delete()

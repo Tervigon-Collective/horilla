@@ -22,7 +22,12 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         from attendance.methods.utils import format_time, strtime_seconds
-        from attendance.models import Attendance, AttendanceActivity, AttendanceOverTime
+        from attendance.models import (
+            Attendance,
+            AttendanceActivity,
+            AttendanceOverTime,
+            default_shift_for,
+        )
 
         dry_run = options["dry_run"]
 
@@ -51,17 +56,30 @@ class Command(BaseCommand):
             closed = Attendance.objects.exclude(attendance_clock_out=None)
             for attendance in closed.select_related("employee_id"):
                 old = attendance.attendance_worked_hour
+                old_min = attendance.minimum_hour
                 attendance.sync_worked_hours_from_clock_times()
                 stale_ot = (attendance.approved_overtime_second or 0) > (
                     attendance.overtime_second or 0
                 )
-                if attendance.attendance_worked_hour == old and not stale_ot:
+                # Requests/imports could store no shift or a 00:00 minimum on
+                # a working day, which counted every worked minute as overtime.
+                had_shift = bool(attendance.shift_id_id)
+                if not had_shift:
+                    attendance.shift_id = default_shift_for(attendance.employee_id)
+                attendance.adjust_minimum_hour()
+                missing_shift = not had_shift or attendance.minimum_hour != old_min
+                if (
+                    attendance.attendance_worked_hour == old
+                    and not stale_ot
+                    and not missing_shift
+                ):
                     continue
                 resaved += 1
                 self.stdout.write(
                     f"attendance {attendance.pk} {attendance.employee_id} "
                     f"{attendance.attendance_date}: {old} -> "
-                    f"{attendance.attendance_worked_hour}"
+                    f"{attendance.attendance_worked_hour}, minimum {old_min} -> "
+                    f"{attendance.minimum_hour}, shift {attendance.shift_id}"
                 )
                 if not dry_run:
                     attendance.save()

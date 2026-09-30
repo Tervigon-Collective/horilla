@@ -98,7 +98,27 @@
                         {% trans "Approve" %}
                     </a>
                 {% endif %}
-                {% if request.user|is_reportingmanager or perms.attendance.change_attendance %}
+                {% if attendance.employee_id.employee_user_id == request.user and not perms.attendance.change_attendance %}
+                    {% if attendance.is_validate_request %}
+                    <a
+                        href="#"
+                        hx-post="{% url 'cancel-validate-attendance-request' attendance.id %}"
+                        hx-confirm="{% trans 'Withdraw this attendance request?' %}"
+                        hx-target="#validateAttendanceRequestModalBody"
+                        hx-swap="innerHTML"
+                        onclick="event.preventDefault(); event.stopPropagation()"
+                        class="h-8 px-4 py-2 bg-danger text-white rounded-md text-xs flex items-center justify-center gap-2 hover:bg-danger-dark transition duration-300"
+                    >
+                        <img
+                            class="filter brightness-0 invert"
+                            src="{% static 'horilla_theme/assets/img/icons/close.svg' %}"
+                            alt="{% trans 'Withdraw' %}"
+                            width="13"
+                        >
+                        {% trans "Withdraw" %}
+                    </a>
+                    {% endif %}
+                {% elif request.user|is_reportingmanager or perms.attendance.change_attendance %}
                     <a
                         href="#"
                         hx-post="{% url 'cancel-validate-attendance-request' attendance.id %}"

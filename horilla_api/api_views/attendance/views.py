@@ -747,6 +747,10 @@ class AttendanceRequestApproveView(APIView):
                 # DUE TO AFFECT THE OVERTIME CALCULATION ON SAVE METHOD, SAVE THE INSTANCE ONCE MORE
                 attendance = Attendance.objects.get(id=pk)
                 attendance.save()
+            if attendance.request_type == "create_request":
+                attendance.request_type = "created_request"
+                attendance.requested_data = None
+                attendance.save()
             if (
                 attendance.attendance_clock_out is None
                 or attendance.attendance_clock_out_date is None

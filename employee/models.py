@@ -970,6 +970,11 @@ class EmployeeWorkInformation(models.Model):
         return f"{self.employee_id} - {self.job_position_id}"
 
     def save(self, *args, **kwargs):
+        if not self.shift_id_id:
+            self.shift_id = (
+                EmployeeShift.objects.filter(employee_shift__iexact="Regular Shift").first()
+                or EmployeeShift.objects.order_by("id").first()
+            )
         # Default probation window: 6 months from DOJ. Never auto-confirm on date alone.
         previous_status = None
         if self.pk:

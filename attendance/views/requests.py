@@ -603,11 +603,29 @@ def cancel_attendance_request(request, attendance_id):
         # Own request, or someone who manages *this* employee (HR/admin/perm
         # holder included). is_reportingmanager() only asks "manages anyone",
         # which let any manager reject any employee's request.
-        if attendance.employee_id.employee_user_id == request.user or (
-            can_manage_employee_action(
-                request, attendance.employee_id, "attendance.change_attendance"
+        is_owner = attendance.employee_id.employee_user_id == request.user
+        can_manage = can_manage_employee_action(
+            request, attendance.employee_id, "attendance.change_attendance"
+        )
+        # An owner may only withdraw a request that is still pending; once it
+        # is decided, cancelling a create request would delete the attendance.
+        if is_owner and not can_manage and not attendance.is_validate_request:
+            messages.error(
+                request, _("This attendance request has already been processed.")
             )
-        ):
+        elif is_owner and not can_manage:
+            was_create_request = attendance.request_type == "create_request"
+            attendance.is_validate_request_approved = False
+            attendance.is_validate_request = False
+            attendance.request_description = None
+            attendance.requested_data = None
+            attendance.request_type = None
+            attendance.save()
+            if was_create_request:
+                attendance.delete()
+            messages.success(request, _("Your attendance request has been withdrawn."))
+        elif is_owner or can_manage:
+            was_create_request = attendance.request_type == "create_request"
             attendance.is_validate_request_approved = False
             attendance.is_validate_request = False
             attendance.request_description = None
@@ -615,7 +633,7 @@ def cancel_attendance_request(request, attendance_id):
             attendance.request_type = None
 
             attendance.save()
-            if attendance.request_type == "create_request":
+            if was_create_request:
                 attendance.delete()
                 messages.success(request, _("The requested attendance is removed."))
             else:
@@ -745,6 +763,10 @@ def bulk_approve_attendance_request(request):
             # DUE TO AFFECT THE OVERTIME CALCULATION ON SAVE METHOD, SAVE THE INSTANCE ONCE MORE
             attendance = Attendance.objects.get(id=attendance_id)
             attendance.save()
+        if attendance.request_type == "create_request":
+            attendance.request_type = "created_request"
+            attendance.requested_data = None
+            attendance.save()
         if (
             attendance.attendance_clock_out is None
             or attendance.attendance_clock_out_date is None
@@ -848,13 +870,14 @@ def bulk_reject_attendance_request(request):
                     request, attendance.employee_id, "attendance.change_attendance"
                 )
             ):
+                was_create_request = attendance.request_type == "create_request"
                 attendance.is_validate_request_approved = False
                 attendance.is_validate_request = False
                 attendance.request_description = None
                 attendance.requested_data = None
                 attendance.request_type = None
                 attendance.save()
-                if attendance.request_type == "create_request":
+                if was_create_request:
                     attendance.delete()
                     messages.success(request, _("The requested attendance is removed."))
                 else:

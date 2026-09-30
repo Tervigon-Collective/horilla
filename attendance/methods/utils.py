@@ -343,6 +343,29 @@ def attendance_date_validate(date):
         raise ValidationError(_("You cannot choose a future date."))
 
 
+def validate_clock_times(clock_in_date, clock_in, clock_out_date, clock_out):
+    """
+    Reject a check-out that is not after the check-in, e.g. a 10:20 check-in
+    typed as 22:20 against an 18:30 check-out.
+    """
+    if not (clock_in_date and clock_in and clock_out_date and clock_out):
+        return
+    if isinstance(clock_in, str):
+        clock_in = datetime.strptime(clock_in[:5], "%H:%M").time()
+    if isinstance(clock_out, str):
+        clock_out = datetime.strptime(clock_out[:5], "%H:%M").time()
+    if isinstance(clock_in_date, str):
+        clock_in_date = datetime.strptime(clock_in_date, "%Y-%m-%d").date()
+    if isinstance(clock_out_date, str):
+        clock_out_date = datetime.strptime(clock_out_date, "%Y-%m-%d").date()
+    if datetime.combine(clock_out_date, clock_out) <= datetime.combine(
+        clock_in_date, clock_in
+    ):
+        raise ValidationError(
+            {"attendance_clock_out": _("Check-out must be after check-in.")}
+        )
+
+
 def activity_datetime(attendance_activity):
     """
     This method is used to convert clock-in and clock-out of activity as datetime object

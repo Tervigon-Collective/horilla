@@ -28,6 +28,7 @@ from attendance.methods.utils import (
     month_date_range,
     strtime_seconds,
     validate_hh_mm_ss_format,
+    validate_clock_times,
     validate_time_format,
     validate_time_in_minutes,
 )
@@ -225,6 +226,30 @@ class BatchAttendance(HorillaModel):
 
     def __str__(self):
         return f"{self.title}-{self.id}"
+
+
+DEFAULT_SHIFT_NAME = "Regular Shift"
+
+
+def default_shift_for(employee):
+    """The employee's own shift, else the company-wide default (Regular Shift)."""
+    work_info = getattr(employee, "employee_work_info", None) if employee else None
+    if work_info and work_info.shift_id:
+        return work_info.shift_id
+    return (
+        EmployeeShift.objects.filter(employee_shift__iexact=DEFAULT_SHIFT_NAME).first()
+        or EmployeeShift.objects.order_by("id").first()
+    )
+
+
+def shift_minimum_hour(shift, day):
+    """Minimum working hours scheduled for `shift` on `day`; 00:00 when off."""
+    from base.models import EmployeeShiftSchedule
+
+    if not shift or not day:
+        return "00:00"
+    schedule = EmployeeShiftSchedule.objects.filter(shift_id=shift, day=day).first()
+    return (schedule.minimum_working_hour if schedule else None) or "00:00"
 
 
 class Attendance(HorillaModel):
@@ -831,6 +856,8 @@ class Attendance(HorillaModel):
             self.attendance_clock_out_date, self.attendance_clock_out
         )
         if clock_out <= clock_in:
+            # Never keep a client-supplied worked hour for an impossible span.
+            self.attendance_worked_hour = "00:00"
             return
 
         activities = AttendanceActivity.objects.filter(
@@ -959,6 +986,15 @@ class Attendance(HorillaModel):
             self.is_holiday = True
         else:
             self.is_holiday = False
+            # Attendance requests and imports can arrive with a blank 00:00
+            # minimum (every worked minute becomes overtime) or a range total
+            # such as 72:00 from a bulk request; a working day then takes the
+            # shift's minimum.
+            minimum_seconds = strtime_seconds(self.minimum_hour or "00:00")
+            if not minimum_seconds or minimum_seconds > 24 * 3600:
+                self.minimum_hour = shift_minimum_hour(
+                    self.shift_id, self.attendance_day
+                )
 
     def update_attendance_overtime(self):
         """
@@ -1048,6 +1084,8 @@ class Attendance(HorillaModel):
             self.attendance_day = EmployeeShiftDay.objects.get(
                 day=self.attendance_date.strftime("%A").lower()
             )
+        if not self.shift_id:
+            self.shift_id = default_shift_for(self.employee_id)
 
         if not is_new:
             old = Attendance.objects.only(
@@ -1317,6 +1355,13 @@ class Attendance(HorillaModel):
                     "attendance_clock_out_date": "Attendance check-out date cannot be earlier than check-in date"
                 }
             )
+
+        validate_clock_times(
+            self.attendance_clock_in_date,
+            self.attendance_clock_in,
+            self.attendance_clock_out_date,
+            self.attendance_clock_out,
+        )
 
         if self.attendance_clock_out_date and self.attendance_clock_out_date >= today:
             if out_time > now and not getattr(

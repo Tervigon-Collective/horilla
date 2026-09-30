@@ -4755,6 +4755,15 @@ def work_type_request_delete(request, obj_id):
 
     """
 
+    target = WorkTypeRequest.objects.filter(id=obj_id).first()
+    if target and not (
+        request.user.has_perm("base.delete_worktyperequest")
+        or is_reportingmanger(request, target)
+        or (target.employee_id == request.user.employee_get and not target.approved)
+    ):
+        messages.error(request, _("You don't have permission"))
+        return HorillaRedirect(request)
+
     try:
         work_type_request = WorkTypeRequest.objects.get(id=obj_id)
         employee = work_type_request.employee_id
@@ -5725,8 +5734,12 @@ def shift_request_delete(request, id):
 
     # This view only had @login_required, so any authenticated user could
     # delete any employee's shift request by id.
+    # Owners may only delete a request that has not been approved yet.
     if not (
-        shift_request.employee_id == request.user.employee_get
+        (
+            shift_request.employee_id == request.user.employee_get
+            and not shift_request.approved
+        )
         or request.user.has_perm("base.delete_shiftrequest")
         or is_reportingmanger(request, shift_request)
     ):

@@ -52,6 +52,7 @@ from attendance.models import (
     WorkRecords,
     attendance_date_validate,
     strtime_seconds,
+    validate_clock_times,
     validate_time_format,
 )
 from base.forms import ModelForm as BaseModelForm
@@ -819,6 +820,13 @@ class NewRequestForm(AttendanceRequestForm):
         if "attendance_clock_out_date" not in self.cleaned_data:
             self.cleaned_data["attendance_clock_out_date"] = None
 
+        validate_clock_times(
+            self.cleaned_data["attendance_clock_in_date"],
+            self.cleaned_data["attendance_clock_in"],
+            self.cleaned_data["attendance_clock_out_date"],
+            self.cleaned_data["attendance_clock_out"],
+        )
+
         employee = self.cleaned_data["employee_id"]
         attendance_date = self.cleaned_data["attendance_date"]
         attendances = Attendance.objects.filter(
@@ -1284,6 +1292,13 @@ class BulkAttendanceRequestForm(BaseModelForm):
         date_list = get_date_list(employee_id, from_date, to_date)
         if from_date and to_date and from_date > to_date:
             raise ValidationError({"to_date": _("To date should be after from date")})
+        validate_clock_times(
+            from_date, cleaned_data.get("attendance_clock_in"), from_date, attendance_clock_out
+        )
+        if strtime_seconds(minimum_hour) > 24 * 3600:
+            raise ValidationError(
+                {"minimum_hour": _("Minimum hour is per day and cannot exceed 24:00.")}
+            )
         if to_date == today and attendance_clock_out > now:
             raise ValidationError(
                 {

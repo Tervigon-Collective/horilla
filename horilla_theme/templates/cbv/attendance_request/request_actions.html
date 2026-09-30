@@ -52,7 +52,32 @@
         </a>
     {% endif %}
 
-    {% if request.user|is_reportingmanager or perms.attendance.change_attendance %}
+    {% if instance.employee_id.employee_user_id == request.user and not perms.attendance.change_attendance %}
+        {% if instance.is_validate_request %}
+            <a
+                href="#"
+                class="oh-btn oh-btn--danger oh-btn--sq-sm"
+                title="{% trans 'Withdraw' %}"
+                onclick="event.preventDefault(); event.stopPropagation();
+                    Swal.fire({
+                        title: '{% trans 'Are you sure?'|escapejs %}',
+                        text: '{% trans 'Do you want to withdraw this attendance request?'|escapejs %}',
+                        icon: 'warning',
+                        showCancelButton: true,
+                        confirmButtonColor: '#d33',
+                        cancelButtonColor: '#6c757d',
+                        confirmButtonText: '{% trans 'Withdraw'|escapejs %}',
+                        cancelButtonText: '{% trans 'Cancel'|escapejs %}'
+                    }).then(function(result) {
+                        if (result.isConfirmed) {
+                            htmx.ajax('POST', '{% url 'cancel-validate-attendance-request' instance.id %}', {target: '#validateAttendanceRequestModalBody', swap: 'innerHTML'});
+                        }
+                    }); return false"
+            >
+                <ion-icon name="close-circle-outline"></ion-icon>
+            </a>
+        {% endif %}
+    {% elif request.user|is_reportingmanager or perms.attendance.change_attendance %}
         <a
             href="#"
             class="oh-btn oh-btn--danger oh-btn--sq-sm"
