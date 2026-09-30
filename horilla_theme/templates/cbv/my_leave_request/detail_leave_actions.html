@@ -46,7 +46,7 @@
         </button>
     {% endif %}
 
-    {% if instance.status == 'approved' and instance.effective_end_date >= current_date %}
+    {% if instance.owner_can_cancel %}
         <a
             class="oh-btn oh-btn--light-bkg oh-btn--danger w-24 px-4 py-2 rounded-md text-xs flex items-center justify-center gap-2 transition duration-300"
             data-toggle="oh-modal-toggle"

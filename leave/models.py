@@ -1732,6 +1732,28 @@ class LeaveRequest(HorillaModel):
         """End date for display/actions; null end means open-ended from start."""
         return self.end_date or self.start_date
 
+    @property
+    def owner_can_cancel(self):
+        """The employee may cancel their own approved leave (e.g. applied by mistake)."""
+        return self.status == "approved" and self.dates_open
+
+    @property
+    def dates_open(self):
+        """
+        Leave can still be cancelled/rejected: it is ongoing/upcoming, or its
+        past dates are not yet covered by a confirmed/paid payslip.
+        """
+        if self.effective_end_date >= date.today():
+            return True
+        from payroll.models.models import Payslip
+
+        return not Payslip.objects.filter(
+            employee_id=self.employee_id,
+            status__in=["confirmed", "paid"],
+            start_date__lte=self.effective_end_date,
+            end_date__gte=self.start_date,
+        ).exists()
+
     def requested_dates(self):
         """
         :return: this functions returns a list of dates from start date to end date.

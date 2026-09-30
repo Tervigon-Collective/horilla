@@ -84,6 +84,18 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
+# wkhtmltopdf for pdfkit (payslip PDFs, payroll API, base.methods.generate_pdf).
+# Debian 13 no longer packages it; the upstream 0.12.6.1 bookworm build (patched
+# Qt) installs cleanly here. DejaVu covers the rupee sign on payslips.
+ARG WKHTMLTOX_DEB=https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.bookworm_amd64.deb
+RUN apt-get update \
+    && curl -fsSL -o /tmp/wkhtmltox.deb "$WKHTMLTOX_DEB" \
+    && apt-get install -y --no-install-recommends /tmp/wkhtmltox.deb fonts-dejavu-core \
+    && rm -f /tmp/wkhtmltox.deb \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && wkhtmltopdf --version
+
 # The base image ships its own setuptools (and pip's vendored msgpack) in
 # /usr/local/lib/python3.12/site-packages, outside the /opt/venv this app
 # runs from. Pinning them in requirements.txt only fixes the venv copy, so

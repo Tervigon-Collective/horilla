@@ -118,7 +118,7 @@
     {% endif %}
 
     {# Reject Button #}
-    {% if instance.status != 'rejected' and instance.end_date >= current_date and can_change or can_manage or leave_manager %}
+    {% if instance.status != 'rejected' and instance.dates_open and can_change or can_manage or leave_manager %}
         <a
             type="submit"
             data-toggle="oh-modal-toggle"

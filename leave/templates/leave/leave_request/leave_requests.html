@@ -372,7 +372,7 @@
                                                 <ion-icon class="me-1" name="checkmark-outline"></ion-icon>
                                             </a>
                                         {% endif %}
-                                        {% if leave_request.status != 'rejected' and leave_request.effective_end_date >= current_date %}
+                                        {% if leave_request.status != 'rejected' and leave_request.dates_open %}
                                             <a
                                                 type="submit"
                                                 data-toggle="oh-modal-toggle"

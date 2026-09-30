@@ -131,7 +131,7 @@
                                         <ion-icon class="me-1" name="checkmark-outline"></ion-icon>
                                     </a>
                                 {% endif %}
-                                {% if leave.status != 'rejected' and leave.effective_end_date >= current_date %}
+                                {% if leave.status != 'rejected' and leave.dates_open %}
                                     <a
                                         type="submit"
                                         data-toggle="oh-modal-toggle"

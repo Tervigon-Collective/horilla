@@ -1394,6 +1394,14 @@ def leave_request_cancel(request, id, emp_id=None):
                 if emp_id is not None:
                     return redirect(f"/employee/employee-view/{emp_id}/")
                 return HorillaRedirect(request)
+            if not leave_request.dates_open:
+                messages.error(
+                    request,
+                    _("A confirmed payslip already covers this leave; it can't be rejected now."),
+                )
+                if emp_id is not None:
+                    return redirect(f"/employee/employee-view/{emp_id}/")
+                return HorillaRedirect(request)
             if leave_request.status != "rejected":
                 leave_request.status = "rejected"
                 leave_request.leave_clashes_count = 0
@@ -1483,7 +1491,7 @@ def user_leave_cancel(request, id):
     if employee_id.employee_user_id.id == request.user.id:
         current_date = date.today()
         leave_end = leave_request.end_date or leave_request.start_date
-        if leave_request.status == "approved" and leave_end and leave_end >= current_date:
+        if leave_end and leave_request.owner_can_cancel:
             form = RejectForm()
             if request.method == "POST":
                 form = RejectForm(request.POST)
