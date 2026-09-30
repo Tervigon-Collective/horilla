@@ -46,6 +46,7 @@ class MyAttendancesListView(HorillaListView):
         (_("Work Type"), "work_type_id"),
         (_("Min Hour"), "minimum_hour"),
         (_("At Work"), "attendance_worked_hour"),
+        (_("Missing Punch"), "missing_punch_col"),
         (_("Pending Hour"), "hours_pending"),
         (_("Overtime"), "attendance_overtime"),
     ]
@@ -58,6 +59,7 @@ class MyAttendancesListView(HorillaListView):
         (_("Out Location"), "clock_out_location_col"),
         (_("Shift"), "shift_id"),
         (_("At Work"), "attendance_worked_hour"),
+        (_("Missing Punch"), "missing_punch_col"),
     ]
 
     row_attrs = """
@@ -246,6 +248,7 @@ class MyAttendancesDetailView(HorillaDetailedView):
         (_("Work Type"), "work_type_id"),
         (_("Min Hour"), "minimum_hour"),
         (_("At Work"), "attendance_worked_hour"),
+        (_("Missing Punch"), "missing_punch_col"),
         (_("Pending Hour"), "hours_pending"),
         (_("Overtime"), "attendance_overtime"),
     ]

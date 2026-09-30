@@ -17,7 +17,7 @@ from django.db import models, transaction
 from django.db.models import F, Q, Sum
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 from django.utils.translation import gettext_lazy as _
 
 from attendance.methods.utils import (
@@ -586,6 +586,22 @@ class Attendance(HorillaModel):
 
     def clock_out_location_col(self):
         return format_punch_location(self.punch_location, "out")
+
+    def missing_punch_col(self):
+        """Missing punch badge for the attendance lists (was only on the dashboard)."""
+        labels = []
+        if self.missing_punch_in:
+            labels.append(_("Missing punch in"))
+        if self.missing_punch_out:
+            labels.append(_("Missing punch out"))
+        if not labels:
+            return "—"
+        return format_html_join(
+            " ",
+            '<span style="background:#fef3c7;color:#92400e;padding:2px 8px;'
+            'border-radius:9999px;font-size:12px;white-space:nowrap;">{}</span>',
+            ((label,) for label in labels),
+        )
 
     def comment_col(self):
         """
