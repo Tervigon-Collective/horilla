@@ -13,10 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # with that day's base image until something else bumped it. This is what
 # Docker CI's Trivy gate (--ignore-unfixed, CRITICAL) caught: a fixed
 # perl-base existed in Debian's repos and was not in the image.
-# This host has no IPv6 route, and the legacy builder resolves deb.debian.org
-# to IPv6 first, so apt fails without this.
-RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4 \
-    && apt-get update \
+RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
         build-essential \
@@ -69,10 +66,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 #
 # `upgrade` first -- see the builder stage's comment. This is the stage
 # Trivy actually scans, so it is the one the CI gate needs.
-# This host has no IPv6 route, and the legacy builder resolves deb.debian.org
-# to IPv6 first, so apt fails without this.
-RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4 \
-    && apt-get update \
+RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
         libpq5 \
