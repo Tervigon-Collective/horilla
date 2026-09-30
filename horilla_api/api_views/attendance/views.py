@@ -1113,6 +1113,10 @@ class MailTemplateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        # Same permission as the web list (base.views.view_mail_templates);
+        # checked inline so a denied caller gets 403 rather than 401.
+        if not request.user.has_perm("base.view_horillamailtemplate"):
+            return Response({"error": _("No permission")}, status=403)
         instances = HorillaMailTemplate.objects.all()
         serializer = MailTemplateSerializer(instances, many=True)
         return Response(serializer.data, status=200)
