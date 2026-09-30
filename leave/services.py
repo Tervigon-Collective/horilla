@@ -256,13 +256,15 @@ def has_sufficient_leave_balance(
 def get_available_leave_record(leave_request, for_update=False):
     from leave.models import AvailableLeave
 
-    qs = AvailableLeave.objects.filter(
+    record = AvailableLeave.objects.filter(
         employee_id=leave_request.employee_id,
         leave_type_id=leave_request.leave_type_id,
-    )
-    if for_update:
-        qs = qs.select_for_update()
-    return qs.first()
+    ).first()
+    if record and for_update:
+        # The company-scoped manager adds DISTINCT, which Postgres rejects
+        # with FOR UPDATE, so the row is locked by pk via the base manager.
+        record = AvailableLeave._base_manager.select_for_update().get(pk=record.pk)
+    return record
 
 
 def _reserved_total(leave_request):
