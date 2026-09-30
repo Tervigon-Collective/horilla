@@ -338,26 +338,27 @@ def is_check_in_enabled(request):
     This method checks whether the check-in/check-out feature is enabled.
     """
     from attendance.models import AttendanceGeneralSetting
+    from base.context_processors import _cached
 
     selected_company = request.session.get("selected_company")
     if not selected_company:
-        return False  # Safeguard if session key is missing
+        return False
 
-    # Fetch the settings based on the selected company
-    if selected_company == "all":
-        attendance_settings = AttendanceGeneralSetting.objects.filter(
-            company_id=None
-        ).first()
-    else:
-        company = Company.objects.filter(id=selected_company).first()
-        if not company:
-            return False  # Return False if the company doesn't exist
-        attendance_settings = AttendanceGeneralSetting.objects.filter(
-            company_id=company
-        ).first()
+    def load():
+        if selected_company == "all":
+            attendance_settings = AttendanceGeneralSetting.objects.filter(
+                company_id=None
+            ).first()
+        else:
+            company = Company.objects.filter(id=selected_company).first()
+            if not company:
+                return False
+            attendance_settings = AttendanceGeneralSetting.objects.filter(
+                company_id=company
+            ).first()
+        return bool(attendance_settings and attendance_settings.enable_check_in)
 
-    # Check if check-in is enabled
-    return bool(attendance_settings and attendance_settings.enable_check_in)
+    return _cached(f"horilla:check-in:{selected_company}", load)
 
 
 @register.filter(name="is_geofencing_enabled")
@@ -412,26 +413,36 @@ def is_timerunner_enabled(request):
     personal). Falls back to the global (company_id=None) row, then True.
     """
     from attendance.models import AttendanceGeneralSetting
+    from base.context_processors import _cached
 
     if not apps.is_installed("attendance"):
         return True
 
-    selected_company = request.session.get("selected_company")
-    company = None
-    if selected_company and selected_company != "all":
-        company = Company.objects.filter(id=selected_company).first()
-    else:
-        try:
-            company = request.user.employee_get.get_company()
-        except Exception:
-            company = None
+    selected_company = request.session.get("selected_company") or "all"
 
-    setting = AttendanceGeneralSetting.objects.filter(company_id=company).first()
-    if not setting:
-        setting = AttendanceGeneralSetting.objects.filter(company_id=None).first()
-    if setting is None:
-        return True
-    return bool(setting.time_runner)
+    def load():
+        company = None
+        if selected_company != "all":
+            company = Company.objects.filter(id=selected_company).first()
+        else:
+            try:
+                company = request.user.employee_get.get_company()
+            except Exception:
+                company = None
+        company_id = getattr(company, "id", None)
+        setting = AttendanceGeneralSetting.objects.filter(
+            company_id_id=company_id
+        ).first()
+        if not setting:
+            setting = AttendanceGeneralSetting.objects.filter(company_id=None).first()
+        if setting is None:
+            return True
+        return bool(setting.time_runner)
+
+    cache_key = f"horilla:timerunner-filter:{selected_company}"
+    if selected_company == "all":
+        cache_key = f"{cache_key}:{getattr(request.user, 'id', 0)}"
+    return _cached(cache_key, load)
 
 
 @register.filter

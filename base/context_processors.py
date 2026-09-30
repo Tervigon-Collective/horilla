@@ -24,6 +24,23 @@ from horilla.decorators import hx_request_required, login_required
 from horilla.http.response import HorillaRedirect
 from horilla.methods import get_horilla_model_class
 
+_CACHE_MISS = object()
+
+
+def _cached(key, loader, ttl=90):
+    """Remember a small settings lookup. These repeat on every page."""
+    from django.core.cache import cache
+
+    hit = cache.get(key, _CACHE_MISS)
+    if hit is not _CACHE_MISS:
+        return hit
+    value = loader()
+    try:
+        cache.set(key, value, ttl)
+    except Exception:
+        pass
+    return value
+
 
 class AllCompany:
     """
@@ -71,12 +88,25 @@ def get_companies(request):
     )
     allowed_ids = get_allowed_company_ids(request.user) if scoped else None
     assigned_ids = get_assigned_company_ids(request.user) if scoped else None
-    company_qs = Company.objects.all()
-    if scoped:
-        company_qs = company_qs.filter(id__in=allowed_ids or [])
-    companies = list(
-        [company.id, company.company, company.icon.url, False] for company in company_qs
+    def _rows():
+        qs = Company.objects.all()
+        if scoped:
+            qs = qs.filter(id__in=allowed_ids or [])
+        rows = []
+        for company in qs:
+            try:
+                icon = company.icon.url if company.icon else ""
+            except Exception:
+                icon = ""
+            rows.append([company.id, company.company, icon, False])
+        return rows
+
+    cache_key = (
+        "horilla:companies:scoped:" + ",".join(str(i) for i in sorted(allowed_ids or []))
+        if scoped
+        else "horilla:companies:all"
     )
+    companies = [row[:] for row in _cached(cache_key, _rows)]
     if scoped and assigned_ids and len(assigned_ids) >= 2:
         companies = [
             [
@@ -243,22 +273,30 @@ def resignation_request_enabled(request):
     """
     Check weather resignation_request enabled of not in offboarding
     """
-    selected_company = request.session.get("selected_company")
-    enabled_resignation_request = False
-    first = None
-    if apps.is_installed("offboarding"):
-        OffboardingGeneralSetting = get_horilla_model_class(
-            app_label="offboarding", model="offboardinggeneralsetting"
+    selected_company = request.session.get("selected_company") or "all"
+
+    def load():
+        enabled = False
+        first = None
+        if apps.is_installed("offboarding"):
+            OffboardingGeneralSetting = get_horilla_model_class(
+                app_label="offboarding", model="offboardinggeneralsetting"
+            )
+            if selected_company != "all":
+                first = OffboardingGeneralSetting.objects.filter(
+                    company_id=selected_company
+                ).first()
+            else:
+                first = OffboardingGeneralSetting.objects.first()
+        if first:
+            enabled = first.resignation_request
+        return enabled
+
+    return {
+        "enabled_resignation_request": _cached(
+            f"horilla:resignation:{selected_company}", load
         )
-        if selected_company and selected_company != "all":
-            first = OffboardingGeneralSetting.objects.filter(
-                company_id=selected_company
-            ).first()
-        else:
-            first = OffboardingGeneralSetting.objects.first()
-    if first:
-        enabled_resignation_request = first.resignation_request
-    return {"enabled_resignation_request": enabled_resignation_request}
+    }
 
 
 def timerunner_enabled(request):
@@ -267,58 +305,73 @@ def timerunner_enabled(request):
     Prefers the company-specific AttendanceGeneralSetting, then the global
     (company_id=None) row, then defaults to enabled.
     """
-    enabled_timerunner = True
-    if apps.is_installed("attendance"):
-        AttendanceGeneralSetting = get_horilla_model_class(
-            app_label="attendance", model="attendancegeneralsetting"
-        )
-        selected_company = request.session.get("selected_company")
-        if selected_company and selected_company != "all":
-            company = Company.objects.filter(id=selected_company).first()
-        else:
-            company = None
-        setting = AttendanceGeneralSetting.objects.filter(company_id=company).first()
-        if not setting and company is not None:
-            setting = AttendanceGeneralSetting.objects.filter(company_id=None).first()
-        if setting:
-            enabled_timerunner = setting.time_runner
-    return {"enabled_timerunner": enabled_timerunner}
+    selected_company = request.session.get("selected_company") or "all"
+
+    def load():
+        enabled = True
+        if apps.is_installed("attendance"):
+            AttendanceGeneralSetting = get_horilla_model_class(
+                app_label="attendance", model="attendancegeneralsetting"
+            )
+            if selected_company != "all":
+                company = Company.objects.filter(id=selected_company).first()
+            else:
+                company = None
+            setting = AttendanceGeneralSetting.objects.filter(company_id=company).first()
+            if not setting and company is not None:
+                setting = AttendanceGeneralSetting.objects.filter(
+                    company_id=None
+                ).first()
+            if setting:
+                enabled = setting.time_runner
+        return enabled
+
+    return {
+        "enabled_timerunner": _cached(f"horilla:timerunner:{selected_company}", load)
+    }
 
 
 def intial_notice_period(request):
     """
     Check weather resignation_request enabled of not in offboarding
     """
-    initial = 30
-    first = None
-    rounding = {
-        "component_mode": "two_decimals",
-        "net_pay_mode": "nearest_rupee",
-        "statutory_mode": "two_decimals",
-    }
-    if apps.is_installed("payroll"):
-        PayrollGeneralSetting = get_horilla_model_class(
-            app_label="payroll", model="payrollgeneralsetting"
-        )
-        selected_company = request.session.get("selected_company")
-        if selected_company and selected_company != "all":
-            first = PayrollGeneralSetting.objects.filter(
-                company_id=selected_company
-            ).first()
-            if not first:
-                first = PayrollGeneralSetting.objects.filter(company_id=None).first()
-        else:
-            first = PayrollGeneralSetting.objects.first()
-    if first:
-        initial = first.notice_period
+    selected_company = request.session.get("selected_company") or "all"
+
+    def load():
+        initial = 30
+        first = None
         rounding = {
-            "component_mode": getattr(first, "component_round_mode", None)
-            or "two_decimals",
-            "net_pay_mode": getattr(first, "net_pay_round_mode", None) or "nearest_rupee",
-            "statutory_mode": getattr(first, "statutory_round_mode", None)
-            or "two_decimals",
+            "component_mode": "two_decimals",
+            "net_pay_mode": "nearest_rupee",
+            "statutory_mode": "two_decimals",
         }
-    return {"get_initial_notice_period": initial, "rounding": rounding}
+        if apps.is_installed("payroll"):
+            PayrollGeneralSetting = get_horilla_model_class(
+                app_label="payroll", model="payrollgeneralsetting"
+            )
+            if selected_company != "all":
+                first = PayrollGeneralSetting.objects.filter(
+                    company_id=selected_company
+                ).first()
+                if not first:
+                    first = PayrollGeneralSetting.objects.filter(
+                        company_id=None
+                    ).first()
+            else:
+                first = PayrollGeneralSetting.objects.first()
+        if first:
+            initial = first.notice_period
+            rounding = {
+                "component_mode": getattr(first, "component_round_mode", None)
+                or "two_decimals",
+                "net_pay_mode": getattr(first, "net_pay_round_mode", None)
+                or "nearest_rupee",
+                "statutory_mode": getattr(first, "statutory_round_mode", None)
+                or "two_decimals",
+            }
+        return {"get_initial_notice_period": initial, "rounding": rounding}
+
+    return _cached(f"horilla:notice:{selected_company}", load)
 
 
 def check_candidate_recruitment_setting(request):
@@ -396,13 +449,16 @@ def get_initial_prefix(request):
     """
     This method is used to get the initial prefix
     """
-    settings = EmployeeGeneralSetting.objects.first()
-    instance_id = None
-    prefix = "PEP"
-    if settings:
-        instance_id = settings.id
-        prefix = settings.badge_id_prefix
-    return {"get_initial_prefix": prefix, "prefix_instance_id": instance_id}
+    def load():
+        row = EmployeeGeneralSetting.objects.first()
+        if not row:
+            return {"get_initial_prefix": "PEP", "prefix_instance_id": None}
+        return {
+            "get_initial_prefix": row.badge_id_prefix,
+            "prefix_instance_id": row.id,
+        }
+
+    return _cached("horilla:badge-prefix", load)
 
 
 def biometric_app_exists(request):
@@ -417,22 +473,28 @@ def enable_late_come_early_out_tracking(request):
         tracking = TrackLateComeEarlyOut.objects.first()
         enable = tracking.is_enable if tracking else True
         return {"tracking": enable, "late_come_early_out_tracking": enable}
-    selected_company = request.session.get("selected_company")
-    if selected_company == "all":
-        company = None
-    else:
-        company = Company.objects.filter(id=selected_company).first()
+    selected_company = request.session.get("selected_company") or "all"
 
-    tracking = TrackLateComeEarlyOut.objects.filter(company_id=company).first()
-    enable = tracking.is_enable if tracking else True
+    def load():
+        if selected_company == "all":
+            company = None
+        else:
+            company = Company.objects.filter(id=selected_company).first()
+        tracking = TrackLateComeEarlyOut.objects.filter(company_id=company).first()
+        return tracking.is_enable if tracking else True
+
+    enable = _cached(f"horilla:late-track:{selected_company}", load)
     return {"tracking": enable, "late_come_early_out_tracking": enable}
 
 
 def enable_profile_edit(request):
     from accessibility.accessibility import ACCESSBILITY_FEATURE
 
-    profile_edit = ProfileEditFeature.objects.filter().first()
-    enable = bool(profile_edit and profile_edit.is_enabled)
+    def load_profile_edit():
+        profile_edit = ProfileEditFeature.objects.filter().first()
+        return bool(profile_edit and profile_edit.is_enabled)
+
+    enable = _cached("horilla:profile-edit", load_profile_edit)
     if enable:
         if not any(item[0] == "profile_edit" for item in ACCESSBILITY_FEATURE):
             ACCESSBILITY_FEATURE.append(("profile_edit", _("Profile Edit Access")))
@@ -450,14 +512,17 @@ def export_access_enabled(request):
     if request.user.is_superuser:
         return {"export_access_enabled": True}
 
-    selected_company = request.session.get("selected_company")
-    if not selected_company or selected_company == "all":
-        company = None
-    else:
-        company = Company.objects.filter(id=selected_company).first()
+    selected_company = request.session.get("selected_company") or "all"
 
-    setting = DefaultExportPermission.objects.filter(company_id=company).first()
-    enabled = setting is None or bool(setting.is_enabled)
+    def load():
+        if selected_company == "all":
+            company = None
+        else:
+            company = Company.objects.filter(id=selected_company).first()
+        setting = DefaultExportPermission.objects.filter(company_id=company).first()
+        return setting is None or bool(setting.is_enabled)
+
+    enabled = _cached(f"horilla:export:{selected_company}", load)
     return {"export_access_enabled": enabled}
 
 
@@ -469,20 +534,29 @@ def navbar_languages(request):
     zero or one language enabled, there is nothing to switch to, so it
     stays hidden.
     """
-    selected_company = request.session.get("selected_company")
-    if not selected_company or selected_company == "all":
-        company = None
-    else:
-        company = Company.objects.filter(id=selected_company).first()
+    selected_company = request.session.get("selected_company") or "all"
 
-    setting = CompanyLanguageSetting.objects.filter(company_id=company).first()
-    if setting and setting.enabled_languages:
+    def load():
+        if selected_company == "all":
+            company = None
+        else:
+            company = Company.objects.filter(id=selected_company).first()
+        setting = CompanyLanguageSetting.objects.filter(company_id=company).first()
+        if not setting or not setting.enabled_languages:
+            return []
         enabled_codes = set(setting.enabled_languages)
-        languages = [
-            language for language in settings.LANGUAGES if language[0] in enabled_codes
+        return [
+            language[0]
+            for language in settings.LANGUAGES
+            if language[0] in enabled_codes
         ]
-        if len(languages) > 1:
-            return {"navbar_languages": languages, "show_language_switcher": True}
+
+    enabled_codes = _cached(f"horilla:languages:{selected_company}", load)
+    languages = [
+        language for language in settings.LANGUAGES if language[0] in enabled_codes
+    ]
+    if len(languages) > 1:
+        return {"navbar_languages": languages, "show_language_switcher": True}
 
     return {"navbar_languages": [], "show_language_switcher": False}
 

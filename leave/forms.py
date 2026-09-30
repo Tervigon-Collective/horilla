@@ -45,6 +45,45 @@ CHOICES = [("yes", _("Yes")), ("no", _("No"))]
 LEAVE_MAX_LIMIT = 1e5
 
 
+class LeaveTypeAttachmentSelect(forms.Select):
+    """Mark leave types that still require an uploaded document."""
+
+    def create_option(
+        self, name, value, label, selected, index, subindex=None, attrs=None
+    ):
+        option = super().create_option(
+            name, value, label, selected, index, subindex=subindex, attrs=attrs
+        )
+        if not hasattr(self, "_attachment_ids"):
+            self._attachment_ids = {
+                str(pk)
+                for pk in LeaveType.objects.filter(
+                    require_attachment="yes"
+                ).values_list("pk", flat=True)
+            }
+        raw = getattr(value, "value", value)
+        if raw not in (None, "") and str(raw) in self._attachment_ids:
+            option["attrs"]["data-require-attachment"] = "yes"
+        return option
+
+
+def _hide_optional_attachment(form, leave_type=None):
+    """Drop the upload field when this request's leave type does not require one."""
+    if leave_type is None and getattr(form.instance, "leave_type_id_id", None):
+        leave_type = form.instance.leave_type_id
+    if leave_type is None and getattr(form, "data", None):
+        raw = form.data.get("leave_type_id")
+        if raw:
+            leave_type = LeaveType.objects.filter(pk=raw).first()
+    if leave_type is None:
+        return
+    if (
+        getattr(leave_type, "require_attachment", None) != "yes"
+        and "attachment" in form.fields
+    ):
+        form.fields.pop("attachment")
+
+
 class LeaveTypeConditionForm(forms.ModelForm):
     """
     Form for creating/updating a single LeaveTypeCondition.
@@ -387,6 +426,9 @@ class LeaveRequestCreationForm(BaseModelForm):
                     "hx-get": f"/leave/employee-available-leave-count/",
                 }
             )
+        self.fields["leave_type_id"].widget.__class__ = LeaveTypeAttachmentSelect
+        if self.is_bound:
+            _hide_optional_attachment(self)
 
     def as_p(self, *args, **kwargs):
         """
@@ -472,6 +514,9 @@ class LeaveRequestUpdationForm(BaseModelForm):
                     "hx-get": "/leave/employee-available-leave-count/",
                 }
             )
+        self.fields["leave_type_id"].widget.__class__ = LeaveTypeAttachmentSelect
+        if self.is_bound or getattr(self.instance, "leave_type_id_id", None):
+            _hide_optional_attachment(self)
 
     def as_p(self, *args, **kwargs):
         """
@@ -641,6 +686,9 @@ class UserLeaveRequestForm(BaseModelForm):
             )
             self.fields["leave_type_id"].initial = leave_type["leave_type_id"].id
             self.fields["leave_type_id"].empty_label = None
+        lt_obj = leave_type.get("leave_type_id") if isinstance(leave_type, dict) else None
+        self.fields["leave_type_id"].widget.__class__ = LeaveTypeAttachmentSelect
+        _hide_optional_attachment(self, lt_obj)
 
     def as_p(self, *args, **kwargs):
         """
@@ -781,6 +829,9 @@ class UserLeaveRequestCreationForm(BaseModelForm):
                 }
             )
         self.fields["employee_id"].initial = employee
+        self.fields["leave_type_id"].widget.__class__ = LeaveTypeAttachmentSelect
+        if self.is_bound:
+            _hide_optional_attachment(self)
 
     class Meta:
         """

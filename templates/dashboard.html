@@ -1059,9 +1059,409 @@
             background: #166534;
             color: #bbf7d0;
         }
+
+        /* Thought of the Day */
+        .md-thought-quote {
+            margin: 0;
+            font-size: 13px;
+            font-style: italic;
+            line-height: 1.55;
+            opacity: 0.92;
+        }
+        .md-thought-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .md-thought-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: #eef2ff;
+            color: var(--md-indigo, #4f46e5);
+            font-weight: 600;
+            font-size: 10px;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+        }
+        .dark .md-thought-badge {
+            background: #312e81;
+            color: #c7d2fe;
+        }
+
+        /* Thought of the Day modal */
+        .md-thought-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 12010;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .md-thought-modal.is-open {
+            display: flex;
+        }
+        .md-thought-modal__backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.55);
+            backdrop-filter: blur(3px);
+        }
+        .md-thought-modal__card {
+            position: relative;
+            z-index: 1;
+            width: min(440px, 100%);
+            overflow: hidden;
+            border-radius: 18px;
+            background: #fff;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+            animation: md-celeb-pop 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        .dark .md-thought-modal__card {
+            background: #1e1e24;
+            color: #f8fafc;
+        }
+        .md-thought-modal__hero {
+            padding: 28px 24px 18px;
+            background: linear-gradient(145deg, #6366f1, #8b5cf6 55%, #a78bfa);
+            color: #eef2ff;
+            text-align: center;
+        }
+        .md-thought-modal__hero-title {
+            margin: 0 0 4px;
+            font-weight: 800;
+            font-size: 20px;
+        }
+        .md-thought-modal__hero-sub {
+            margin: 0;
+            font-size: 13px;
+            opacity: 0.85;
+        }
+        .md-thought-modal__body {
+            padding: 22px 24px 8px;
+        }
+        .md-thought-modal__quote {
+            margin: 0;
+            font-size: 16px;
+            font-style: italic;
+            line-height: 1.55;
+        }
+        .md-thought-modal__team {
+            display: inline-block;
+            margin-top: 14px;
+            padding: 3px 10px;
+            border-radius: 999px;
+            background: #eef2ff;
+            color: #4338ca;
+            font-weight: 700;
+            font-size: 11px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+        .dark .md-thought-modal__team {
+            background: #312e81;
+            color: #c7d2fe;
+        }
+        .md-thought-modal__footer {
+            padding: 12px 24px 22px;
+            text-align: center;
+        }
+        .md-thought-modal__btn {
+            min-width: 120px;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 10px;
+            background: #4f46e5;
+            color: #fff;
+            font-weight: 700;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .md-thought-modal__btn:hover {
+            background: #4338ca;
+        }
         .dark .md-bday-item__badge--soon {
             background: #92400e;
             color: #fde68a;
+        }
+
+        /* Today's celebrations — top strip */
+        .md-celeb-strip {
+            display: none;
+            align-items: center;
+            gap: 12px;
+            margin: 0 0 16px;
+            padding: 12px 14px;
+            overflow: hidden;
+            border: 1px solid rgba(234, 88, 12, 0.28);
+            border-radius: 12px;
+            background: linear-gradient(105deg, rgba(255, 237, 213, 0.95), rgba(254, 243, 199, 0.7));
+            animation: md-celeb-strip-in 0.45s ease;
+        }
+        .dark .md-celeb-strip {
+            border-color: rgba(251, 146, 60, 0.35);
+            background: linear-gradient(105deg, rgba(67, 32, 6, 0.92), rgba(69, 26, 3, 0.75));
+        }
+        .md-celeb-strip.is-visible {
+            display: flex;
+        }
+        .md-celeb-strip__icon {
+            flex-shrink: 0;
+            font-size: 22px;
+            line-height: 1;
+            animation: md-celeb-bob 1.6s ease-in-out infinite;
+        }
+        .md-celeb-strip__body {
+            flex: 1;
+            min-width: 0;
+        }
+        .md-celeb-strip__label {
+            margin-bottom: 2px;
+            font-weight: 700;
+            font-size: 11px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: #c2410c;
+        }
+        .dark .md-celeb-strip__label {
+            color: #fdba74;
+        }
+        .md-celeb-strip__items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 14px;
+        }
+        .md-celeb-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            max-width: 100%;
+            padding: 4px 10px 4px 4px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.7);
+            font-size: 13px;
+        }
+        .dark .md-celeb-chip {
+            background: rgba(0, 0, 0, 0.28);
+        }
+        .md-celeb-chip__avatar {
+            display: flex;
+            flex-shrink: 0;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            overflow: hidden;
+            border-radius: 50%;
+            background: #ffedd5;
+            color: #9a3412;
+            font-weight: 700;
+            font-size: 11px;
+        }
+        .dark .md-celeb-chip__avatar {
+            background: #7c2d12;
+            color: #ffedd5;
+        }
+        .md-celeb-chip__avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .md-celeb-chip__text {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .md-celeb-chip__text strong {
+            font-weight: 700;
+        }
+        .md-celeb-chip__meta {
+            opacity: 0.65;
+        }
+        .md-celeb-strip__close {
+            flex-shrink: 0;
+            width: 28px;
+            height: 28px;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            color: inherit;
+            font-size: 18px;
+            line-height: 1;
+            cursor: pointer;
+            opacity: 0.55;
+        }
+        .md-celeb-strip__close:hover {
+            background: rgba(0, 0, 0, 0.06);
+            opacity: 1;
+        }
+        .dark .md-celeb-strip__close:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        /* Celebration modal */
+        .md-celeb-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 12000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .md-celeb-modal.is-open {
+            display: flex;
+        }
+        .md-celeb-modal__backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.55);
+            backdrop-filter: blur(3px);
+        }
+        .md-celeb-modal__card {
+            position: relative;
+            z-index: 1;
+            width: min(440px, 100%);
+            overflow: hidden;
+            border-radius: 18px;
+            background: #fff;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+            animation: md-celeb-pop 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        .dark .md-celeb-modal__card {
+            background: #1e1e24;
+            color: #f8fafc;
+        }
+        .md-celeb-modal__hero {
+            position: relative;
+            padding: 28px 24px 18px;
+            background: linear-gradient(145deg, #fb923c, #f59e0b 55%, #fbbf24);
+            color: #431407;
+            text-align: center;
+            overflow: hidden;
+        }
+        .md-celeb-modal__hero-title {
+            position: relative;
+            z-index: 1;
+            margin: 0 0 4px;
+            font-weight: 800;
+            font-size: 22px;
+            letter-spacing: -0.02em;
+        }
+        .md-celeb-modal__hero-sub {
+            position: relative;
+            z-index: 1;
+            margin: 0;
+            font-size: 13px;
+            opacity: 0.85;
+        }
+        .md-celeb-modal__body {
+            padding: 18px 20px 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 280px;
+            overflow: auto;
+        }
+        .md-celeb-modal__row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: rgba(251, 146, 60, 0.08);
+        }
+        .dark .md-celeb-modal__row {
+            background: rgba(251, 146, 60, 0.12);
+        }
+        .md-celeb-modal__row-avatar {
+            display: flex;
+            flex-shrink: 0;
+            align-items: center;
+            justify-content: center;
+            width: 44px;
+            height: 44px;
+            overflow: hidden;
+            border-radius: 50%;
+            background: #ffedd5;
+            color: #9a3412;
+            font-weight: 700;
+            font-size: 15px;
+        }
+        .dark .md-celeb-modal__row-avatar {
+            background: #7c2d12;
+            color: #ffedd5;
+        }
+        .md-celeb-modal__row-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .md-celeb-modal__row-name {
+            font-weight: 700;
+            font-size: 14px;
+        }
+        .md-celeb-modal__row-detail {
+            font-size: 12px;
+            opacity: 0.65;
+        }
+        .md-celeb-modal__footer {
+            padding: 8px 20px 20px;
+            text-align: center;
+        }
+        .md-celeb-modal__btn {
+            min-width: 140px;
+            padding: 10px 18px;
+            border: none;
+            border-radius: 999px;
+            background: #ea580c;
+            color: #fff;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .md-celeb-modal__btn:hover {
+            background: #c2410c;
+        }
+        .md-celeb-confetti {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            overflow: hidden;
+        }
+        .md-celeb-confetti span {
+            position: absolute;
+            top: -12px;
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
+            opacity: 0.9;
+            animation: md-celeb-fall linear forwards;
+        }
+        @keyframes md-celeb-strip-in {
+            from { opacity: 0; transform: translateY(-8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes md-celeb-bob {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-3px); }
+        }
+        @keyframes md-celeb-pop {
+            from { opacity: 0; transform: translateY(16px) scale(0.96); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes md-celeb-fall {
+            to { transform: translateY(220px) rotate(420deg); opacity: 0; }
+        }
+        @media (max-width: 640px) {
+            .md-celeb-strip {
+                align-items: flex-start;
+            }
+            .md-celeb-strip__items {
+                gap: 6px;
+            }
         }
 
         /* Pending approvals (sidebar) */
@@ -1426,6 +1826,22 @@
                     {% trans "Customize" %}
                 </button>
             </div>
+        </div>
+
+        <!-- Today's celebrations strip (birthdays / anniversaries) -->
+        <div class="md-celeb-strip" id="md-celeb-strip" hidden aria-live="polite">
+            <div class="md-celeb-strip__icon" aria-hidden="true">🎉</div>
+            <div class="md-celeb-strip__body">
+                <div class="md-celeb-strip__label">{% trans "Today's Celebrations" %}</div>
+                <div class="md-celeb-strip__items" id="md-celeb-strip-items"></div>
+            </div>
+            <button
+                type="button"
+                class="md-celeb-strip__close"
+                id="md-celeb-strip-close"
+                title="{% trans 'Dismiss' %}"
+                aria-label="{% trans 'Dismiss' %}"
+            >&times;</button>
         </div>
 
         <!-- Setup checklist banner (shown to new accounts until all steps complete or dismissed) -->
@@ -1833,6 +2249,14 @@
                         <div class="md-info-panel__empty">{% trans "Loading..." %}</div>
                     </div>
                 </div>
+                <div class="md-info-panel" id="md-thought-panel">
+                    <div class="md-info-panel__header">
+                        <div class="md-info-panel__title">{% trans "Thought of the Day" %}</div>
+                    </div>
+                    <div class="md-info-panel__body" id="md-thought-of-day">
+                        <div class="md-info-panel__empty">{% trans "Loading..." %}</div>
+                    </div>
+                </div>
                 <div class="md-info-panel">
                     <div class="md-info-panel__header">
                         <div class="md-info-panel__title">{% trans "Birthdays & Anniversaries" %}</div>
@@ -1864,6 +2288,40 @@
         <div class="md-customize-panel__footer">
             <button class="oh-btn oh-btn--light-bkg" id="md-reset-customize">{% trans "Reset to default" %}</button>
             <button class="oh-btn oh-btn--secondary" id="md-save-customize">{% trans "Save" %}</button>
+        </div>
+    </div>
+
+    <!-- Celebration modal (once per day) -->
+    <div class="md-celeb-modal" id="md-celeb-modal" role="dialog" aria-modal="true" aria-labelledby="md-celeb-modal-title" hidden>
+        <div class="md-celeb-modal__backdrop" id="md-celeb-modal-backdrop"></div>
+        <div class="md-celeb-modal__card">
+            <div class="md-celeb-modal__hero">
+                <div class="md-celeb-confetti" id="md-celeb-confetti" aria-hidden="true"></div>
+                <h2 class="md-celeb-modal__hero-title" id="md-celeb-modal-title">{% trans "Celebrate with the team" %}</h2>
+                <p class="md-celeb-modal__hero-sub">{% trans "Wish them well when you check in today" %}</p>
+            </div>
+            <div class="md-celeb-modal__body" id="md-celeb-modal-body"></div>
+            <div class="md-celeb-modal__footer">
+                <button type="button" class="md-celeb-modal__btn" id="md-celeb-modal-close">{% trans "Nice!" %}</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Thought of the Day modal (once per day, Mon–Sat) -->
+    <div class="md-thought-modal" id="md-thought-modal" role="dialog" aria-modal="true" aria-labelledby="md-thought-modal-title" hidden>
+        <div class="md-thought-modal__backdrop" id="md-thought-modal-backdrop"></div>
+        <div class="md-thought-modal__card">
+            <div class="md-thought-modal__hero">
+                <h2 class="md-thought-modal__hero-title" id="md-thought-modal-title">{% trans "Thought of the Day" %}</h2>
+                <p class="md-thought-modal__hero-sub">{% trans "A spark for your check-in" %}</p>
+            </div>
+            <div class="md-thought-modal__body">
+                <p class="md-thought-modal__quote" id="md-thought-modal-quote"></p>
+                <span class="md-thought-modal__team" id="md-thought-modal-team"></span>
+            </div>
+            <div class="md-thought-modal__footer">
+                <button type="button" class="md-thought-modal__btn" id="md-thought-modal-close">{% trans "Got it" %}</button>
+            </div>
         </div>
     </div>
 
@@ -2983,7 +3441,204 @@
             }
             loadUpcomingHolidays();
 
-            // ─── BIRTHDAYS & ANNIVERSARIES ───
+            // ─── BIRTHDAYS & ANNIVERSARIES (+ today strip / once-per-day modal) ───
+            function escapeHtml(str) {
+                return String(str == null ? '' : str)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;');
+            }
+
+            function celebStorageKey() {
+                const d = new Date();
+                const y = d.getFullYear();
+                const m = String(d.getMonth() + 1).padStart(2, '0');
+                const day = String(d.getDate()).padStart(2, '0');
+                return `seleric_celeb_seen_${y}-${m}-${day}`;
+            }
+
+            function buildCelebAvatar(item) {
+                if (item.avatar) {
+                    return `<img src="${escapeHtml(item.avatar)}" alt="">`;
+                }
+                return escapeHtml((item.name || '?').charAt(0));
+            }
+
+            function renderCelebrationStrip(todayItems) {
+                const strip = document.getElementById('md-celeb-strip');
+                const itemsEl = document.getElementById('md-celeb-strip-items');
+                if (!strip || !itemsEl) return;
+                if (!todayItems.length) {
+                    strip.hidden = true;
+                    strip.classList.remove('is-visible');
+                    return;
+                }
+                itemsEl.innerHTML = todayItems.map(item => `
+                    <div class="md-celeb-chip">
+                        <div class="md-celeb-chip__avatar">${buildCelebAvatar(item)}</div>
+                        <div class="md-celeb-chip__text">
+                            <strong>${escapeHtml(item.name)}</strong>
+                            <span class="md-celeb-chip__meta"> · ${escapeHtml(item.detail)}</span>
+                        </div>
+                    </div>
+                `).join('');
+                strip.hidden = false;
+                strip.classList.add('is-visible');
+            }
+
+            function spawnConfetti() {
+                const box = document.getElementById('md-celeb-confetti');
+                if (!box) return;
+                box.innerHTML = '';
+                const colors = ['#fff7ed', '#fdba74', '#f97316', '#fef08a', '#fb7185', '#ffffff'];
+                for (let i = 0; i < 28; i++) {
+                    const s = document.createElement('span');
+                    s.style.left = `${Math.random() * 100}%`;
+                    s.style.background = colors[i % colors.length];
+                    s.style.animationDuration = `${1.2 + Math.random() * 1.4}s`;
+                    s.style.animationDelay = `${Math.random() * 0.35}s`;
+                    s.style.transform = `rotate(${Math.random() * 180}deg)`;
+                    box.appendChild(s);
+                }
+            }
+
+            function openCelebrationModal(todayItems) {
+                const modal = document.getElementById('md-celeb-modal');
+                const body = document.getElementById('md-celeb-modal-body');
+                if (!modal || !body || !todayItems.length) return;
+                if (localStorage.getItem(celebStorageKey()) === '1') return;
+
+                body.innerHTML = todayItems.map(item => `
+                    <div class="md-celeb-modal__row">
+                        <div class="md-celeb-modal__row-avatar">${buildCelebAvatar(item)}</div>
+                        <div>
+                            <div class="md-celeb-modal__row-name">${escapeHtml(item.name)}</div>
+                            <div class="md-celeb-modal__row-detail">${escapeHtml(item.detail)} · {% trans "Today" %}</div>
+                        </div>
+                    </div>
+                `).join('');
+
+                modal.hidden = false;
+                modal.classList.add('is-open');
+                spawnConfetti();
+                document.body.style.overflow = 'hidden';
+            }
+
+            function closeCelebrationModal() {
+                const modal = document.getElementById('md-celeb-modal');
+                if (!modal) return;
+                modal.classList.remove('is-open');
+                modal.hidden = true;
+                document.body.style.overflow = '';
+                try { localStorage.setItem(celebStorageKey(), '1'); } catch (e) {}
+                // After birthday modal, show Thought of the Day if pending
+                if (typeof maybeOpenThoughtModal === 'function') maybeOpenThoughtModal();
+            }
+
+            function wireCelebrationUi() {
+                const stripClose = document.getElementById('md-celeb-strip-close');
+                if (stripClose) {
+                    stripClose.addEventListener('click', () => {
+                        const strip = document.getElementById('md-celeb-strip');
+                        if (strip) {
+                            strip.hidden = true;
+                            strip.classList.remove('is-visible');
+                        }
+                    });
+                }
+                const modalClose = document.getElementById('md-celeb-modal-close');
+                const backdrop = document.getElementById('md-celeb-modal-backdrop');
+                if (modalClose) modalClose.addEventListener('click', closeCelebrationModal);
+                if (backdrop) backdrop.addEventListener('click', closeCelebrationModal);
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') closeCelebrationModal();
+                });
+            }
+            wireCelebrationUi();
+
+            function loadThoughtOfTheDay() {
+                const panel = document.getElementById('md-thought-panel');
+                const el = document.getElementById('md-thought-of-day');
+                if (!panel || !el) return;
+                fetch("{% url 'dashboard-thought-of-the-day' %}")
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.show) {
+                        panel.style.display = 'none';
+                        window.__pendingThought = null;
+                        return;
+                    }
+                    panel.style.display = '';
+                    el.innerHTML = `
+                        <p class="md-thought-quote">${escapeHtml(data.thought || '')}</p>
+                        <div class="md-thought-meta">
+                            <span class="md-thought-badge">${escapeHtml(data.team || '')}</span>
+                        </div>`;
+                    window.__pendingThought = {
+                        thought: data.thought || '',
+                        team: data.team || '',
+                    };
+                    // Birthday modal may open from a parallel fetch; wait briefly, then show if free
+                    setTimeout(maybeOpenThoughtModal, 600);
+                }).catch(() => {
+                    el.innerHTML = '<div class="md-info-panel__empty">{% trans "Could not load" %}</div>';
+                });
+            }
+
+            function thoughtStorageKey() {
+                const d = new Date();
+                const y = d.getFullYear();
+                const m = String(d.getMonth() + 1).padStart(2, '0');
+                const day = String(d.getDate()).padStart(2, '0');
+                return `seleric_thought_seen_${y}-${m}-${day}`;
+            }
+
+            function maybeOpenThoughtModal() {
+                const data = window.__pendingThought;
+                if (!data || !data.thought) return;
+                try {
+                    if (localStorage.getItem(thoughtStorageKey()) === '1') return;
+                } catch (e) {}
+                const celeb = document.getElementById('md-celeb-modal');
+                if (celeb && celeb.classList.contains('is-open')) return;
+
+                const modal = document.getElementById('md-thought-modal');
+                const quoteEl = document.getElementById('md-thought-modal-quote');
+                const teamEl = document.getElementById('md-thought-modal-team');
+                if (!modal || !quoteEl || !teamEl) return;
+
+                quoteEl.textContent = data.thought;
+                teamEl.textContent = data.team || '';
+                modal.hidden = false;
+                modal.classList.add('is-open');
+                document.body.style.overflow = 'hidden';
+            }
+
+            function closeThoughtModal() {
+                const modal = document.getElementById('md-thought-modal');
+                if (!modal) return;
+                modal.classList.remove('is-open');
+                modal.hidden = true;
+                document.body.style.overflow = '';
+                try { localStorage.setItem(thoughtStorageKey(), '1'); } catch (e) {}
+            }
+
+            function wireThoughtModalUi() {
+                const closeBtn = document.getElementById('md-thought-modal-close');
+                const backdrop = document.getElementById('md-thought-modal-backdrop');
+                if (closeBtn) closeBtn.addEventListener('click', closeThoughtModal);
+                if (backdrop) backdrop.addEventListener('click', closeThoughtModal);
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        const modal = document.getElementById('md-thought-modal');
+                        if (modal && modal.classList.contains('is-open')) closeThoughtModal();
+                    }
+                });
+            }
+            wireThoughtModalUi();
+            loadThoughtOfTheDay();
+
             function loadBirthdaysAnniversaries() {
                 fetch("{% url 'dashboard-birthdays-anniversaries' %}")
                 .then(r => r.json())
@@ -3010,6 +3665,15 @@
                         });
                     });
                     items.sort((a, b) => a.days_away - b.days_away);
+
+                    const todayItems = items.filter(i => i.days_away === 0);
+                    renderCelebrationStrip(todayItems);
+                    openCelebrationModal(todayItems);
+                    // If no birthday popup, show Thought of the Day now
+                    if (!todayItems.length && typeof maybeOpenThoughtModal === 'function') {
+                        maybeOpenThoughtModal();
+                    }
+
                     if (!items.length) {
                         el.innerHTML = '<div class="md-info-panel__empty">{% trans "None this month"|escapejs %}</div>';
                         return;
@@ -3017,16 +3681,13 @@
                     el.innerHTML = items.slice(0, 8).map(item => {
                         const badge = item.days_away === 0
                             ? '<span class="md-bday-item__badge md-bday-item__badge--today">{% trans "Today"|escapejs %}</span>'
-                            : `<span class="md-bday-item__badge md-bday-item__badge--soon">${item.date}</span>`;
-                        const avatar = item.avatar
-                            ? `<img src="${item.avatar}" alt="">`
-                            : (item.name || '?').charAt(0);
+                            : `<span class="md-bday-item__badge md-bday-item__badge--soon">${escapeHtml(item.date)}</span>`;
                         return `
                     <div class="md-bday-item">
-                        <div class="md-bday-item__avatar">${avatar}</div>
+                        <div class="md-bday-item__avatar">${buildCelebAvatar(item)}</div>
                         <div class="md-bday-item__info">
-                            <div class="md-bday-item__name">${item.name}</div>
-                            <div class="md-bday-item__detail">${item.detail}</div>
+                            <div class="md-bday-item__name">${escapeHtml(item.name)}</div>
+                            <div class="md-bday-item__detail">${escapeHtml(item.detail)}</div>
                         </div>
                         ${badge}
                     </div>`;
@@ -3244,6 +3905,7 @@
                 if (typeof loadLeaveByDepartment === 'function') loadLeaveByDepartment();
                 if (typeof loadDepartmentLeaveDays === 'function') loadDepartmentLeaveDays();
                 loadUpcomingHolidays();
+                if (typeof loadThoughtOfTheDay === 'function') loadThoughtOfTheDay();
                 if (typeof loadBirthdaysAnniversaries === 'function') loadBirthdaysAnniversaries();
                 loadPendingApprovals();
                 if (typeof loadRecruitmentFunnel === 'function') loadRecruitmentFunnel();
