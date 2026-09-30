@@ -366,6 +366,12 @@ class EmployeeWorkInformationForm(ModelForm):
 
     def __init__(self, *args, disable=False, **kwargs):
         super().__init__(*args, **kwargs)
+        # base ModelForm defaults every date field to today; for these that
+        # saved "probation/contract ends today" on new employees, which also
+        # skipped the automatic joining date + 6 months probation window.
+        for name in ("probation_end", "contract_end_date"):
+            if name in self.fields:
+                self.fields[name].initial = None
         self.fields["email"].widget.attrs["autocomplete"] = "email"
 
         self.fields["job_position_id"].widget.attrs.update(

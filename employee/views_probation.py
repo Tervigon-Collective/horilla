@@ -7,6 +7,7 @@ import contextlib
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.views.decorators.http import require_POST
 from django.utils.translation import gettext_lazy as _
 
 from employee.methods.probation import (
@@ -61,6 +62,7 @@ def probation_list(request):
 
 @login_required
 @permission_required("employee.change_employee")
+@require_POST
 def probation_confirm(request, pk):
     """Confirm a single employee (work info pk)."""
     work_info = get_object_or_404(
@@ -82,10 +84,6 @@ def probation_confirm(request, pk):
                 request.user.employee_get,
                 recipient=employee.employee_user_id,
                 verb="Your employment has been confirmed.",
-                verb_ar="تم تثبيت توظيفك.",
-                verb_de="Ihre Anstellung wurde bestätigt.",
-                verb_es="Su empleo ha sido confirmado.",
-                verb_fr="Votre emploi a été confirmé.",
                 redirect=reverse("employee-view") + f"?id={employee.id}",
                 icon="checkmark",
             )
@@ -96,9 +94,10 @@ def probation_confirm(request, pk):
 
 @login_required
 @permission_required("employee.change_employee")
+@require_POST
 def probation_confirm_bulk(request):
     """Confirm multiple work-info IDs from POST/GET ids."""
-    ids = request.POST.getlist("ids") or request.GET.getlist("ids")
+    ids = request.POST.getlist("ids")
     if not ids:
         messages.error(request, _("No employees selected."))
         return HorillaRedirect(request)
