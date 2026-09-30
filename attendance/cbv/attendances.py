@@ -85,6 +85,8 @@ class AttendancesListView(HorillaListView):
         (_("In Date"), "attendance_clock_in_date"),
         (_("Check-Out"), "attendance_clock_out"),
         (_("Out Date"), "attendance_clock_out_date"),
+        (_("In Location"), "clock_in_location_col"),
+        (_("Out Location"), "clock_out_location_col"),
         (_("Shift"), "shift_id"),
         (_("Work Type"), "work_type_id"),
         (_("Min Hour"), "minimum_hour"),
@@ -99,6 +101,8 @@ class AttendancesListView(HorillaListView):
         (_("Check-Out"), "attendance_clock_out"),
         (_("Shift"), "shift_id"),
         (_("At Work"), "attendance_worked_hour"),
+        (_("In Location"), "clock_in_location_col"),
+        (_("Out Location"), "clock_out_location_col"),
     ]
     sortby_mapping = [
         (_("Employee"), "employee_id__get_full_name", "employee_id__get_avatar"),
@@ -628,6 +632,8 @@ class GenericAttendancesDetailView(HorillaDetailedView):
         (_("Check In Date"), "attendance_clock_in_date"),
         (_("Check-Out"), "attendance_clock_out"),
         (_("Check Out Date"), "attendance_clock_out_date"),
+        (_("In Location"), "clock_in_location_col"),
+        (_("Out Location"), "clock_out_location_col"),
         (_("Shift"), "shift_id"),
         (_("Work Type"), "work_type_id"),
         (_("Min Hour"), "minimum_hour"),
