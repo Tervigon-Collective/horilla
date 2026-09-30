@@ -394,6 +394,7 @@ class EmployeesList(HorillaListView):
         (_("Reporting Manager"), "employee_work_info__reporting_manager_id"),
         (_("Company"), "employee_work_info__company_id"),
         (_("Date of Joining"), "employee_work_info__date_joining"),
+        (_("Employment Status"), "get_employment_status_col"),
         (_("History"), "get_history_col"),
     ]
 
@@ -405,6 +406,7 @@ class EmployeesList(HorillaListView):
         (_("Shift"), "employee_work_info__shift_id"),
         (_("Reporting Manager"), "employee_work_info__reporting_manager_id"),
         (_("Company"), "employee_work_info__company_id"),
+        (_("Employment Status"), "get_employment_status_col"),
     ]
 
     action_method = "employee_actions"

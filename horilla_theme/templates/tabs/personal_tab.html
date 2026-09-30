@@ -278,6 +278,28 @@
                                     {{ work_info.contract_end_date|default:_("Not set") }}
                                 </dd>
                             </div>
+                            <div class="flex items-baseline justify-between gap-3 py-2">
+                                <dt class="text-xs font-medium text-color-600">{% trans "Employment Status" %}</dt>
+                                <dd class="text-right text-sm">
+                                    {% if work_info.employment_status == "probation" %}
+                                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium" style="background:#fef3c7;color:#92400e;">{{ work_info.get_employment_status_display }}</span>
+                                    {% elif work_info.employment_status == "notice" %}
+                                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium" style="background:#fee2e2;color:#991b1b;">{{ work_info.get_employment_status_display }}</span>
+                                    {% elif work_info.employment_status %}
+                                        <span class="font-medium text-dark-500">{{ work_info.get_employment_status_display }}</span>
+                                    {% else %}
+                                        <span class="italic text-dark-100">{% trans "Not set" %}</span>
+                                    {% endif %}
+                                </dd>
+                            </div>
+                            {% if work_info.employment_status == "probation" %}
+                            <div class="flex items-baseline justify-between gap-3 py-2">
+                                <dt class="text-xs font-medium text-color-600">{% trans "Probation Ends" %}</dt>
+                                <dd class="text-right text-sm dateformat_changer {% if work_info.probation_end %}font-medium text-dark-500{% else %}italic text-dark-100{% endif %}">
+                                    {{ work_info.probation_end|default:_("Not set") }}
+                                </dd>
+                            </div>
+                            {% endif %}
                         </dl>
                         <dl>
                             <div class="flex items-baseline justify-between gap-3 py-2">

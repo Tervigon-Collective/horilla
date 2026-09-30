@@ -556,6 +556,35 @@ class Employee(models.Model):
         badge_id = (f"({self.badge_id})") if self.badge_id is not None else ""
         return f"{self.employee_first_name} {last_name} {badge_id}"
 
+    def get_employment_status_col(self):
+        """Employment status badge for the employee list (probation stands out)."""
+        from django.utils.html import format_html
+
+        work_info = getattr(self, "employee_work_info", None)
+        status = getattr(work_info, "employment_status", None)
+        if not status:
+            return ""
+        label = work_info.get_employment_status_display()
+        colors = {
+            "probation": ("#fef3c7", "#92400e"),
+            "notice": ("#fee2e2", "#991b1b"),
+        }
+        if status not in colors:
+            return label
+        background, color = colors[status]
+        if status == "probation" and work_info.probation_end:
+            label = _("%(status)s until %(date)s") % {
+                "status": label,
+                "date": work_info.probation_end.strftime("%d %b %Y"),
+            }
+        return format_html(
+            '<span style="background:{};color:{};padding:2px 8px;'
+            'border-radius:9999px;font-size:12px;white-space:nowrap;">{}</span>',
+            background,
+            color,
+            label,
+        )
+
     def get_history_col(self):
         """
         Renders a clickable icon that opens this employee's activity-history
