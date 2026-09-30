@@ -1825,8 +1825,10 @@ def update_worked_hour_field(request):
 
 
 @login_required
-@hx_request_required
+@require_http_methods(["POST"])
 def form_date_checking(request):
+    # JSON helper called via jQuery $.ajax (no HX-Request header), so
+    # hx_request_required 405'd every call and minimum_hour never filled in.
     minimum_hour = "00:00"
     attendance_date_str = request.POST.get("attendance_date")
     if not attendance_date_str:
