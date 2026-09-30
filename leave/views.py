@@ -2993,7 +2993,20 @@ def user_request_one(request, id):
     Returns:
     GET : return one user leave request view template
     """
-    leave_request = LeaveRequest.objects.get(id=id)
+    from leave.cbv.accessibility import (
+        can_access_leave_request,
+        can_manage_leave_request,
+    )
+
+    leave_request = LeaveRequest.objects.filter(id=id).first()
+    # Leave descriptions can carry medical reasons, so only the owner, their
+    # manager, an approver of this request or HR may open one by id.
+    # leave.view_leaverequest is held too broadly to scope a single record.
+    if not leave_request or not (
+        can_access_leave_request(request, leave_request)
+        or can_manage_leave_request(request, leave_request)
+    ):
+        return handle_no_permission(request)
     try:
         requests_ids_json = request.GET.get("instances_ids")
         if requests_ids_json:
