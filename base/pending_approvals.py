@@ -537,6 +537,16 @@ def execute_pending_action(
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+    # The type-level check only asks whether the user manages anyone; the
+    # approve views behind it do not check the subject employee, so the item
+    # must be one this user's own inbox would list.
+    qs_fn = next(fn for name, fn, *_rest in INBOX_SOURCES if name == item_type)
+    if not qs_fn(request).filter(pk=item_id).exists():
+        return Response(
+            {"error": _("You do not have permission to act on this item.")},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     payload = payload or {}
 
     if item_type == "leave":
