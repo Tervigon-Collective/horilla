@@ -141,6 +141,7 @@
             $.ajax({
                 type: 'get',
                 url: "{% url 'get-notice-period-end-date' %}",
+                headers: { "HX-Request": "true" },
                 data: { "start_date": start_date },
                 success: function (response) {
                     end_date = response.end_date;

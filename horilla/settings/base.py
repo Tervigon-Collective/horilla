@@ -288,6 +288,18 @@ if REDIS_URL:
             "KEY_PREFIX": "horilla",
         }
     }
+elif not DEBUG:
+    # Without Redis, gunicorn's workers must still share one cache: saved
+    # filters, dynamic-create fields and detail-view navigation store state in
+    # one request and read it back in the next, which a per-process LocMem cache
+    # only serves when both requests happen to reach the same worker.
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+            "LOCATION": env("FILE_CACHE_DIR", default="/tmp/horilla-cache"),
+            "OPTIONS": {"MAX_ENTRIES": 20000, "CULL_FREQUENCY": 4},
+        }
+    }
 
 # ========================================
 # STATIC & MEDIA FILES

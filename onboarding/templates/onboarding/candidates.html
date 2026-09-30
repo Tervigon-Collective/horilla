@@ -431,6 +431,7 @@
             } else {
                 $.ajax({
                     url: '{% url "candidate-select-onboarding" %}',
+                    headers: { "HX-Request": "true" },
                     data: { page: "all" },
                     type: "GET",
                     dataType: "json",

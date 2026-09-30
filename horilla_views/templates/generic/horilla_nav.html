@@ -137,6 +137,7 @@
                 $.ajax({
                   type: 'get',
                   url: `{% url 'last-applied-filter' %}`,
+                  headers: { "HX-Request": "true" },
                   data: filterData,
                   traditional:true,
                   success: function (response) {

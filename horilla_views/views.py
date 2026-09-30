@@ -143,10 +143,14 @@ class ReloadField(View):
             )
         parent_form = form_class()
 
-        dynamic_cache = CACHE.get(request.session.session_key + "cbv" + reload_field)
-        onchange = CACHE.get(
-            request.session.session_key + "cbv" + reload_field + "onchange"
-        )
+        session_key = request.session.session_key or ""
+        dynamic_cache = CACHE.get(session_key + "cbv" + (reload_field or ""))
+        if not dynamic_cache:
+            return HorillaRedirect(
+                request,
+                message=_("This form has expired. Please close and reopen it."),
+            )
+        onchange = CACHE.get(session_key + "cbv" + reload_field + "onchange")
         if not onchange:
             onchange = ""
 

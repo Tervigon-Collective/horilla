@@ -236,7 +236,7 @@
         fd.set('body', body);
         fetch("{% url 'get-mail-preview' %}{% if cand %}?candidate_id={{cand.id}}{% endif %}", {
             method: 'POST',
-            headers: { 'X-CSRFToken': getCsrfToken() },
+            headers: { "HX-Request": "true", 'X-CSRFToken': getCsrfToken() },
             body: fd,
             credentials: 'same-origin'
         }).then(function (r) {

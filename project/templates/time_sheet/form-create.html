@@ -78,6 +78,7 @@
         $.ajax({
           type: "GET",
           url: createProjectUrl,
+          headers: { "HX-Request": "true" },
           success: function (response) {
             $("#ProjectModal").addClass("oh-modal--show");
             $("#ProjectFormTarget").html(response);
@@ -88,6 +89,7 @@
         $.ajax({
           type: "GET",
           url: "{% url 'time-sheet-initial' %}",
+          headers: { "HX-Request": "true" },
           data: { project_id: project_id },
           beforeSend: function () {
             $(".errorlist").remove();

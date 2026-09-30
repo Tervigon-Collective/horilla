@@ -314,6 +314,7 @@
                 processData: false,
                 contentType: false,
                 headers: {
+                    "HX-Request": "true",
                     "X-CSRFToken": getCookie("csrftoken"),
                 },
                 xhrFields: {
@@ -382,6 +383,7 @@
                                     processData: false,
                                     contentType: false,
                                     headers: {
+                                        "HX-Request": "true",
                                         "X-CSRFToken": getCookie("csrftoken"),
                                     },
                                     xhrFields: {

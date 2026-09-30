@@ -9,6 +9,23 @@ from horilla.scheduling import register_job
 from notifications.signals import notify
 
 
+def next_monthly_date(today, rotate_every):
+    """
+    The next month's rotation date: its `rotate_every` day, clamped to that
+    month's length, or its last day for "last". None if `rotate_every` is invalid.
+    """
+    year, month = (
+        (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
+    )
+    last_day = calendar.monthrange(year, month)[1]
+    if rotate_every == "last":
+        return date(year, month, last_day)
+    try:
+        return date(year, month, min(int(rotate_every), last_day))
+    except (TypeError, ValueError):
+        return None
+
+
 def update_rotating_work_type_assign(rotating_work_type, new_date):
     """
     Here will update the employee work information details and send notification
@@ -29,6 +46,7 @@ def update_rotating_work_type_assign(rotating_work_type, new_date):
     next_work_type_index = rotating_work_type.additional_data.get(
         "next_work_type_index", 0
     )
+    next_work_type_index %= len(total_rotate_work_types)
     next_work_type = total_rotate_work_types[next_work_type_index]
     if next_work_type_index < len(total_rotate_work_types) - 1:
         next_work_type_index += 1
@@ -90,14 +108,8 @@ def work_type_rotate_every(rotating_work_type):
     switch_date = rotating_work_type.next_change_date
     day_date = rotating_work_type.rotate_every
     if switch_date.strftime("%Y-%m-%d") == date_today.strftime("%Y-%m-%d"):
-        if day_date == switch_date.strftime("%d").lstrip("0"):
-            new_date = date_today.replace(month=date_today.month + 1)
-            update_rotating_work_type_assign(rotating_work_type, new_date)
-        elif day_date == "last":
-            year = date_today.strftime("%Y")
-            month = date_today.strftime("%m")
-            last_day = calendar.monthrange(int(year), int(month) + 1)[1]
-            new_date = datetime(int(year), int(month) + 1, last_day)
+        new_date = next_monthly_date(date_today.date(), day_date)
+        if new_date:
             update_rotating_work_type_assign(rotating_work_type, new_date)
     return
 
@@ -139,7 +151,8 @@ def update_rotating_shift_assign(rotating_shift, new_date):
         total_rotate_shifts = [shift1, shift2]
     else:
         total_rotate_shifts = [shift1, shift2] + list(additional_shifts)
-    next_shift_index = rotating_shift.additional_data.get("next_shift_index")
+    next_shift_index = rotating_shift.additional_data.get("next_shift_index", 0)
+    next_shift_index %= len(total_rotate_shifts)
     next_shift = total_rotate_shifts[next_shift_index]
     if next_shift_index < len(total_rotate_shifts) - 1:
         next_shift_index += 1
@@ -197,14 +210,8 @@ def shift_rotate_every(rotating_shift, today):
     switch_date = rotating_shift.next_change_date
     day_date = rotating_shift.rotate_every
     if switch_date == today:
-        if day_date == switch_date.strftime("%d").lstrip("0"):
-            new_date = today.replace(month=today.month + 1)
-            update_rotating_shift_assign(rotating_shift, new_date)
-        elif day_date == "last":
-            year = today.year
-            month = today.month
-            last_day = calendar.monthrange(int(year), int(month) + 1)[1]
-            new_date = datetime(int(year), int(month) + 1, last_day)
+        new_date = next_monthly_date(today, day_date)
+        if new_date:
             update_rotating_shift_assign(rotating_shift, new_date)
     return
 
@@ -220,12 +227,14 @@ def rotate_shift():
     rotating_shifts = RotatingShiftAssign.objects.filter(is_active=True)
     today = datetime.now().date()
     r_shifts = rotating_shifts.filter(start_date__lte=today)
-    rotating_shifts_modified = None
+    # Start from all active assignments (it was None, so the job crashed on
+    # days with nothing to deactivate) and accumulate exclusions per employee.
+    rotating_shifts_modified = rotating_shifts
     for r_shift in r_shifts:
         emp_shift = rotating_shifts.filter(
             employee_id=r_shift.employee_id, start_date__lte=today
         ).exclude(id=r_shift.id)
-        rotating_shifts_modified = rotating_shifts.exclude(
+        rotating_shifts_modified = rotating_shifts_modified.exclude(
             id__in=emp_shift.values_list("id", flat=True)
         )
         emp_shift.update(is_active=False)
