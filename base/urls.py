@@ -5,7 +5,7 @@ from django.utils.translation import gettext_lazy as _
 from base import announcement
 from base import dashboard as dashboard_module
 from base import ess_dashboard, request_and_approve, views
-from base import approval_inbox_views
+from base import approval_inbox_views, release_check
 from base.cbv import (
     announcement_cbv,
     company,
@@ -2104,6 +2104,11 @@ urlpatterns = [
         name="roster-template-download",
     ),
     # ── End Shift Roster ──────────────────────────────────────────────────
+    path(
+        "release-update-notice/",
+        release_check.release_update_notice,
+        name="release-update-notice",
+    ),
 ]
 
 urlpatterns.append(

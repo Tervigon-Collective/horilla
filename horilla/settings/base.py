@@ -39,6 +39,12 @@ HORILLA_ENV = env("HORILLA_ENV", default="")
 REDIS_URL = env("REDIS_URL", default=None)
 # Unknown hostnames and the bare server IP are redirected here.
 PRIMARY_HOST = env("PRIMARY_HOST", default="hrms.seleric.com")
+# Superusers see a notice when this reports a release newer than __version__.
+HORILLA_RELEASE_CHECK = env.bool("HORILLA_RELEASE_CHECK", default=True)
+HORILLA_RELEASES_API = env(
+    "HORILLA_RELEASES_API",
+    default="https://api.github.com/repos/horilla/horilla-hr/releases/latest",
+)
 
 # Default site ID for django.contrib.sites framework.
 SITE_ID = 1

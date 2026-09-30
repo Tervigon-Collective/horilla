@@ -275,6 +275,13 @@
         >
         </button>
 
+        {% if request.user.is_superuser %}
+            <div id="releaseUpdateNotice"
+                 hx-get="{% url 'release-update-notice' %}"
+                 hx-trigger="load delay:2s"
+                 hx-swap="innerHTML"></div>
+        {% endif %}
+
         <!-- Include Sidebar (sidebar.html owns id="sidebar" itself) -->
         {% include "horilla_theme/components/sidebar.html" %}
 
