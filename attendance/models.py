@@ -995,6 +995,8 @@ class Attendance(HorillaModel):
                 "minimum_hour",
                 "attendance_overtime_approve",
                 "attendance_validated",
+                "attendance_clock_out",
+                "attendance_clock_out_date",
             ).get(pk=self.pk)
 
             old_work = old.at_work_second or 0
@@ -1013,7 +1015,13 @@ class Attendance(HorillaModel):
 
         if self.attendance_clock_in:
             self.missing_punch_in = False
-        if self.attendance_clock_out:
+        # Auto check-out keeps the missing punch out flag until the check-out
+        # is actually corrected, so only clear it when the check-out changes.
+        if self.attendance_clock_out and (
+            old is None
+            or old.attendance_clock_out != self.attendance_clock_out
+            or old.attendance_clock_out_date != self.attendance_clock_out_date
+        ):
             self.missing_punch_out = False
 
         self.sync_worked_hours_from_clock_times()
@@ -1026,7 +1034,9 @@ class Attendance(HorillaModel):
         elif not self.attendance_overtime_approve:
             self.approved_overtime_second = 0
         else:
-            self.approved_overtime_second = old_approved_ot
+            self.approved_overtime_second = min(
+                old_approved_ot, self.overtime_second or 0
+            )
 
         new_work = self.at_work_second or 0
         new_approved_ot = self.approved_overtime_second or 0

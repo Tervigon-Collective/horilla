@@ -5,6 +5,7 @@ from datetime import datetime
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils import timezone
 
 
 class Command(BaseCommand):
@@ -43,13 +44,18 @@ class Command(BaseCommand):
                             out_datetime=activity.in_datetime,
                         )
 
+            capped = self.cap_auto_checkouts(dry_run)
+
             resaved = 0
             # Open attendances count up to "now", so they always look changed.
             closed = Attendance.objects.exclude(attendance_clock_out=None)
             for attendance in closed.select_related("employee_id"):
                 old = attendance.attendance_worked_hour
                 attendance.sync_worked_hours_from_clock_times()
-                if attendance.attendance_worked_hour == old:
+                stale_ot = (attendance.approved_overtime_second or 0) > (
+                    attendance.overtime_second or 0
+                )
+                if attendance.attendance_worked_hour == old and not stale_ot:
                     continue
                 resaved += 1
                 self.stdout.write(
@@ -130,7 +136,73 @@ class Command(BaseCommand):
         prefix = "[dry run] " if dry_run else ""
         self.stdout.write(
             self.style.SUCCESS(
-                f"{prefix}Fixed {fixed_activities} activities, recalculated "
-                f"{resaved} attendances, rebuilt {rebuilt} hours balances."
+                f"{prefix}Fixed {fixed_activities} activities, capped {capped} auto "
+                f"check-outs, recalculated {resaved} attendances, rebuilt "
+                f"{rebuilt} hours balances."
             )
         )
+
+    def cap_auto_checkouts(self, dry_run):
+        """
+        Past auto check-outs credited time up to the auto check-out time; move
+        them back to shift end and flag them as missing punch out. They are
+        recognised by the activity closing exactly on the auto check-out time
+        (real punches always carry sub-second precision).
+        """
+        from attendance.models import Attendance, AttendanceActivity
+        from attendance.scheduler import (
+            auto_punch_out_credit_until,
+            flag_missing_punch_out,
+        )
+        from base.models import EmployeeShiftSchedule
+
+        capped = 0
+        schedules = EmployeeShiftSchedule.objects.filter(
+            is_auto_punch_out_enabled=True, auto_punch_out_time__isnull=False
+        )
+        for schedule in schedules:
+            attendances = Attendance.objects.filter(
+                shift_id=schedule.shift_id,
+                attendance_day=schedule.day,
+                attendance_clock_out=schedule.auto_punch_out_time,
+            ).select_related("employee_id")
+            for attendance in attendances:
+                activity = (
+                    AttendanceActivity.objects.filter(
+                        employee_id=attendance.employee_id,
+                        attendance_date=attendance.attendance_date,
+                        clock_out_date=attendance.attendance_clock_out_date,
+                        clock_out=schedule.auto_punch_out_time,
+                    )
+                    .order_by("clock_in_date", "clock_in")
+                    .last()
+                )
+                if not activity:
+                    continue
+                activity_in = datetime.combine(activity.clock_in_date, activity.clock_in)
+                credited_out = max(
+                    auto_punch_out_credit_until(
+                        schedule, attendance.attendance_clock_out_date
+                    ),
+                    activity_in,
+                )
+                capped += 1
+                self.stdout.write(
+                    f"auto check-out {attendance.pk} {attendance.employee_id} "
+                    f"{attendance.attendance_date}: "
+                    f"{attendance.attendance_clock_out} -> {credited_out.time():%H:%M}"
+                )
+                if dry_run:
+                    continue
+                AttendanceActivity.objects.filter(pk=activity.pk).update(
+                    clock_out=credited_out.time(),
+                    clock_out_date=credited_out.date(),
+                    out_datetime=timezone.make_aware(credited_out),
+                )
+                attendance.attendance_clock_out = credited_out.time().replace(
+                    second=0, microsecond=0
+                )
+                attendance.attendance_clock_out_date = credited_out.date()
+                attendance.save()
+                flag_missing_punch_out(attendance.pk)
+        return capped

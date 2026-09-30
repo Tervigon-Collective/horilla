@@ -676,6 +676,8 @@ class AttendanceRequestApproveView(APIView):
             attendance.is_validate_request_approved = True
             attendance.is_validate_request = False
             attendance.request_description = None
+            attendance.missing_punch_in = False
+            attendance.missing_punch_out = False
             attendance.save()
             if attendance.requested_data is not None:
                 requested_data = json.loads(attendance.requested_data)

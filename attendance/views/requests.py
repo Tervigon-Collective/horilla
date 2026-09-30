@@ -490,6 +490,8 @@ def approve_validate_attendance_request(request, attendance_id):
     attendance.is_validate_request = False
     attendance.request_description = None
     attendance.approved_by = request.user.employee_get
+    attendance.missing_punch_in = False
+    attendance.missing_punch_out = False
     attendance.save()
     if attendance.requested_data is not None:
         requested_data = _clean_requested_data_none_strings(
@@ -749,6 +751,8 @@ def bulk_approve_attendance_request(request):
         attendance.is_validate_request = False
         attendance.request_description = None
         attendance.approved_by = request.user.employee_get
+        attendance.missing_punch_in = False
+        attendance.missing_punch_out = False
         attendance.save()
         if attendance.requested_data is not None:
             requested_data = _clean_requested_data_none_strings(
