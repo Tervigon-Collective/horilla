@@ -46,14 +46,3 @@ DISABLE_SETUP_CHECKLIST = True
 
 # Official 2.0 already registers geofencing from horilla_api.__init__.
 # Do not append it again — Django rejects duplicate app labels.
-
-# Hashed + compressed static files so browsers can cache CSS/JS long-term
-# (see horilla/static_storage.py).
-from .base import STORAGES as _STORAGES
-
-STORAGES = {
-    **_STORAGES,
-    "staticfiles": {
-        "BACKEND": "horilla.static_storage.ForgivingManifestStaticFilesStorage"
-    },
-}
