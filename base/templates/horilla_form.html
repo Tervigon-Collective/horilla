@@ -22,7 +22,7 @@
                     </div>
                     {{field.errors}}
                 {% else %}
-                    <div class="col-12 col-md-6" id="id_{{ field.name }}_parent_div">
+                    <div class="col-12 col-md-6" id="id_{{ field.name }}_parent_div" {% if field.name == "attachment" and form.leave_type_id %}style="display:none"{% endif %}>
                         <div class="oh-label__info" for="id_{{ field.name }}">
                             <label class="oh-label {% if field.field.required %} required-star{% endif %}"
                                 for="id_{{ field.name }}">{% trans field.label %}</label>
@@ -50,3 +50,22 @@
         </div>
     </div>
 </div>
+<script>
+    (function () {
+        var script = document.currentScript;
+        $(function () {
+            function toggleLeaveAttachment($form) {
+                var $type = $form.find("[name=leave_type_id]");
+                var $box = $form.find("#id_attachment_parent_div");
+                if (!$type.length || !$box.length) return;
+                var show = $type.find("option:selected").attr("data-require-attachment") === "yes";
+                $box.toggle(show);
+            }
+            var $scriptForm = $(script).closest("form");
+            toggleLeaveAttachment($scriptForm);
+            $scriptForm.find("[name=leave_type_id]").off("change.leaveAttach").on("change.leaveAttach", function () {
+                toggleLeaveAttachment($scriptForm);
+            });
+        });
+    })();
+</script>

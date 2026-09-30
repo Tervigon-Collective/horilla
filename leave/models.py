@@ -1786,21 +1786,6 @@ class LeaveRequest(HorillaModel):
             employee=self.employee_id,
         )
 
-        # Sick leave: medical certificate for more than 2 consecutive working days
-        if (
-            leave_type
-            and "sick" in (leave_type.name or "").lower()
-            and float(effective_requested_days or 0) > 2
-            and not _has_attachment(attachment)
-        ):
-            raise ValidationError(
-                {
-                    "attachment": _(
-                        "A medical certificate is required for sick leave longer than 2 consecutive working days."
-                    )
-                }
-            )
-
         if effective_requested_days <= 0:
             raise ValidationError(
                 _(

@@ -64,6 +64,7 @@
                     <div
                         class="col-12 col-md-{{field|col}}"
                         id="id_{{ field.name }}_parent_div"
+                        {% if field.name == "attachment" and form.leave_type_id %}style="display:none"{% endif %}
                     >
                         {% if field.label %}
                             <div class="flex oh-label" for="id_{{ field.name }}">
@@ -157,5 +158,21 @@
                 $(this).closest('[id$="_parent_div"]').find(".errorlist").remove();
                 $(this).closest("form").find(".js-non-field-errors .errorlist").remove();
             });
+
+        function toggleLeaveAttachment($form) {
+            var $type = $form.find("[name=leave_type_id]");
+            var $box = $form.find("#id_attachment_parent_div");
+            if (!$type.length || !$box.length) return;
+            var show = $type.find("option:selected").attr("data-require-attachment") === "yes";
+            $box.toggle(show);
+        }
+        $(document)
+            .off("change.leaveAttach", "[name=leave_type_id]")
+            .on("change.leaveAttach", "[name=leave_type_id]", function () {
+                toggleLeaveAttachment($(this).closest("form"));
+            });
+        $("form").each(function () {
+            toggleLeaveAttachment($(this));
+        });
     });
 </script>

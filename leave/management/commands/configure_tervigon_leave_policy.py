@@ -160,6 +160,7 @@ class Command(BaseCommand):
         lt.carryforward_max = None
         lt.monthly_accrual = True
         lt.require_approval = "yes"
+        lt.require_attachment = "no"
         lt.is_encashable = False
         lt.is_active = True
         lt.save()
