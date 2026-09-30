@@ -1,11 +1,39 @@
 import datetime
+import fcntl
+import os
+import sys
+import tempfile
+from contextlib import contextmanager
 from datetime import timedelta
 
+import pytz
+from horilla.db import SafeBackgroundScheduler
+from django.conf import settings
+from django.db import models
 from django.utils import timezone
 
 from base.backends import logger
 from horilla.db import scheduled_job
 from horilla.scheduling import register_job
+
+
+@contextmanager
+def _single_run(name):
+    """
+    Every gunicorn worker starts its own scheduler; hold a non-blocking file
+    lock so a job never runs concurrently (concurrent attendance saves would
+    apply the same Hours Balance diff more than once).
+    """
+    with open(os.path.join(tempfile.gettempdir(), f"horilla-{name}.lock"), "w") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def auto_punch_out_credit_until(shift_schedule, date):
@@ -34,7 +62,9 @@ def flag_missing_punch_out(attendance_id):
 
 @scheduled_job
 def auto_punch_out():
-    _auto_punch_out()
+    with _single_run("auto_punch_out") as acquired:
+        if acquired:
+            _auto_punch_out()
 
 
 def _auto_punch_out():
@@ -139,7 +169,9 @@ def mark_missing_punches():
     - Missing punch IN: check-out without check-in on attendance rows
     - Missing punch IN: active employees on working days with no check-in
     """
-    _mark_missing_punches()
+    with _single_run("mark_missing_punches") as acquired:
+        if acquired:
+            _mark_missing_punches()
 
 
 def _mark_missing_punches():
@@ -310,13 +342,7 @@ def create_work_record():
             )
             records_to_create.append(record)
         except Exception as e:
-            # Employee.__str__ is "Name (BADGE)", so interpolating the
-            # object writes a real name into the log. The id is enough to
-            # find the row, and logger.exception keeps the traceback.
-            logger.exception(
-                "Error preparing work record for employee_id=%s",
-                getattr(employee, "pk", employee),
-            )
+            logger.error(f"Error preparing work record for {employee}: {e}")
 
     if records_to_create:
         try:
