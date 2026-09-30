@@ -72,6 +72,9 @@ def approval_inbox_action(request):
         return JsonResponse({"error": _("type, id, and action are required.")}, status=400)
 
     drf_request = Request(request, parsers=[FormParser(), JSONParser()])
+    # DRF only authenticates JWT here, which would make every session user
+    # anonymous and deny every inbox action.
+    drf_request.user = request.user
     response = execute_pending_action(
         drf_request, item_type, int(item_id), action, payload
     )
