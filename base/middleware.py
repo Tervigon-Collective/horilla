@@ -271,20 +271,24 @@ class CompanyMiddleware:
                 text = "Other Company"
 
             request.selected_company_instance = company_id
-            request.session["selected_company"] = str(company_id.id)
-            request.session["selected_company_instance"] = {
-                "company": company_id.company,
-                "icon": company_id.icon.url,
-                "text": text,
-                "id": company_id.id,
-            }
+            self._session_set(request, "selected_company", str(company_id.id))
+            self._session_set(
+                request,
+                "selected_company_instance",
+                {
+                    "company": company_id.company,
+                    "icon": company_id.icon.url,
+                    "text": text,
+                    "id": company_id.id,
+                },
+            )
         else:
             request.selected_company_instance = (
                 user_company_id
                 if not user_company_id
                 else Company.objects.filter(hq=True).first()
             )
-            request.session["selected_company"] = "all"
+            self._session_set(request, "selected_company", "all")
             from base.auth_backends import company_scoped_active
 
             all_company = (
@@ -292,12 +296,22 @@ class CompanyMiddleware:
                 if company_scoped_active() and not request.user.is_superuser
                 else AllCompany()
             )
-            request.session["selected_company_instance"] = {
-                "company": all_company.company,
-                "icon": all_company.icon.url,
-                "text": all_company.text,
-                "id": all_company.id,
-            }
+            self._session_set(
+                request,
+                "selected_company_instance",
+                {
+                    "company": all_company.company,
+                    "icon": all_company.icon.url,
+                    "text": all_company.text,
+                    "id": all_company.id,
+                },
+            )
+
+    @staticmethod
+    def _session_set(request, key, value):
+        """Skip the session write when the stored value is already current."""
+        if request.session.get(key) != value:
+            request.session[key] = value
 
     def _clamp_to_allowed(self, request, company_id):
         """

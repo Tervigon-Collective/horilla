@@ -4,7 +4,7 @@ var notify_api_url;
 var notify_fetch_count;
 var notify_unread_url;
 var notify_mark_all_unread_url;
-var notify_refresh_period = 15000;
+var notify_refresh_period = 45000;
 // Set notify_mark_as_read to true to mark notifications as read when fetched
 var notify_mark_as_read = false;
 var consecutive_misfires = 0;

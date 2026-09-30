@@ -353,6 +353,9 @@ class Employee(models.Model):
         """
         This method is used to the employees current day shift status
         """
+        cached = getattr(self, "_forecasted_at_work_cache", None)
+        if cached is not None:
+            return cached
         if apps.is_installed("attendance"):
             today = datetime.today()
             yesterday = today - timedelta(days=1)
@@ -383,14 +386,17 @@ class Employee(models.Model):
                 at_work = attendance.get_at_work_from_activities()
             forecasted_pending_hours = max(0, (minimum_hour_seconds - at_work))
 
-            return {
+            result = {
                 "forecasted_at_work": format_time(at_work),
                 "forecasted_pending_hours": format_time(forecasted_pending_hours),
                 "forecasted_at_work_seconds": at_work,
                 "forecasted_pending_hours_seconds": forecasted_pending_hours,
                 "has_attendance": attendance is not None,
             }
+            self._forecasted_at_work_cache = result
+            return result
         else:
+            self._forecasted_at_work_cache = {}
             return {}
 
     def get_custom_forecasted_info_col(self):
