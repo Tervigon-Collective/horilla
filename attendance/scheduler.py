@@ -8,6 +8,30 @@ from horilla.db import scheduled_job
 from horilla.scheduling import register_job
 
 
+def auto_punch_out_credit_until(shift_schedule, date):
+    """
+    Datetime up to which an auto check-out credits worked time: the shift end
+    (the auto check-out time itself only decides when the punch gets closed).
+    `date` is the day the auto check-out happens on (already night-shift adjusted).
+    """
+    end_time = shift_schedule.end_time or shift_schedule.auto_punch_out_time
+    return datetime.datetime.combine(date, min(end_time, shift_schedule.auto_punch_out_time))
+
+
+def flag_missing_punch_out(attendance_id):
+    """
+    Flag an auto checked-out attendance. Saved separately from the check-out
+    so save() (which clears the flag when the check-out changes) keeps it, and
+    the work record is refreshed to "Missing punch out".
+    """
+    from attendance.models import Attendance
+
+    attendance = Attendance.objects.filter(pk=attendance_id).first()
+    if attendance and not attendance.missing_punch_out:
+        attendance.missing_punch_out = True
+        attendance.save()
+
+
 @scheduled_job
 def auto_punch_out():
     _auto_punch_out()
@@ -59,14 +83,20 @@ def _auto_punch_out():
             )
             try:
                 if attendance.attendance_clock_out is None and activity_in < cutoff:
+                    # A forgotten check-out only earns time up to shift end;
+                    # the flag lets the employee request a correction.
+                    credited_out = max(
+                        auto_punch_out_credit_until(shift_schedule, date), activity_in
+                    )
                     clock_out(
                         Request(
                             user=attendance.employee_id.employee_user_id,
-                            date=date,
-                            time=shift_schedule.auto_punch_out_time,
-                            datetime=combined_datetime,
+                            date=credited_out.date(),
+                            time=credited_out.time(),
+                            datetime=timezone.make_aware(credited_out),
                         )
                     )
+                    flag_missing_punch_out(attendance.pk)
                     continue
 
                 # Attendance already has a check-out (edited/approved while the
@@ -162,6 +192,15 @@ def _mark_missing_punches():
                 )
 
         # --- Missing punch IN: no check-in on working days (today only at EOD) ---
+        # Employees are only expected to punch once they have started using
+        # attendance; earlier days (and employees who never punched) are not
+        # missing punches.
+        first_attendance = dict(
+            Attendance.objects.values("employee_id")
+            .annotate(first=models.Min("attendance_date"))
+            .values_list("employee_id", "first")
+        )
+
         def _mark_no_check_in_for_date(target_date):
             if not _is_end_of_day_reached(target_date):
                 return
@@ -179,6 +218,13 @@ def _mark_missing_punches():
                     if not work_info or not work_info.shift_id:
                         continue
                     if work_info.date_joining and work_info.date_joining > target_date:
+                        continue
+                    started = first_attendance.get(employee.pk)
+                    if not started or started > target_date:
+                        continue
+                    if target_date not in get_working_days(
+                        target_date, target_date, employee
+                    )["working_days_on"]:
                         continue
 
                     on_leave = LeaveRequest.objects.filter(

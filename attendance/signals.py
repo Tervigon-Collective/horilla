@@ -129,6 +129,10 @@ def attendance_post_save(sender, instance, **kwargs):
             status, message = "CONF", "Missing punch out"
         else:
             status, message = "FDP", _("Currently working")
+    elif instance.missing_punch_out and not work_record.is_leave_record:
+        # Auto check-out: hours are credited up to shift end, but the day stays
+        # in the missing punch list until the employee regularizes it.
+        status, message = "CONF", "Missing punch out"
 
     work_record.work_record_type = status
     work_record.message = message
