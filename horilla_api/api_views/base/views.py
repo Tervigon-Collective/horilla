@@ -492,6 +492,7 @@ class WorkTypeRequestCancelView(APIView):
         if (
             is_reportingmanger(request, work_type_request)
             or request.user.has_perm("base.cancel_worktyperequest")
+            or request.user.has_perm("base.change_worktyperequest")
             or work_type_request.employee_id == request.user.employee_get
             and work_type_request.approved == False
         ):
@@ -1188,6 +1189,7 @@ class ShiftRequestCancelView(APIView):
         if (
             is_reportingmanger(request, shift_request)
             or request.user.has_perm("base.cancel_shiftrequest")
+            or request.user.has_perm("base.change_shiftrequest")
             or shift_request.employee_id == request.user.employee_get
             and shift_request.approved == False
         ):

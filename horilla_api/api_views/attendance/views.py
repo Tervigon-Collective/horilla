@@ -739,17 +739,10 @@ class AttendanceRequestApproveView(APIView):
             attendance.missing_punch_out = False
             attendance.save()
             if attendance.requested_data is not None:
-                requested_data = json.loads(attendance.requested_data)
-                requested_data["attendance_clock_out"] = (
-                    None
-                    if requested_data["attendance_clock_out"] == "None"
-                    else requested_data["attendance_clock_out"]
-                )
-                requested_data["attendance_clock_out_date"] = (
-                    None
-                    if requested_data["attendance_clock_out_date"] == "None"
-                    else requested_data["attendance_clock_out_date"]
-                )
+                requested_data = {
+                    key: None if value == "None" else value
+                    for key, value in json.loads(attendance.requested_data).items()
+                }
                 Attendance.objects.filter(id=pk).update(**requested_data)
                 # DUE TO AFFECT THE OVERTIME CALCULATION ON SAVE METHOD, SAVE THE INSTANCE ONCE MORE
                 attendance = Attendance.objects.get(id=pk)

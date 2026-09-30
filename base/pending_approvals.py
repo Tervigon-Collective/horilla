@@ -199,13 +199,16 @@ def _inbox_item(
     detail: dict[str, Any],
     ctx: dict[str, Any],
 ) -> dict[str, Any]:
+    subject = getattr(obj, "employee_id", None) or getattr(obj, "requested_employee_id", None)
+    # Non-approvers see their own pending requests here for tracking only.
+    own = subject is not None and subject == ctx.get("employee")
     return {
         "type": item_type,
         "id": obj.pk,
-        "employee": _employee_payload(getattr(obj, "employee_id", None) or getattr(obj, "requested_employee_id", None)),
+        "employee": _employee_payload(subject),
         "summary": summary,
         "requested_at": _iso_date(requested_at),
-        "can_act": _can_act_on_type(ctx, item_type),
+        "can_act": _can_act_on_type(ctx, item_type) and not own,
         "detail": detail,
     }
 
