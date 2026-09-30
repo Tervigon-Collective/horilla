@@ -23,6 +23,10 @@ from base.models import (
     JobRole,
     WorkType,
 )
+from employee.methods.manager_transfer import (
+    snapshot_reporting_managers,
+    transfer_changed_managers,
+)
 from employee.models import Employee, EmployeeWorkInformation
 from horilla.db import scheduled_job
 from horilla_auth.models import HorillaUser
@@ -944,6 +948,9 @@ def bulk_create_work_info_import(success_lists):
             new_work_info_list, batch_size=None if is_postgres else 999
         )
     if update_work_info_list:
+        managers_before = snapshot_reporting_managers(
+            [work_info.employee_id_id for work_info in update_work_info_list]
+        )
         EmployeeWorkInformation.objects.bulk_update(
             update_work_info_list,
             [
@@ -964,6 +971,7 @@ def bulk_create_work_info_import(success_lists):
             ],
             batch_size=None if is_postgres else 999,
         )
+        transfer_changed_managers(managers_before)
     if apps.is_installed("payroll"):
 
         contract_creation_thread = threading.Thread(

@@ -92,6 +92,10 @@ from employee.forms import (
     EmployeeWorkInformationUpdateForm,
     excel_columns,
 )
+from employee.methods.manager_transfer import (
+    snapshot_reporting_managers,
+    transfer_changed_managers,
+)
 from employee.methods.methods import (
     bulk_create_department_import,
     bulk_create_employee_import,
@@ -1753,7 +1757,14 @@ def save_employee_bulk_update(request):
                         employee_id__in=employee_list
                     )
                     value = dict_value.get(parts[-1])
+                    managers_before = (
+                        snapshot_reporting_managers(employee_list)
+                        if parts[-1] == "reporting_manager_id"
+                        else None
+                    )
                     employee_queryset.update(**{parts[-1]: value})
+                    if managers_before is not None:
+                        transfer_changed_managers(managers_before)
                 elif parts[0] == "employee_bank_details":
                     for id in employee_list:
 
@@ -2598,9 +2609,14 @@ def replace_employee(request, emp_id):
                     field_name == "reporting_manager_id"
                     and str(emp_id) != replace_emp_id
                 ):
-                    reporting_manager = EmployeeWorkInformation.objects.filter(
+                    subordinates = EmployeeWorkInformation.objects.filter(
                         reporting_manager_id=emp_id
-                    ).update(reporting_manager_id=replace_emp)
+                    )
+                    managers_before = snapshot_reporting_managers(
+                        subordinates.values_list("employee_id", flat=True)
+                    )
+                    subordinates.update(reporting_manager_id=replace_emp)
+                    transfer_changed_managers(managers_before)
                 elif (
                     apps.is_installed("recruitment")
                     and field_name == "recruitment_managers"

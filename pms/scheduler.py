@@ -28,6 +28,11 @@ def cyclic_feedback_creation():
                 else f"{feedback_obj.review_cycle} - cyclic {feedback_obj.start_date}"
             )
             feedback_obj.review_cycle = title
+            if feedback_obj.manager_id:
+                # The next cycle goes to the employee's current reporting manager.
+                current_manager = feedback.employee_id.get_reporting_manager()
+                if current_manager:
+                    feedback_obj.manager_id = current_manager
             feedback_obj.status = "Not Started"
             feedback_obj.start_date = feedback.cyclic_next_start_date
             feedback_obj.end_date = feedback.cyclic_next_end_date
