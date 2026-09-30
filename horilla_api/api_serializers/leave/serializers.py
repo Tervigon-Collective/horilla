@@ -504,10 +504,17 @@ class LeaveRequestApproveSerializer(serializers.ModelSerializer):
                 _("Employee is not assigned with leave type %(leave_type)s.")
                 % {"leave_type": leave_type_id}
             )
-        total_available_leave = (
-            available_leave.available_days + available_leave.carryforward_days
-        )
-        if not total_available_leave >= leave_request.requested_days:
+        from leave.services import has_sufficient_leave_balance
+
+        has_reserved = (leave_request.reserved_available_days or 0) + (
+            leave_request.reserved_carryforward_days or 0
+        ) >= leave_request.requested_days
+        if not (
+            has_reserved
+            or has_sufficient_leave_balance(
+                available_leave, leave_request.requested_days
+            )
+        ):
             raise serializers.ValidationError(
                 _("%(employee)s don't have enough leave days to approve the request..")
                 % {"employee": employee_id}
