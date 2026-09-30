@@ -14,11 +14,14 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
+import logging
+
+from django.conf import settings as django_settings
 from django.conf.urls.static import static
 from django.contrib import admin
 from django.core.cache import cache
 from django.db import connection
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.urls import include, path, re_path
 from django.views.generic import RedirectView
 from django.views.i18n import JavaScriptCatalog
@@ -26,24 +29,64 @@ from django.views.i18n import JavaScriptCatalog
 import notifications.urls
 
 from . import settings
+from .__version__ import API_VERSION
+
+logger = logging.getLogger(__name__)
 
 
 def health_check(request):
-    """Liveness probe — cheap, no dependency checks (Docker HEALTHCHECK)."""
-    return JsonResponse({"status": "ok"}, status=200)
+    """
+    Liveness probe — cheap, no dependency checks (Docker HEALTHCHECK).
+
+    Also identifies the product and the API contract it speaks. Mobile and
+    other API clients need to know whether a host is a Horilla server, and one
+    they can talk to, *before* posting credentials: a typo'd host should
+    report "not a Horilla server" rather than "invalid credentials".
+
+    Deliberately not the release string. This route is unauthenticated, and
+    published security advisories name exact patched versions -- handing the
+    precise release to anyone who asks turns a scan into a list of which
+    advisories apply to this host. ``product`` answers "is this Horilla" and
+    ``api`` answers "can I talk to it"; neither narrows an install to a patch
+    level. The exact version is still available to a signed-in client, in the
+    capabilities payload.
+    """
+    return JsonResponse(
+        {"status": "ok", "product": "horilla", "api": API_VERSION}, status=200
+    )
+
+
+def _scheduler_status():
+    """ok if run_scheduler has written jobs; missing if that process never ran."""
+    try:
+        from django_apscheduler.models import DjangoJob
+
+        return "ok" if DjangoJob.objects.exists() else "missing"
+    except Exception:
+        return "missing"
 
 
 def readiness_check(request):
     """
     Readiness probe — verifies database (and Redis cache when REDIS_URL is set).
+
+    Also reports whether the dedicated scheduler process has registered jobs.
+    ``/health/`` stays a cheap liveness check (Docker HEALTHCHECK).
+
+    The scheduler status is reported but does not fail the probe unless
+    HORILLA_REQUIRE_SCHEDULER=1, which is off by default: a stopped scheduler
+    delays background jobs, while a 503 here can remove web from the load
+    balancer and stop the app serving requests entirely. Monitor the field;
+    opt in to failing only where that trade-off is right.
     """
     checks = {}
     try:
         connection.ensure_connection()
         checks["database"] = "ok"
-    except Exception as exc:
+    except Exception:
+        logger.exception("readiness probe: database unavailable")
         return JsonResponse(
-            {"status": "unavailable", "database": str(exc)},
+            {"status": "unavailable", "database": "error"},
             status=503,
         )
 
@@ -59,7 +102,35 @@ def readiness_check(request):
                 status=503,
             )
 
+    checks["scheduler"] = _scheduler_status()
+    if (
+        getattr(django_settings, "HORILLA_REQUIRE_SCHEDULER", False)
+        and checks["scheduler"] != "ok"
+    ):
+        return JsonResponse(
+            {"status": "unavailable", **checks},
+            status=503,
+        )
+
     return JsonResponse({"status": "ok", **checks}, status=200)
+
+
+def metrics(request):
+    """
+    Prometheus scrape endpoint for the background job runner.
+
+    Staff-only. nginx also denies it from outside (see docker/nginx.conf) -- job
+    counts and failure rates are operational detail, not public information, and
+    `location /` would otherwise proxy this straight through.
+    """
+    from django.http import HttpResponse
+
+    from horilla.observability import scheduler_metrics
+
+    if not (request.user.is_authenticated and request.user.is_staff):
+        raise Http404
+
+    return HttpResponse(scheduler_metrics(), content_type="text/plain; version=0.0.4")
 
 
 urlpatterns = [
@@ -88,6 +159,7 @@ urlpatterns = [
     path("jsi18n/", JavaScriptCatalog.as_view(), name="javascript-catalog"),
     path("health/", health_check),
     path("ready/", readiness_check),
+    path("metrics/", metrics),
 ]
 
 # if settings.DEBUG:

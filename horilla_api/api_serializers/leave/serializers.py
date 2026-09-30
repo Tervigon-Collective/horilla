@@ -53,6 +53,8 @@ def leave_Validations(self, data):
     )
     errors = {}
     # checking if there is any requested days is overlapping with the existing leave request
+    # Cancelled and rejected requests don't hold the dates -- the same rule
+    # LeaveRequest.clean() applies on the web.
     leave_requests = employee.leaverequest_set.filter(
         overlapping_date_q(start_date, end_date)
     ).exclude(status__in=["cancelled", "rejected"])
@@ -82,33 +84,6 @@ def leave_Validations(self, data):
 
     if errors:
         raise serializers.ValidationError(errors)
-
-
-class GetAvailableLeaveTypeSerializer(serializers.ModelSerializer):
-    leave_type_id = serializers.SerializerMethodField()
-    icon = serializers.SerializerMethodField()
-
-    class Meta:
-        model = AvailableLeave
-        fields = [
-            "id",
-            "leave_type_id",
-            "icon",
-            "available_days",
-            "carryforward_days",
-            "total_leave_days",
-        ]
-
-    def get_leave_type_id(self, obj):
-        if obj.leave_type_id:
-            return LeaveTypeAllGetSerializer(obj.leave_type_id).data
-        return None
-
-    def get_icon(self, obj):
-        try:
-            return mobile_file_path(obj.leave_type_id.icon)
-        except Exception:
-            return None
 
 
 class GetAvailableLeaveTypeSerializer(serializers.ModelSerializer):
@@ -534,7 +509,7 @@ class LeaveRequestApproveSerializer(serializers.ModelSerializer):
         )
         if not total_available_leave >= leave_request.requested_days:
             raise serializers.ValidationError(
-                _("%(employee)s dont have enough leave days to approve the request..")
+                _("%(employee)s don't have enough leave days to approve the request..")
                 % {"employee": employee_id}
             )
         data["available_leave"] = available_leave

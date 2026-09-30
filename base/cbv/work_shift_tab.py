@@ -17,14 +17,20 @@ from base.cbv.rotating_shift_assign import (
 from base.cbv.rotating_work_type import GeneralParent, RotatingWorkDetailView
 from base.cbv.shift_request import AllocatedShift, ShiftRequestList
 from base.cbv.work_type_request import WorkRequestListView
-from base.models import WorkTypeRequest
+from base.models import (
+    RotatingShiftAssign,
+    RotatingWorkTypeAssign,
+    ShiftRequest,
+    WorkTypeRequest,
+)
 from employee.cbv.accessibility import EmployeeRecordAccessDispatchMixin
 from employee.models import Employee
-from horilla_views.cbv_methods import login_required
+from horilla_views.cbv_methods import hx_request_required, login_required
 from horilla_views.generic.cbv.views import HorillaNavView, HorillaTabView
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(hx_request_required, name="dispatch")
 class ProfileTabShellView(TemplateView):
     """
     Minimal placeholder shown when a profile-nested sub-tab is first
@@ -68,26 +74,46 @@ class WorkAndShiftTabView(EmployeeRecordAccessDispatchMixin, HorillaTabView):
         context["emp_id"] = pk
         employee = Employee.objects.get(id=pk)
         context["employee"] = employee
+        # Each sub-tab's own badge count is only otherwise filled in once
+        # that tab's content has actually loaded (client-side, from its
+        # list view's data-total-count) - horilla_tabs.html only ever
+        # auto-loads the ACTIVE sub-tab on first render, so every other
+        # sub-tab's badge was stuck at its server-rendered default (0)
+        # until the user clicked it, even when it had real records.
+        # Computing the count here up front, scoped the same way each
+        # sub-tab's own queryset is, keeps every badge accurate from the
+        # first paint.
         context["tabs"] = [
             {
                 "title": _("Work type request"),
                 "url": f"{reverse('employee-worktype-tab-shell',kwargs={'pk': pk})}",
+                "badge": WorkTypeRequest.objects.filter(employee_id=pk).count(),
             },
             {
                 "title": _("Rotating work type"),
                 "url": f"{reverse('employee-rotating-work-tab-shell',kwargs={'pk': pk})}",
+                "badge": RotatingWorkTypeAssign.objects.filter(employee_id=pk).count(),
             },
             {
                 "title": _("Shift request"),
                 "url": f"{reverse('shift-request-individual-tab-shell',kwargs={'pk': pk})}",
+                # Matches ShiftRequestIndividualTabView.get_queryset(), which
+                # replaces the base ShiftRequestList queryset entirely with a
+                # plain employee_id filter - no reallocate_to exclusion.
+                "badge": ShiftRequest.objects.filter(employee_id=pk).count(),
             },
             {
                 "title": _("Shift Allocation"),
                 "url": f"{reverse('shift-allocation-individual-tab-shell',kwargs={'pk': pk})}",
+                "badge": ShiftRequest.objects.filter(
+                    Q(employee_id=pk) | Q(reallocate_to=pk),
+                    reallocate_to__isnull=False,
+                ).count(),
             },
             {
                 "title": _("Rotating Shift"),
                 "url": f"{reverse('rotating-shift-individual-tab-shell',kwargs={'pk': pk})}",
+                "badge": RotatingShiftAssign.objects.filter(employee_id=pk).count(),
             },
         ]
         return context
@@ -111,11 +137,11 @@ class WorkTypeIndividualTabList(EmployeeRecordAccessDispatchMixin, WorkRequestLi
         queryset = self.model.objects.filter(employee_id=pk)
         return queryset
 
-    columns = [
-        col for col in WorkRequestListView.columns if col[1] != "comment_note"
-    ] + [(_("Status"), "request_status")]
+    columns = [col for col in WorkRequestListView.columns if col[1] != "comment_note"]
 
 
+@method_decorator(login_required, name="dispatch")
+@method_decorator(hx_request_required, name="dispatch")
 class WorkTypeIndividualTabShell(ProfileTabShellView):
     """
     Shell for the Work type request profile tab.
@@ -163,9 +189,7 @@ class ShiftRequestIndividualTabView(EmployeeRecordAccessDispatchMixin, ShiftRequ
             "shift-request-individual-tab-view", kwargs={"pk": pk}
         )
 
-    columns = [
-        column for column in ShiftRequestList.columns if column[1] != "comment"
-    ] + [(_("Status"), "request_status")]
+    columns = [column for column in ShiftRequestList.columns if column[1] != "comment"]
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -366,6 +390,8 @@ class RotatingWorkIndividualTab(EmployeeRecordAccessDispatchMixin, GeneralParent
                 """
 
 
+@method_decorator(login_required, name="dispatch")
+@method_decorator(hx_request_required, name="dispatch")
 class RotatingWorkIndividualTabShell(ProfileTabShellView):
     """
     Shell for the Rotating work type profile tab.

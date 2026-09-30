@@ -1,11 +1,11 @@
-import sys
 from datetime import datetime
 
-from horilla.db import SafeBackgroundScheduler
-
+from horilla.db import scheduled_job
+from horilla.scheduling import register_job
 from horilla.signals import post_scheduler, pre_scheduler
 
 
+@scheduled_job
 def leave_reset():
     pre_scheduler.send(sender=leave_reset)
     from leave.models import LeaveType
@@ -21,13 +21,20 @@ def leave_reset():
         for available_leave in available_leaves:
             reset_date = available_leave.reset_date
             expired_date = available_leave.expired_date
-            if reset_date == today_date:
+            # <= (not ==): the job only runs every few hours inside a
+            # separate run_scheduler process, so a reset_date that's
+            # already in the past (a missed tick) must still be caught
+            # here -- otherwise that employee's leave never resets again.
+            # Matches the expired_date check right below, which already
+            # uses <=.
+            if reset_date and reset_date <= today_date:
                 available_leave.update_carryforward()
                 # new_reset_date = available_leave.set_reset_date(assigned_date=today_date,available_leave = available_leave)
                 new_reset_date = available_leave.set_reset_date(
                     assigned_date=today_date, available_leave=available_leave
                 )
                 available_leave.reset_date = new_reset_date
+                available_leave._change_reason = "Leave reset"
                 available_leave.save()
             if expired_date and expired_date <= today_date:
                 # Zero out the CF portion; keep expired_date so it isn't re-triggered
@@ -37,6 +44,7 @@ def leave_reset():
                 # Do NOT advance expired_date again — set it to None so it can be
                 # reset fresh on the next reset cycle if needed.
                 available_leave.expired_date = None
+                available_leave._change_reason = "Carryforward expired"
                 available_leave.save()
 
         # Do NOT roll the LeaveType-level carryforward_expire_date forward here;
@@ -59,14 +67,4 @@ def leave_reset():
     accrue_monthly_balances(today_date)
 
 
-if not any(
-    cmd in sys.argv
-    for cmd in ["makemigrations", "migrate", "compilemessages", "flush", "shell"]
-):
-    """
-    Initializes and starts background tasks using APScheduler when the server is running.
-    """
-    scheduler = SafeBackgroundScheduler()
-    scheduler.add_job(leave_reset, "interval", hours=4)
-
-    scheduler.start()
+register_job(leave_reset, "interval", hours=4)

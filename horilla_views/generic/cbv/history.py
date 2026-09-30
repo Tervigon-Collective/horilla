@@ -10,6 +10,7 @@ from django.views.generic import DetailView
 from simple_history.utils import get_history_model_for_model
 
 from horilla.horilla_middlewares import _thread_locals
+from horilla.http.response import HorillaRedirect
 from horilla_views.cbv_methods import hx_request_required, login_required
 from horilla_views.generic.cbv.views import HorillaFormView
 from horilla_views.history_methods import get_diff
@@ -79,6 +80,13 @@ class HorillaHistoryView(DetailView):
             if model_param:
                 app_label, model_name = model_param.split(".")
                 self.model = apps.get_model(app_label, model_name)
+        if not self.model:
+            # No ?model=app.Model on the request and no subclass default --
+            # get_queryset() has nothing to query, and Django's own
+            # fallback raises ImproperlyConfigured (an unhandled 500)
+            # rather than a normal response.
+            messages.error(request, _("Invalid model parameter format."))
+            return HorillaFormView.HttpResponse()
         # Prefer HistoryManager when present; history_set is only the reverse FK.
         if hasattr(self.model, "history") and hasattr(
             getattr(self.model, "history"), "model"
@@ -92,16 +100,26 @@ class HorillaHistoryView(DetailView):
             self.history_related_name = None
         return super().get(request, *args, **kwargs)
 
-    def post(self, request, history_id, *args, **kwargs):
+    def post(self, request, *args, **kwargs):
         """
         Revert
         """
-        app, model = request.GET["model"].split(".")
+        history_id = kwargs.get("history_id")
+        model_param = request.GET.get("model")
+        if not model_param:
+            messages.error(request, _("Missing model parameter."))
+            return HorillaRedirect(request)
+        app, model = model_param.split(".")
         self.model = apps.get_model(app, model)
 
-        history = get_history_model_for_model(self.model).objects.get(
-            history_id=history_id
+        history = (
+            get_history_model_for_model(self.model)
+            .objects.filter(history_id=history_id)
+            .first()
         )
+        if not history:
+            messages.error(request, _("History record not found."))
+            return HorillaRedirect(request)
         history.instance.save()
         messages.success(request, _("History reverted"))
 

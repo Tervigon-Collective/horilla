@@ -1,20 +1,27 @@
+import logging
 from datetime import date, datetime, timedelta, timezone
 
 from django import template
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
 from django.db.models import Case, CharField, F, Q, Value, When
 from django.http import QueryDict
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from rest_framework import status
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from attendance.models import Attendance, AttendanceActivity, EmployeeShiftDay
+from attendance.models import (
+    Attendance,
+    AttendanceActivity,
+    AttendanceOverTime,
+    EmployeeShiftDay,
+)
 from attendance.views.clock_in_out import *
 from attendance.views.dashboard import (
     find_expected_attendances,
@@ -23,11 +30,15 @@ from attendance.views.dashboard import (
 )
 from attendance.views.views import *
 from base.backends import ConfiguredEmailBackend
-from base.methods import generate_pdf, is_reportingmanager
+from base.methods import generate_pdf, sanitize_mail_template_body
 from base.models import HorillaMailTemplate
+from base.views import is_reportingmanger
 from employee.filters import EmployeeFilter
+from horilla_api.api_methods.base.pagination import HorillaPageNumberPagination
 
 from ...api_decorators.base.decorators import (
+    approver_permission_required,
+    manager_or_owner_permission_required,
     manager_permission_required,
     permission_required,
 )
@@ -44,6 +55,64 @@ from ...api_serializers.attendance.serializers import (
 )
 
 # Create your views here.
+
+
+logger = logging.getLogger(__name__)
+
+
+def geofence_denial(request):
+    """
+    Return a denial ``Response`` when the caller's company enforces a geo-fence
+    and the caller is not inside it, or ``None`` when the punch may proceed.
+
+    Fails **closed**. This block previously sat inside a bare ``except: pass``,
+    so a missing company, an absent ``geo_fencing`` relation or a geopy timeout
+    inside the location check silently allowed the punch -- precisely the case
+    the fence exists to stop. An enabled fence that cannot be evaluated now
+    denies instead.
+
+    A company with no ``GeoFencing`` row, or one whose fence is switched off, is
+    not using the feature: there is nothing to enforce and the punch proceeds.
+    """
+    # Each lookup is resolved separately and on its own terms. An earlier
+    # version wrapped the lot in `except (ObjectDoesNotExist, AttributeError)`,
+    # which is barely narrower than the bare except it replaced:
+    # RelatedObjectDoesNotExist subclasses AttributeError, so any unrelated
+    # attribute error in this chain also read as "no fence, carry on" -- the
+    # same fail-open shape, one level down.
+    employee = getattr(request.user, "employee_get", None)
+    if employee is None:
+        # No employee record: nothing downstream can attribute a punch anyway.
+        return None
+
+    company = employee.get_company()
+    if company is None:
+        return None
+
+    try:
+        geo_fencing = company.geo_fencing
+    except ObjectDoesNotExist:
+        # No GeoFencing row for this company: the feature is not in use here.
+        return None
+
+    if not geo_fencing.start:
+        return None
+
+    from geofencing.views import GeoFencingEmployeeLocationCheckAPIView
+
+    try:
+        response = GeoFencingEmployeeLocationCheckAPIView().post(request)
+    except Exception:
+        logger.exception(
+            "Geo-fence location check failed for employee %s; denying the punch",
+            getattr(request.user, "id", None),
+        )
+        return Response(
+            {"error": _("Could not verify your location. Please try again.")},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    return response if response.status_code != 200 else None
 
 
 def query_dict(data):
@@ -158,20 +227,9 @@ class ClockInAPIView(APIView):
         inject_punch_coords(request)
         employee = request.user.employee_get
         if not employee_is_clocked_in(employee):
-            try:
-                if employee.get_company().geo_fencing.start:
-                    from geofencing.views import GeoFencingEmployeeLocationCheckAPIView
-
-                    location_api_view = GeoFencingEmployeeLocationCheckAPIView()
-                    response = location_api_view.post(request)
-                    if response.status_code != 200:
-                        return response
-            except Exception as exc:
-                return api_message_response(
-                    _("Unable to verify location. Please try again."),
-                    status_code=400,
-                    error=str(exc),
-                )
+            denial = geofence_denial(request)
+            if denial is not None:
+                return denial
             employee, work_info = employee_exists(request)
             from django.utils import timezone as dj_timezone
 
@@ -206,9 +264,11 @@ class ClockInAPIView(APIView):
                         date_yesterday = date_today - timedelta(days=1)
                         day_yesterday = date_yesterday.strftime("%A").lower()
                         day_yesterday = EmployeeShiftDay.objects.get(day=day_yesterday)
-                        minimum_hour, start_time_sec, end_time_sec = (
-                            shift_schedule_today(day=day_yesterday, shift=shift)
-                        )
+                        (
+                            minimum_hour,
+                            start_time_sec,
+                            end_time_sec,
+                        ) = shift_schedule_today(day=day_yesterday, shift=shift)
                         attendance_date = date_yesterday
                         day = day_yesterday
                 clock_in_attendance_and_activity(
@@ -258,16 +318,9 @@ class ClockOutAPIView(APIView):
         if not employee_is_clocked_in(employee):
             return api_message_response("Already clocked-out", status_code=400)
 
-        try:
-            if employee.get_company().geo_fencing.start:
-                from geofencing.views import GeoFencingEmployeeLocationCheckAPIView
-
-                location_api_view = GeoFencingEmployeeLocationCheckAPIView()
-                response = location_api_view.post(request)
-                if response.status_code != 200:
-                    return response
-        except Exception:
-            pass
+        denial = geofence_denial(request)
+        if denial is not None:
+            return denial
 
         from django.utils import timezone as dj_timezone
 
@@ -327,7 +380,6 @@ class AttendanceView(APIView):
         if getattr(self, "swagger_fake_view", False) or request is None:
             return Attendance.objects.none()
         if type == "ot":
-
             condition = AttendanceValidationCondition.objects.first()
             minot = strtime_seconds("00:30")
             if condition is not None:
@@ -383,7 +435,7 @@ class AttendanceView(APIView):
                 request, url, field_name, attendances_filter_queryset
             )
         # pagination workflow
-        paginater = PageNumberPagination()
+        paginater = HorillaPageNumberPagination()
         page = paginater.paginate_queryset(attendances_filter_queryset, request)
         serializer = AttendanceSerializer(page, many=True)
         return paginater.get_paginated_response(serializer.data)
@@ -458,7 +510,7 @@ class ValidateAttendanceView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    @method_decorator(manager_permission_required("attendance.change_attendance"))
+    @approver_permission_required(Attendance, "attendance.change_attendance")
     def put(self, request, pk):
         from employee.cbv.accessibility import can_manage_employee_action
 
@@ -476,11 +528,10 @@ class ValidateAttendanceView(APIView):
             notify.send(
                 request.user.employee_get,
                 recipient=attendance.employee_id.employee_user_id,
-                verb=f"Your attendance for the date {attendance.attendance_date} is validated",
-                verb_ar=f"تم تحقيق حضورك في تاريخ {attendance.attendance_date}",
-                verb_de=f"Deine Anwesenheit für das Datum {attendance.attendance_date} ist bestätigt.",
-                verb_es=f"Se valida tu asistencia para la fecha {attendance.attendance_date}.",
-                verb_fr=f"Votre présence pour la date {attendance.attendance_date} est validée.",
+                verb=gettext_noop(
+                    "Your attendance for the date %(attendance_date)s is validated"
+                ),
+                verb_params={"attendance_date": str(attendance.attendance_date)},
                 redirect="/attendance/view-my-attendance",
                 icon="checkmark",
                 api_redirect=f"/api/attendance/attendance?employee_id{attendance.employee_id}",
@@ -500,7 +551,7 @@ class OvertimeApproveView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    @method_decorator(manager_permission_required("attendance.change_attendance"))
+    @approver_permission_required(Attendance, "attendance.change_attendance")
     def put(self, request, pk):
         from attendance.methods.overtime_approval import apply_overtime_approval
         from employee.cbv.accessibility import can_manage_employee_action
@@ -533,11 +584,10 @@ class OvertimeApproveView(APIView):
             notify.send(
                 request.user.employee_get,
                 recipient=attendance.employee_id.employee_user_id,
-                verb=f"Your {attendance.attendance_date}'s attendance overtime approved.",
-                verb_ar=f"تمت الموافقة على إضافة ساعات العمل الإضافية لتاريخ {attendance.attendance_date}.",
-                verb_de=f"Die Überstunden für den {attendance.attendance_date} wurden genehmigt.",
-                verb_es=f"Se ha aprobado el tiempo extra de asistencia para el {attendance.attendance_date}.",
-                verb_fr=f"Les heures supplémentaires pour la date {attendance.attendance_date} ont été approuvées.",
+                verb=gettext_noop(
+                    "Your %(attendance_date)s's attendance overtime approved."
+                ),
+                verb_params={"attendance_date": str(attendance.attendance_date)},
                 redirect="/attendance/attendance-overtime-view",
                 icon="checkmark",
                 api_redirect="/api/attendance/attendance-hour-account/",
@@ -597,7 +647,7 @@ class AttendanceRequestView(APIView):
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, request_filtered_queryset)
 
-        pagenation = PageNumberPagination()
+        pagenation = HorillaPageNumberPagination()
         page = pagenation.paginate_queryset(request_filtered_queryset, request)
         serializer = self.serializer_class(page, many=True)
         return pagenation.get_paginated_response(serializer.data)
@@ -631,6 +681,15 @@ class AttendanceRequestView(APIView):
         from attendance.forms import AttendanceRequestForm
 
         attendance = Attendance.objects.get(id=pk)
+        # This view carried no permission check at all beyond being signed
+        # in -- any authenticated user could file a correction request
+        # against any other employee's attendance record by guessing its id.
+        if not (
+            attendance.employee_id.employee_user_id == request.user
+            or is_reportingmanger(request, attendance)
+            or request.user.has_perm("attendance.change_attendance")
+        ):
+            return Response({"error": _("You don't have permission")}, status=403)
         form = AttendanceRequestForm(data=request.data, instance=attendance)
         if form.is_valid():
             attendance = Attendance.objects.get(id=form.instance.pk)
@@ -665,7 +724,7 @@ class AttendanceRequestApproveView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    @manager_permission_required("attendance.change_attendance")
+    @approver_permission_required(Attendance, "attendance.change_attendance")
     def put(self, request, pk):
         try:
             attendance = Attendance.objects.get(id=pk)
@@ -809,7 +868,7 @@ class AttendanceOverTimeView(APIView):
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, queryset)
 
-        pagenation = PageNumberPagination()
+        pagenation = HorillaPageNumberPagination()
         page = pagenation.paginate_queryset(queryset, request)
         serializer = AttendanceOverTimeSerializer(page, many=True)
         return pagenation.get_paginated_response(serializer.data)
@@ -822,7 +881,9 @@ class AttendanceOverTimeView(APIView):
             return Response(serializer.data, status=200)
         return Response(serializer.errors, status=400)
 
-    @manager_permission_required("attendance.change_attendanceovertime")
+    @manager_or_owner_permission_required(
+        AttendanceOverTime, "attendance.change_attendanceovertime"
+    )
     def put(self, request, pk):
         attendance_ot = get_object_or_404(AttendanceOverTime, pk=pk)
         serializer = AttendanceOverTimeSerializer(
@@ -866,6 +927,9 @@ class LateComeEarlyOutView(APIView):
         serializer = AttendanceLateComeEarlyOutSerializer(data.qs, many=True)
         return Response(serializer.data, status=200)
 
+    @method_decorator(
+        permission_required("attendance.delete_attendancelatecomeearlyout")
+    )
     def delete(self, request, pk=None):
         attendance = get_object_or_404(AttendanceLateComeEarlyOut, pk=pk)
         attendance.delete()
@@ -907,7 +971,6 @@ class TodayAttendance(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-
         today = datetime.today()
         week_day = today.strftime("%A").lower()
 
@@ -1007,12 +1070,11 @@ class OfflineEmployeesListView(APIView):
         # Get leave status for the filtered employees
         leave_status = self.get_leave_status(filtered_qs)
 
-        pagenation = PageNumberPagination()
+        pagenation = HorillaPageNumberPagination()
         page = pagenation.paginate_queryset(leave_status, request)
         return pagenation.get_paginated_response(page)
 
     def get_leave_status(self, queryset):
-
         today = date.today()
         queryset = queryset.distinct()
         # Annotate each employee with their leave status
@@ -1113,6 +1175,19 @@ class MailTemplateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        # Was @manager_permission_required("employee.change_employee") --
+        # "manages anyone" let any reporting manager enumerate every company
+        # mail template. Gate on the model's own view permission, matching the
+        # web list view (base.views.view_mail_templates), which is what
+        # actually governs seeing these. Checked inline rather than via
+        # api_decorators.permission_required so a permitted-but-forbidden
+        # caller gets 403 (authenticated, lacks the right), not that
+        # decorator's 401 -- 403 is the correct code and the behaviour the
+        # pre-existing test_write_permissions coverage already expects.
+        if not request.user.has_perm("base.view_horillamailtemplate"):
+            return Response({"error": _("No permission")}, status=403)
+        # HorillaMailTemplate.objects is a HorillaCompanyManager, so the
+        # queryset stays company-scoped exactly as the web list is.
         instances = HorillaMailTemplate.objects.all()
         serializer = MailTemplateSerializer(instances, many=True)
         return Response(serializer.data, status=200)
@@ -1128,6 +1203,11 @@ class ConvertedMailTemplateConvert(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    # manager_permission_required only asked whether the caller manages
+    # *anyone*, never whether they manage the employee_id in the body -- any
+    # manager of one person could render this template with any employee's
+    # data (name, personal email, phone, address, ...) and read the result.
+    @manager_or_owner_permission_required(Employee, "employee.change_employee")
     def put(self, request):
         from employee.cbv.accessibility import can_access_employee_record
 
@@ -1137,9 +1217,12 @@ class ConvertedMailTemplateConvert(APIView):
         if not employee or not can_access_employee_record(request, employee):
             return Response({"detail": "Permission denied"}, status=403)
         bdy = HorillaMailTemplate.objects.filter(id=template_id).first()
-        if not bdy:
-            return Response({"detail": "Template not found"}, status=404)
-        template_bdy = template.Template(bdy.body)
+        if bdy is None:
+            return Response(
+                {"error": _("Mail template not found.")},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        template_bdy = template.Template(sanitize_mail_template_body(bdy.body))
         context = template.Context(
             {"instance": employee, "self": request.user.employee_get}
         )
@@ -1157,6 +1240,10 @@ class OfflineEmployeeMailsend(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    # Same BOLA as ConvertedMailTemplateConvert above: any manager of one
+    # person could email arbitrary attacker-controlled HTML, from the
+    # company's own SMTP identity, to any employee in the company.
+    @manager_or_owner_permission_required(Employee, "employee.change_employee")
     def post(self, request):
         from employee.cbv.accessibility import can_access_employee_record
 
@@ -1180,7 +1267,7 @@ class OfflineEmployeeMailsend(APIView):
         )
         for html in bodys:
             # due to not having solid template we first need to pass the context
-            template_bdy = template.Template(html)
+            template_bdy = template.Template(sanitize_mail_template_body(html))
             context = template.Context(
                 {"instance": employee, "self": request.user.employee_get}
             )
@@ -1193,7 +1280,7 @@ class OfflineEmployeeMailsend(APIView):
                 )
             )
 
-        template_bdy = template.Template(bdy)
+        template_bdy = template.Template(sanitize_mail_template_body(bdy))
         context = template.Context(
             {"instance": employee, "self": request.user.employee_get}
         )
@@ -1229,7 +1316,7 @@ class UserAttendanceView(APIView):
             employee_id=employee_id
         ).order_by("-attendance_date")
 
-        paginator = PageNumberPagination()
+        paginator = HorillaPageNumberPagination()
         paginator.page_size = 20
         page = paginator.paginate_queryset(attendance_queryset, request)
 

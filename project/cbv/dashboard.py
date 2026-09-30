@@ -81,7 +81,9 @@ class ProjectDetailView(HorillaDetailedView):
         context = super().get_context_data(**kwargs)
         instance_id = resolve(self.request.path_info).kwargs.get("pk")
         employee = self.request.user.employee_get
-        project = Project.objects.get(id=instance_id)
+        project = Project.objects.filter(id=instance_id).first()
+        if not project:
+            return context
         from project.methods import can_view_project
 
         if can_view_project(self.request, project):
@@ -90,7 +92,7 @@ class ProjectDetailView(HorillaDetailedView):
                     "action": _("View Project"),
                     "icon": "create-outline",
                     "attrs": """
-                    class = "oh-btn oh-btn--primary w-100"
+                    class = "oh-btn oh-btn--light-bkg w-100"
                     {redirect}
                 """,
                 }

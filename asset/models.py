@@ -48,6 +48,29 @@ class AssetCategory(HorillaModel):
         return f"{self.asset_category_name}"
 
 
+class AssetGeneralSetting(HorillaModel):
+    """
+    Company-scoped general settings for the asset app.
+    """
+
+    enable_asset_fine = models.BooleanField(
+        default=False,
+        verbose_name=_("Enable Asset Fine"),
+        help_text=_(
+            "Enabling this allows adding a fine for an employee when an asset is returned."
+        ),
+    )
+    company_id = models.ForeignKey(
+        Company, on_delete=models.CASCADE, null=True, blank=True
+    )
+    objects = HorillaCompanyManager()
+
+    def company_col(self):
+        if self.company_id:
+            return self.company_id.company
+        return "All Company"
+
+
 class AssetLot(HorillaModel):
     """
     Represents a lot associated with a collection of assets.
@@ -150,7 +173,7 @@ class Asset(HorillaModel):
         null=True, blank=True, max_length=255, verbose_name=_("Description")
     )
     asset_tracking_id = models.CharField(
-        max_length=30, null=False, unique=True, verbose_name=_("Tracking Id")
+        max_length=30, null=False, unique=True, verbose_name=_("Serial No.")
     )
     asset_purchase_date = models.DateField(verbose_name=_("Purchase Date"))
     asset_purchase_cost = models.DecimalField(
@@ -173,7 +196,9 @@ class Asset(HorillaModel):
         verbose_name=_("Batch No"),
     )
     quantity = models.IntegerField(default=1, verbose_name=_("Quantity"))
-    expiry_date = models.DateField(null=True, blank=True, verbose_name=_("Expiry Date"))
+    expiry_date = models.DateField(
+        null=True, blank=True, verbose_name=_("Warranty Expiry Date")
+    )
     notify_before = models.IntegerField(
         default=1, null=True, verbose_name=_("Notify Before (days)")
     )
@@ -375,7 +400,7 @@ class AssetItem(HorillaModel):
         verbose_name=_("Asset"),
     )
     tracking_id = models.CharField(
-        max_length=30, unique=True, verbose_name=_("Tracking Id")
+        max_length=30, unique=True, verbose_name=_("Serial No.")
     )
     status = models.CharField(
         choices=STATUS,
@@ -537,13 +562,6 @@ class AssetAssignment(HorillaModel):
 
     def __str__(self):
         return f"{self.assigned_to_employee_id} --- {self.asset_id} --- {self.return_status}"
-
-    def get_avatar(self):
-        """
-        Method will retun the api to the avatar or path to the profile image
-        """
-        url = f"https://ui-avatars.com/api/?name={self.asset_id}&background=random"
-        return url
 
     def asset_detail_view(self):
         """
@@ -864,6 +882,23 @@ class AssetRequest(HorillaModel):
         """
         url = reverse("asset-request-detail-view", kwargs={"pk": self.pk})
         return url
+
+
+class AssetRequestComment(HorillaModel):
+    """
+    A reason left on an asset request, currently only written on reject --
+    the request had no way to record why, unlike leave and shift requests.
+    """
+
+    request_id = models.ForeignKey(AssetRequest, on_delete=models.CASCADE)
+    employee_id = models.ForeignKey(Employee, on_delete=models.CASCADE)
+    comment = models.TextField(null=True, verbose_name=_("Comment"), max_length=255)
+    created_at = models.DateTimeField(
+        auto_now_add=True, verbose_name=_("Created At"), null=True
+    )
+
+    def __str__(self) -> str:
+        return f"{self.comment}"
 
     def status_html_class(self):
         COLOR_CLASS = {

@@ -8,10 +8,11 @@ from typing import Any
 
 from django.contrib import messages
 from django.http import HttpResponse
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from base.cbv.rotating_shift import DynamicRotatingShiftTypeFormView
 from base.decorators import manager_can_enter
@@ -179,7 +180,6 @@ class RotatingShiftAssignNav(HorillaNavView):
                         data-target="#genericModal"
                         hx-get="{reverse('export-rshift')}"
                         hx-target ="#genericModalBody"
-                        hx-vals='js:{{"has_selection": (JSON.parse(document.getElementById("selectedInstances")?.getAttribute("data-ids")||"[]").length>0)}}'
                         style="cursor: pointer;"
                         """,
                 },
@@ -226,6 +226,12 @@ class RotatingShiftAssignNav(HorillaNavView):
     filter_instance = RotatingShiftAssignFilters()
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel (generic/inline_nav.html's own
+    # {% if modern_filter %} branch, mirroring horilla_nav.html's
+    # .oh-filter-modern styles) -- same treatment as every other panel
+    # this session. RotatingShiftAssignFilters.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
 
     group_by_fields = [
         ("employee_id", _("Employee")),
@@ -272,8 +278,15 @@ class RotatingShiftDetailview(HorillaDetailedView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        instance = context["object"]
-        instance.ordered_ids = context["instance_ids"]
+        instance = context.get("object")
+        if instance is None:
+            # No matching row (e.g. a stale/invalid pk) -- the parent's own
+            # get_context_data already skips setting instance_ids for this
+            # case, and its get() renders empty_template / redirects with
+            # "No record found" once this returns, so there's nothing to
+            # attach ordered_ids to here.
+            return context
+        instance.ordered_ids = context.get("instance_ids", [])
         return context
 
 
@@ -294,7 +307,6 @@ class RotatingExportView(TemplateView):
         export_filter = RotatingShiftAssignFilters(queryset=rshift_requests)
         context["export_columns"] = export_columns
         context["export_filter"] = export_filter
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context
 
 
@@ -309,6 +321,17 @@ class RotatingShiftFormView(HorillaFormView):
     form_class = RotatingShiftAssignForm
     new_display_title = _("Rotating Shift Assign")
     dynamic_create_fields = [("rotating_shift_id", DynamicRotatingShiftTypeFormView)]
+
+    def dispatch(self, request, *args, **kwargs):
+        # This endpoint returns only the modal form fragment, loaded from
+        # an employee's individual profile "Shift" tab (see shift-tab.html)
+        # via ?emp_id=. There's no generic standalone page for it to send a
+        # genuine top-level navigation to (rotating-shift-assign-view is
+        # itself just another fragment), so show nothing instead of a raw,
+        # unstyled fragment or a wrong redirect.
+        if request.headers.get("Sec-Fetch-Mode") == "navigate":
+            return HttpResponse()
+        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -353,11 +376,7 @@ class RotatingShiftFormView(HorillaFormView):
                     notify.send(
                         self.request.user.employee_get,
                         recipient=users,
-                        verb="You are added to rotating shift",
-                        verb_ar="تمت إضافتك إلى وردية الدورية",
-                        verb_de="Sie werden der rotierenden Arbeitsschicht hinzugefügt",
-                        verb_es="Estás agregado a turno rotativo",
-                        verb_fr="Vous êtes ajouté au quart de travail rotatif",
+                        verb=gettext_noop("You are added to rotating shift"),
                         icon="infinite",
                         redirect=reverse("employee-profile"),
                     )

@@ -15,7 +15,14 @@ from django.http import Http404
 from django.shortcuts import redirect, render
 from django.utils.translation import gettext as _
 
-from base.models import Announcement, AnnouncementExpire, Company, PenaltyAccounts
+from base.models import (
+    Announcement,
+    AnnouncementExpire,
+    Company,
+    DefaultExportPermission,
+    PenaltyAccounts,
+)
+from employee.models import Employee, Policy
 from horilla.methods import get_horilla_model_class
 
 
@@ -29,6 +36,26 @@ def create_announcement_expire_setting(sender, instance, created, raw, **kwargs)
     AnnouncementExpire.objects.get_or_create(company_id=None)
     if created:
         AnnouncementExpire.objects.get_or_create(company_id=instance)
+
+
+@receiver(post_save, sender=Company)
+def create_default_export_permission(sender, instance, created, raw, **kwargs):
+    """
+    Give every new company an explicit "Default Export Access" row.
+
+    Readers treat a missing row as enabled, so without this a company added
+    after migration base.0003 would again have the permissive behaviour
+    implied by absence rather than recorded as a decision. Mirrors the
+    announcement-expire receiver above, including the NULL-company row that
+    the "All companies" session scope reads.
+    """
+    DefaultExportPermission.objects.get_or_create(
+        company_id=None, defaults={"is_enabled": True}
+    )
+    if created:
+        DefaultExportPermission.objects.get_or_create(
+            company_id=instance, defaults={"is_enabled": True}
+        )
 
 
 @receiver(post_save, sender=PenaltyAccounts)
@@ -490,6 +517,31 @@ def filtered_employees(sender, instance, action, **kwargs):
     job_position_ids = list(instance.job_position.values_list("id", flat=True))
 
     employees = instance.model_employee.objects.filter(
+        Q(id__in=employee_ids)
+        | Q(employee_work_info__department_id__in=department_ids)
+        | Q(employee_work_info__job_position_id__in=job_position_ids)
+    )
+
+    instance.filtered_employees.set(employees)
+
+
+@receiver(m2m_changed, sender=Policy.employees.through)
+@receiver(m2m_changed, sender=Policy.department.through)
+@receiver(m2m_changed, sender=Policy.job_position.through)
+def policy_filtered_employees(sender, instance, action, **kwargs):
+    """
+    Recompute Policy.filtered_employees whenever the employees, department
+    or job_position selection changes, mirroring the Announcement targeting
+    above. Left empty (all three unset), a policy has no filtered_employees
+    and callers fall back to treating it as visible to everyone.
+    """
+    if action not in ["post_add", "post_remove", "post_clear"]:
+        return
+    employee_ids = list(instance.employees.values_list("id", flat=True))
+    department_ids = list(instance.department.values_list("id", flat=True))
+    job_position_ids = list(instance.job_position.values_list("id", flat=True))
+
+    employees = Employee.objects.filter(
         Q(id__in=employee_ids)
         | Q(employee_work_info__department_id__in=department_ids)
         | Q(employee_work_info__job_position_id__in=job_position_ids)

@@ -172,7 +172,6 @@ class LateComeAndEarlyOutListNav(HorillaNavView):
                 data-target="#attendanceExport"
                 hx-get="{reverse('late-come-and-early-out-export')}"
                 hx-target="#attendanceExportForm"
-                hx-vals='js:{{"has_selection": (JSON.parse(document.getElementById("selectedInstances")?.getAttribute("data-ids")||"[]").length>0)}}'
                 style="cursor: pointer;"
                 """,
                 }
@@ -203,6 +202,11 @@ class LateComeAndEarlyOutListNav(HorillaNavView):
     filter_body_template = "cbv/late_come_and_early_out/late_early_filter.html"
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel (horilla_nav.html's .oh-filter-modern
+    # styles) -- LateComeEarlyOutFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs, same as AttendancesNavView/
+    # AttendanceActivityNavView.
+    modern_filter = True
 
     group_by_fields = [
         ("employee_id", _("Employee")),
@@ -281,7 +285,6 @@ class LateEarlyExportView(TemplateView):
         export = LateComeEarlyOutFilter(queryset=data)
         context["export_form"] = export_form
         context["export"] = export
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context
 
 

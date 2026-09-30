@@ -23,6 +23,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
 
 from base.methods import (
@@ -38,6 +39,7 @@ from base.methods import (
 from base.models import Company
 from employee.models import Employee, EmployeeWorkInformation
 from horilla.decorators import (
+    check_manager,
     hx_request_required,
     login_required,
     manager_can_enter,
@@ -155,11 +157,7 @@ def obj_form_save(request, objective_form):
             notify.send(
                 request.user.employee_get,
                 recipient=emp.employee_user_id,
-                verb="You got an OKR!.",
-                verb_ar="لقد حققت هدفًا ونتيجة رئيسية!",
-                verb_de="Du hast ein Ziel-Key-Ergebnis erreicht!",
-                verb_es="¡Has logrado un Resultado Clave de Objetivo!",
-                verb_fr="Vous avez atteint un Résultat Clé d'Objectif !",
+                verb=gettext_noop("You got an OKR!"),
                 redirect=reverse(
                     "objective-detailed-view", kwargs={"obj_id": objective.id}
                 ),
@@ -261,11 +259,7 @@ def objective_update(request, obj_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=emp.employee_user_id,
-                    verb="You got an OKR!.",
-                    verb_ar="لقد حققت هدفًا ونتيجة رئيسية!",
-                    verb_de="Du hast ein Ziel-Key-Ergebnis erreicht!",
-                    verb_es="¡Has logrado un Resultado Clave de Objetivo!",
-                    verb_fr="Vous avez atteint un Résultat Clé d'Objectif !",
+                    verb=gettext_noop("You got an OKR!"),
                     redirect=reverse(
                         "objective-detailed-view", kwargs={"obj_id": objective.id}
                     ),
@@ -438,9 +432,9 @@ def archive_key_result(request, pk):
     key_result.is_active = not key_result.is_active
     key_result.save()
     message = (
-        _("Key reuslt unarchived successfully")
+        _("Key result unarchived successfully")
         if key_result.is_active
-        else _("Key reuslt archived successfully")
+        else _("Key result archived successfully")
     )
     messages.success(request, message)
     return HttpResponse("")
@@ -490,11 +484,7 @@ def add_assignees(request, obj_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=emp.employee_user_id,
-                    verb="You got an OKR!.",
-                    verb_ar="لقد حققت هدفًا ونتيجة رئيسية!",
-                    verb_de="Du hast ein Ziel-Key-Ergebnis erreicht!",
-                    verb_es="¡Has logrado un Resultado Clave de Objetivo!",
-                    verb_fr="Vous avez atteint un Résultat Clé d'Objectif !",
+                    verb=gettext_noop("You got an OKR!"),
                     redirect=reverse(
                         "objective-detailed-view", kwargs={"obj_id": objective.id}
                     ),
@@ -561,7 +551,7 @@ def objective_manager_remove(request, obj_id, manager_id):
     """
     objective = get_object_or_404(Objective, id=obj_id)
     objective.managers.remove(manager_id)
-    messages.success(request, _("Manger removed successfully."))
+    messages.success(request, _("Manager removed successfully."))
     return HttpResponse(
         "<script> $('.reload-record').click(); $('#reloadMessagesButton').click();</script>"
     )
@@ -704,7 +694,7 @@ def objective_list_search(request):
 
 
 @login_required
-# @hx_request_required
+@hx_request_required
 def objective_dashboard_view(request):
     """
     This view is used to to search objective,  returns searched and filtered objects.
@@ -792,7 +782,7 @@ def objective_detailed_view(request, obj_id, **kwargs):
         or request.user.has_perm("pms.view_employeeobjective")
         or emp_objectives.filter(employee_id=request.user.employee_get).exists()
     ):
-        messages.info(request, _("You dont have permission."))
+        messages.info(request, _("You don't have permission."))
         return redirect("objective-list-view")
 
     previous_data = request.GET.urlencode()
@@ -827,7 +817,9 @@ def objective_detailed_view_activity(request, id):
         it will return history,comment object to objective_detailed_view_activity.
     """
 
-    objective = EmployeeObjective.objects.get(id=id)
+    objective = EmployeeObjective.objects.filter(id=id).first()
+    if not objective:
+        return HttpResponse()
     if (
         request.user.employee_get == objective.employee_id
         or request.user.employee_get in objective.objective_id.managers.all()
@@ -866,7 +858,7 @@ def objective_detailed_view_activity(request, id):
         }
         return render(request, "okr/objective_detailed_view_activity.html", context)
     else:
-        messages.info(request, _("You dont have permission."))
+        messages.info(request, _("You don't have permission."))
         return HorillaRedirect(request)
 
 
@@ -900,7 +892,9 @@ def emp_objective_search(request, obj_id):
     Returns:
         All the filtered and searched object will based on userlevel.
     """
-    objective = Objective.objects.get(id=obj_id)
+    objective = Objective.objects.filter(id=obj_id).first()
+    if not objective:
+        return HttpResponse()
     emp_objectives = objective.employee_objective.all()
     search_val = request.GET.get("search")
     if search_val is None:
@@ -959,6 +953,7 @@ def kr_table_view(request, emp_objective_id):
 
 @login_required
 @hx_request_required
+@owner_can_enter("pms.change_employeeobjective", EmployeeObjective)
 def objective_detailed_view_objective_status(request, id):
     """
     This view is used to  update status of objective in objective detailed view,
@@ -969,7 +964,10 @@ def objective_detailed_view_objective_status(request, id):
         All the filtered and searched object will based on userlevel.
     """
 
-    objective = EmployeeObjective.objects.get(id=id)
+    objective = EmployeeObjective.objects.filter(id=id).first()
+    if not objective:
+        messages.error(request, _("Objective not found."))
+        return HorillaRedirect(request)
     status = request.POST.get("objective_status")
     objective.status = status
     objective.save()
@@ -983,6 +981,7 @@ def objective_detailed_view_objective_status(request, id):
 
 @login_required
 @hx_request_required
+@owner_can_enter("pms.change_employeekeyresult", EmployeeObjective)
 def objective_detailed_view_key_result_status(request, obj_id, kr_id):
     """
     This view is used to  update status of key result in objective detailed view,
@@ -1076,9 +1075,11 @@ def objective_detailed_view_current_value(request, kr_id):
             return redirect(objective_detailed_view_activity, objective_id)
         messages.error(request, _("Error occurred during current value updation"))
         return redirect(objective_detailed_view_activity, objective_id)
+    return HttpResponse()
 
 
 @login_required
+@owner_can_enter("pms.change_employeeobjective", EmployeeObjective)
 def objective_archive(request, id):
     """
     this function is used to archive the objective
@@ -1281,17 +1282,11 @@ def delete_employee_objective(request, emp_obj_id):
             request, message=_("No Employee Objective found matching the query.")
         )
 
-    single_view = request.GET.get("single_view")
-    if emp_objective.employee_key_result.exists():
-        messages.warning(
-            request, _("You can't delete this objective,related entries exists")
-        )
-    else:
-        employee = emp_objective.employee_id
-        objective = emp_objective.objective_id
-        emp_objective.delete()
-        objective.assignees.remove(employee)
-        messages.success(request, _("Objective deleted successfully!."))
+    employee = emp_objective.employee_id
+    objective = emp_objective.objective_id
+    emp_objective.delete()
+    objective.assignees.remove(employee)
+    messages.success(request, _("Objective deleted successfully!."))
     return HorillaRedirect(request)
 
 
@@ -1320,7 +1315,7 @@ def change_employee_objective_status(request):
             and (emp_objective.employee_id == request.user.employee_get)
         )
     ):
-        messages.info(request, _("You dont have permission"))
+        messages.info(request, _("You don't have permission"))
         return HttpResponse("<script>$('#reloadMessagesButton').click();</script>")
 
     status = request.GET.get("status")
@@ -1334,7 +1329,7 @@ def change_employee_objective_status(request):
             and (emp_objective.employee_id == request.user.employee_get)
         )
     ):
-        messages.info(request, _("You dont have permission."))
+        messages.info(request, _("You don't have permission."))
     else:
         if emp_objective.status != status:
             emp_objective.status = status
@@ -1349,16 +1344,13 @@ def change_employee_objective_status(request):
             notify.send(
                 request.user.employee_get,
                 recipient=emp_objective.employee_id.employee_user_id,
-                verb=f"The status of the objective '{emp_objective.objective_id}'\
-                    has been changed to {emp_objective.status}.",
-                verb_ar=f"تم تغيير حالة الهدف '{emp_objective.objective_id}'\
-                    إلى {emp_objective.status}.",
-                verb_de=f"Der Status des Ziels '{emp_objective.objective_id}'\
-                    wurde zu {emp_objective.status} geändert.",
-                verb_es=f"El estado del objetivo '{emp_objective.objective_id}'\
-                    ha sido cambiado a {emp_objective.status}.",
-                verb_fr=f"Le statut de l'objectif '{emp_objective.objective_id}'\
-                    a été changé à {emp_objective.status}.",
+                verb=gettext_noop(
+                    "The status of the objective '%(objective_id)s' has been changed to %(status)s."
+                ),
+                verb_params={
+                    "objective_id": str(emp_objective.objective_id),
+                    "status": str(emp_objective.status),
+                },
                 redirect=reverse(
                     "objective-detailed-view",
                     kwargs={"obj_id": emp_objective.objective_id.id},
@@ -1498,7 +1490,9 @@ def key_result_creation_htmx(request, id):
         initial={"start_date": start_date, "end_date": end_date}
     )
     context = {"key_result_form": key_result_form, "objecitve_id": id}
-    objective = EmployeeObjective.objects.get(id=id)
+    objective = EmployeeObjective.objects.filter(id=id).first()
+    if not objective:
+        return HttpResponse()
     if request.method == "POST":
         initial_data = {"employee_objective_id": objective}
         form_key_result = KeyResultForm(request.POST, initial=initial_data)
@@ -1525,7 +1519,9 @@ def key_result_update(request, id):
         success or errors message.
     """
 
-    key_result = EmployeeKeyResult.objects.get(id=id)
+    key_result = EmployeeKeyResult.objects.filter(id=id).first()
+    if not key_result:
+        return HttpResponse()
     key_result_form = KeyResultForm(instance=key_result)
     context = {"key_result_form": key_result_form, "key_result_id": key_result.id}
     if request.method == "POST":
@@ -1550,11 +1546,7 @@ def send_feedback_notifications(request, feedback):
         notify.send(
             request.user.employee_get,
             recipient=employee.employee_user_id,
-            verb="You have received feedback!",
-            verb_ar="لقد تلقيت ملاحظات!",
-            verb_de="Sie haben Feedback erhalten!",
-            verb_es="¡Has recibido retroalimentación!",
-            verb_fr="Vous avez reçu des commentaires !",
+            verb=gettext_noop("You have received feedback!"),
             redirect=reverse("feedback-detailed-view", kwargs={"id": feedback.id}),
             icon="chatbox-ellipses",
         )
@@ -1563,11 +1555,7 @@ def send_feedback_notifications(request, feedback):
         notify.send(
             request.user.employee_get,
             recipient=employee.employee_user_id,
-            verb="You have been requested to provide feedback!",
-            verb_ar="لقد طُلب منك تقديم ملاحظات!",
-            verb_de="Sie wurden gebeten, Feedback zu geben!",
-            verb_es="Se le ha solicitado que proporcione comentarios.",
-            verb_fr="Il vous a été demandé de fournir des commentaires.",
+            verb=gettext_noop("You have been requested to provide feedback!"),
             redirect=reverse("feedback-detailed-view", kwargs={"id": feedback.id}),
             icon="chatbox-ellipses",
         )
@@ -2240,7 +2228,7 @@ def get_feedback_overview(request, obj_id):
             context={"feedback_overview": feedback_overview},
         )
     if feedback:
-        messages.info(request, _("You dont have permission."))
+        messages.info(request, _("You don't have permission."))
     else:
         messages.info(request, _("Feedback does not exist."))
     return HorillaRedirect(request)
@@ -2279,6 +2267,7 @@ def feedback_archive(request, id):
 
 
 @login_required
+@hx_request_required
 def get_collegues(request):
     """
     Get collegues and subordinates for the manager.
@@ -2325,7 +2314,18 @@ def get_collegues(request):
         context = {"employees": employees}
         employee_html = render_to_string("employee/employees_select.html", context)
         return HttpResponse(employee_html)
-    except:
+    except (ValueError, TypeError, Employee.DoesNotExist):
+        # A non-numeric or unknown employee_id in the query string. Rendering
+        # an empty list is the right response to that, but it was previously
+        # a bare except covering all forty lines above -- so any genuine
+        # error in the colleague/manager/subordinate branches produced the
+        # same empty list with nothing logged, and looked to the user like an
+        # employee with no colleagues.
+        logger.warning(
+            "employee select: no employees for employee_id=%r data=%r",
+            request.GET.get("employee_id"),
+            request.GET.get("data"),
+        )
         context = {"employees": []}
         employee_html = render_to_string("employee/employees_select.html", context)
         return HttpResponse(employee_html)
@@ -3232,11 +3232,7 @@ def anonymous_feedback_add(request):
                     notify.send(
                         HorillaUser.objects.filter(username="Horilla Bot").first(),
                         recipient=feedback.employee_id.employee_user_id,
-                        verb="You received an anonymous feedback!",
-                        verb_ar="لقد تلقيت تقييمًا مجهولًا!",
-                        verb_de="Sie haben anonymes Feedback erhalten!",
-                        verb_es="¡Has recibido un comentario anónimo!",
-                        verb_fr="Vous avez reçu un feedback anonyme!",
+                        verb=gettext_noop("You received anonymous feedback!"),
                         redirect=reverse("feedback-view"),
                         icon="bag-check",
                     )
@@ -3421,11 +3417,7 @@ def employee_keyresult_creation(request, emp_obj_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=employee.employee_user_id,
-                    verb="You got an Key Result!.",
-                    verb_ar="لقد حصلت على نتيجة رئيسية!",
-                    verb_de="Du hast ein Schlüsselergebnis erreicht!",
-                    verb_es="¡Has conseguido un Resultado Clave!",
-                    verb_fr="Vous avez obtenu un Résultat Clé!",
+                    verb=gettext_noop("You got a Key Result!"),
                     redirect=reverse(
                         "objective-detailed-view",
                         kwargs={"obj_id": emp_objective.objective_id.id},
@@ -3474,11 +3466,7 @@ def employee_keyresult_update(request, kr_id):
             notify.send(
                 request.user.employee_get,
                 recipient=employee.employee_user_id,
-                verb="Your Key Result updated.",
-                verb_ar="تم تحديث نتيجتك الرئيسية.",
-                verb_de="Ihr Schlüsselergebnis wurde aktualisiert.",
-                verb_es="Se ha actualizado su Resultado Clave.",
-                verb_fr="Votre Résultat Clé a été mis à jour.",
+                verb=gettext_noop("Your Key Result updated."),
                 redirect=reverse(
                     "objective-detailed-view",
                     kwargs={"obj_id": emp_kr.employee_objective_id.objective_id.id},
@@ -3516,7 +3504,7 @@ def delete_employee_keyresult(request, kr_id):
         or request.user.has_perm("pms.delete_employeekeyresult")
         or request.user.employee_get in objective.managers.all()
     ):
-        messages.info(request, _("You dont have permission"))
+        messages.info(request, _("You don't have permission"))
         return HorillaRedirect(request)
 
     emp_objective = emp_kr.employee_objective_id
@@ -3559,12 +3547,12 @@ def employee_keyresult_update_status(request, kr_id):
         status = request.POST.get("key_result_status")
         emp_kr.status = status
         emp_kr.save()
-        messages.success(request, _("Key result sattus changed to {}.").format(status))
+        messages.success(request, _("Key result status changed to {}.").format(status))
         return redirect(
             f"/pms/kr-table-view/{emp_kr.employee_objective_id.id}?&objective_id={emp_kr.employee_objective_id.objective_id.id}"
         )
 
-    messages.info(request, _("You dont have permission"))
+    messages.info(request, _("You don't have permission"))
     return HorillaRedirect(request)
 
 
@@ -3598,7 +3586,7 @@ def key_result_current_value_update(request):
             messages.success(request, _("Value updated"))
         else:
             messages.info(
-                request, _("You dont have permission to update the current value")
+                request, _("You don't have permission to update the current value")
             )
         # Return JSON response with updated progress
         return JsonResponse(
@@ -3615,6 +3603,7 @@ def key_result_current_value_update(request):
 
 
 @login_required
+@hx_request_required
 def get_keyresult_data(request):
     """
     Function to get the data of keyresult and return to the form.
@@ -3726,11 +3715,10 @@ def create_meetings(request):
                     notify.send(
                         request.user.employee_get,
                         recipient=answer_employees,
-                        verb=f"You have been added as an answerable employee for the meeting {instance.title}",
-                        verb_ar=f"لقد تمت إضافتك كموظف مسؤول عن الاجتماع {instance.title}",
-                        verb_de=f"Du wurden als Mitarbeiter zum Ausfüllen für das {instance.title}-Meeting hinzugefügt",
-                        verb_es=f"Se le ha agregado como empleado responsable de la reunión {instance.title}",
-                        verb_fr=f"Vous avez été ajouté en tant que employé responsable pour la réunion {instance.title}",
+                        verb=gettext_noop(
+                            "You have been added as an answerable employee for the meeting %(title)s"
+                        ),
+                        verb_params={"title": str(instance.title)},
                         icon="information",
                         redirect=reverse("view-meetings") + f"?search={instance.title}",
                     )
@@ -3741,11 +3729,10 @@ def create_meetings(request):
                     notify.send(
                         request.user.employee_get,
                         recipient=employees,
-                        verb=f"You have been added to the meeting {instance.title}",
-                        verb_ar=f"لقد تمت إضافتك إلى اجتماع {instance.title}.",
-                        verb_de=f"Sie wurden zur {instance.title} Besprechung hinzugefügt",
-                        verb_es=f"Te han agregado a la reunión {instance.title}",
-                        verb_fr=f"Vous avez été ajouté à la réunion {instance.title}",
+                        verb=gettext_noop(
+                            "You have been added to the meeting %(title)s"
+                        ),
+                        verb_params={"title": str(instance.title)},
                         icon="information",
                         redirect=reverse("view-meetings") + f"?search={instance.title}",
                     )
@@ -3756,11 +3743,10 @@ def create_meetings(request):
                     notify.send(
                         request.user.employee_get,
                         recipient=managers,
-                        verb=f"You have been added as a manager for the meeting {instance.title}",
-                        verb_ar=f"لقد تمت إضافتك كمدير للاجتماع {instance.title}",
-                        verb_de=f"Sie wurden als Manager für das Meeting {instance.title} hinzugefügt",
-                        verb_es=f"Se le ha agregado como administrador de la reunión {instance.title}",
-                        verb_fr=f"Vous avez été ajouté en tant que responsable de réunion {instance.title}",
+                        verb=gettext_noop(
+                            "You have been added as a manager for the meeting %(title)s"
+                        ),
+                        verb_params={"title": str(instance.title)},
                         icon="information",
                         redirect=reverse("view-meetings") + f"?search={instance.title}",
                     )
@@ -3939,7 +3925,9 @@ def meeting_answer_get(request, id, **kwargs):
     employee = request.user.employee_get
     if employee_id := request.GET.get("emp_id"):
         employee = Employee.objects.filter(id=employee_id).first()
-    meeting = Meetings.objects.get(id=id)
+    meeting = Meetings.objects.filter(id=id).first()
+    if not meeting:
+        return HttpResponse()
     answer = MeetingsAnswer.objects.filter(meeting_id=meeting, employee_id=employee)
     questions = meeting.question_template.question.all()
     options = QuestionOptions.objects.all()
@@ -4041,7 +4029,9 @@ def meeting_question_template_view(request, meet_id):
         it will return meeting answer object to meeting_question_template_view.
     """
     employee = request.user.employee_get
-    meeting = Meetings.objects.get(id=meet_id)
+    meeting = Meetings.objects.filter(id=meet_id).first()
+    if not meeting:
+        return HttpResponse()
     answer = MeetingsAnswer.objects.filter(meeting_id=meeting, employee_id=employee)
     is_answered = False
     if answer:

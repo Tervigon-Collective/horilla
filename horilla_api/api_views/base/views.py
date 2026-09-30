@@ -1,10 +1,13 @@
+import logging
+from datetime import datetime, timedelta
 from typing import Any
 
+from django.db.models import Q
 from django.http import HttpResponse
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,6 +19,9 @@ from base.filters import (
     WorkTypeRequestFilter,
 )
 from base.models import (
+    Announcement,
+    AnnouncementExpire,
+    AnnouncementView,
     Company,
     Department,
     EmployeeShift,
@@ -27,8 +33,10 @@ from base.models import (
     RotatingWorkType,
     RotatingWorkTypeAssign,
     ShiftRequest,
+    ShiftRequestComment,
     WorkType,
     WorkTypeRequest,
+    WorkTypeRequestComment,
 )
 from base.views import (
     is_reportingmanger,
@@ -37,6 +45,12 @@ from base.views import (
     work_type_request_export,
 )
 from employee.models import Actiontype, Employee
+from horilla_api.api_methods.base.announcements import (
+    serialize_announcement,
+    visible_announcements,
+)
+from horilla_api.api_methods.base.methods import reject_reason_from
+from horilla_api.api_methods.base.pagination import HorillaPageNumberPagination
 from notifications.signals import notify
 
 from ...api_decorators.base.decorators import (
@@ -45,6 +59,7 @@ from ...api_decorators.base.decorators import (
     manager_permission_required,
     permission_required,
 )
+from ...api_methods.base.capabilities import build_capabilities
 from ...api_methods.base.methods import groupby_queryset, permission_based_queryset
 from ...api_serializers.base.serializers import (
     CompanySerializer,
@@ -103,8 +118,34 @@ def _is_reportingmanger(request, instance):
     try:
         employee_work_info_manager = instance.employee_work_info.reporting_manager_id
     except Exception:
-        return HttpResponse("This Employee Dont Have any work information")
+        # Same bug as base.views.is_reportingmanger: an HttpResponse is
+        # truthy, so every caller of this in an `or` chain treated "no work
+        # info" as "yes, you may".
+        return False
     return manager == employee_work_info_manager
+
+
+logger = logging.getLogger(__name__)
+
+
+def _revert_work_info(employee, was_approved, **fields):
+    """
+    Put an employee's shift / work type back when a request is cancelled.
+
+    Only a request that had been approved changed anything, so only that
+    one is reverted. Rejecting a still-pending request used to overwrite the
+    employee's current value with the request's "previous" one -- stale if
+    anything changed since the request was made. An employee with no work
+    information has nothing to revert; that used to raise instead.
+    """
+    if not was_approved:
+        return
+    work_info = getattr(employee, "employee_work_info", None)
+    if work_info is None:
+        return
+    for field, value in fields.items():
+        setattr(work_info, field, value)
+    work_info.save()
 
 
 class JobPositionView(APIView):
@@ -121,7 +162,7 @@ class JobPositionView(APIView):
             return Response(serializer.data, status=200)
 
         job_positions = JobPosition.objects.all()
-        paginater = PageNumberPagination()
+        paginater = HorillaPageNumberPagination()
         page = paginater.paginate_queryset(job_positions, request)
         serializer = self.serializer_class(page, many=True)
         return paginater.get_paginated_response(serializer.data)
@@ -168,7 +209,7 @@ class DepartmentView(APIView):
             return Response(serializer.data, status=200)
 
         departments = Department.objects.all()
-        paginator = PageNumberPagination()
+        paginator = HorillaPageNumberPagination()
         page: list[Any] | None = paginator.paginate_queryset(departments, request)
         serializer = self.serializer_class(page, many=True)
         return paginator.get_paginated_response(serializer.data)
@@ -215,7 +256,7 @@ class JobRoleView(APIView):
             return Response(serializer.data, status=200)
 
         job_roles = JobRole.objects.all()
-        paginator = PageNumberPagination()
+        paginator = HorillaPageNumberPagination()
         page = paginator.paginate_queryset(job_roles, request)
         serializer = self.serializer_class(page, many=True)
         return paginator.get_paginated_response(serializer.data)
@@ -262,7 +303,7 @@ class CompanyView(APIView):
             return Response(serializer.data, status=200)
 
         companies = Company.objects.all()
-        paginator = PageNumberPagination()
+        paginator = HorillaPageNumberPagination()
         page = paginator.paginate_queryset(companies, request)
         serializer = self.serializer_class(page, many=True)
         return paginator.get_paginated_response(serializer.data)
@@ -378,38 +419,43 @@ class WorkTypeRequestView(APIView):
                 request, url, field_name, work_type_request_filter_queryset
             )
         # pagination workflow
-        paginater = PageNumberPagination()
+        paginater = HorillaPageNumberPagination()
         page = paginater.paginate_queryset(work_type_request_filter_queryset, request)
         serializer = self.serializer_class(page, many=True)
         return paginater.get_paginated_response(serializer.data)
 
     def post(self, request):
-        serializer = self.serializer_class(data=request.data)
+        data = request.data.copy()
+        if not request.user.has_perm("base.add_worktyperequest"):
+            data["employee_id"] = request.user.employee_get.id
+        serializer = self.serializer_class(data=data)
         if serializer.is_valid():
             instance = serializer.save()
+            # The request is saved at this point. A notification failure --
+            # most often an employee with no reporting manager or no work
+            # information -- must not turn that into a 400, or the client
+            # reports a failure for a request that exists and a retry
+            # creates a duplicate.
             try:
                 notify.send(
                     instance.employee_id,
-                    recipient=(
-                        instance.employee_id.employee_work_info.reporting_manager_id.employee_user_id
+                    recipient=instance.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
+                    verb=gettext_noop(
+                        "You have new work type request to validate for %(employee)s"
                     ),
-                    verb=f"You have new work type request to \
-                                validate for {instance.employee_id}",
-                    verb_ar=f"لديك طلب نوع وظيفة جديد للتحقق من \
-                                {instance.employee_id}",
-                    verb_de=f"Sie haben eine neue Arbeitstypanfrage zur \
-                                Validierung für {instance.employee_id}",
-                    verb_es=f"Tiene una nueva solicitud de tipo de trabajo para \
-                                validar para {instance.employee_id}",
-                    verb_fr=f"Vous avez une nouvelle demande de type de travail\
-                                à valider pour {instance.employee_id}",
+                    verb_params={"employee": str(instance.employee_id)},
                     icon="information",
                     redirect=f"/employee/work-type-request-view?id={instance.id}",
                     api_redirect=f"/api/base/worktype-requests/{instance.id}",
                 )
-                return Response(serializer.data, status=201)
-            except Exception as E:
-                return Response(serializer.errors, status=400)
+            except Exception:
+                logger.warning(
+                    "Work type request %s saved, but notifying the reporting "
+                    "manager failed",
+                    instance.id,
+                    exc_info=True,
+                )
+            return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
     @check_approval_status(WorkTypeRequest, "base.change_worktyperequest")
@@ -449,29 +495,42 @@ class WorkTypeRequestCancelView(APIView):
             or work_type_request.employee_id == request.user.employee_get
             and work_type_request.approved == False
         ):
+            was_approved = work_type_request.approved
             work_type_request.canceled = True
             work_type_request.approved = False
-            work_type_request.employee_id.employee_work_info.work_type_id = (
-                work_type_request.previous_work_type_id
+            _revert_work_info(
+                work_type_request.employee_id,
+                was_approved,
+                work_type_id=work_type_request.previous_work_type_id,
             )
-            work_type_request.employee_id.employee_work_info.save()
             work_type_request.save()
+            reason = reject_reason_from(request)
+            if reason:
+                WorkTypeRequestComment.objects.create(
+                    request_id=work_type_request,
+                    employee_id=request.user.employee_get,
+                    comment=reason,
+                )
             try:
                 notify.send(
                     request.user.employee_get,
                     recipient=work_type_request.employee_id.employee_user_id,
-                    verb="Your work type request has been rejected.",
-                    verb_ar="تم إلغاء طلب نوع وظيفتك",
-                    verb_de="Ihre Arbeitstypanfrage wurde storniert",
-                    verb_es="Su solicitud de tipo de trabajo ha sido cancelada",
-                    verb_fr="Votre demande de type de travail a été annulée",
+                    verb=gettext_noop("Your work type request has been rejected."),
                     redirect=f"/employee/work-type-request-view?id={work_type_request.id}",
                     icon="close",
                     api_redirect="/api/base/worktype-requests/<int:pk>/",
                 )
-            except:
-                pass
-        return Response(status=200)
+            except Exception:
+                logger.warning(
+                    "Work type request %s rejected, but notifying the "
+                    "employee failed",
+                    work_type_request.id,
+                    exc_info=True,
+                )
+            return Response({"status": "canceled"}, status=200)
+        # Previously answered 200 here too, so a refused rejection looked
+        # identical to a successful one.
+        return Response({"error": _("You don't have permission")}, status=400)
 
 
 class WorkRequestApproveView(APIView):
@@ -487,26 +546,40 @@ class WorkRequestApproveView(APIView):
             """
             Here the request will be approved, can send mail right here
             """
-            if not work_type_request.is_any_work_type_request_exists():
-                work_type_request.approved = True
-                work_type_request.canceled = False
-                work_type_request.save()
-                try:
-                    notify.send(
-                        request.user.employee_get,
-                        recipient=work_type_request.employee_id.employee_user_id,
-                        verb="Your work type request has been approved.",
-                        verb_ar="تمت الموافقة على طلب نوع وظيفتك.",
-                        verb_de="Ihre Arbeitstypanfrage wurde genehmigt.",
-                        verb_es="Su solicitud de tipo de trabajo ha sido aprobada.",
-                        verb_fr="Votre demande de type de travail a été approuvée.",
-                        redirect=f"/employee/work-type-request-view?id={work_type_request.id}",
-                        icon="checkmark",
-                        api_redirect="/api/base/worktype-requests/<int:pk>/",
-                    )
-                    return Response({"status": "approved"})
-                except Exception as e:
-                    return Response({"error": str(e)}, status=400)
+            # Previously fell through and returned None -- a 500 -- when an
+            # overlapping approved request already existed.
+            if work_type_request.is_any_work_type_request_exists():
+                return Response(
+                    {
+                        "error": _(
+                            "An approved work type request already exists "
+                            "during this time period."
+                        )
+                    },
+                    status=400,
+                )
+            work_type_request.approved = True
+            work_type_request.canceled = False
+            work_type_request.save()
+            # Approved and saved: a notification failure is logged, not
+            # reported as a failed approval.
+            try:
+                notify.send(
+                    request.user.employee_get,
+                    recipient=work_type_request.employee_id.employee_user_id,
+                    verb=gettext_noop("Your work type request has been approved."),
+                    redirect=f"/employee/work-type-request-view?id={work_type_request.id}",
+                    icon="checkmark",
+                    api_redirect="/api/base/worktype-requests/<int:pk>/",
+                )
+            except Exception:
+                logger.warning(
+                    "Work type request %s approved, but notifying the "
+                    "employee failed",
+                    work_type_request.id,
+                    exc_info=True,
+                )
+            return Response({"status": "approved"})
         else:
             return Response({"error": _("You don't have permission")}, status=400)
 
@@ -525,7 +598,7 @@ class IndividualRotatingWorktypesView(APIView):
 
     def get(self, request, pk=None):
         if individual_permssion_check(request) == False:
-            return Response({"error": _("you have no permssion to view")}, status=400)
+            return Response({"error": _("you have no permission to view")}, status=400)
         if pk:
             rotating_work_type_assign = object_check(RotatingWorkTypeAssign, pk)
             if rotating_work_type_assign is None:
@@ -538,7 +611,7 @@ class IndividualRotatingWorktypesView(APIView):
         rotating_work_type_assigns = RotatingWorkTypeAssign.objects.filter(
             employee_id=employee_id
         )
-        pagenation = PageNumberPagination()
+        pagenation = HorillaPageNumberPagination()
         page = pagenation.paginate_queryset(rotating_work_type_assigns, request)
         serializer = self.serializer_class(page, many=True)
         return pagenation.get_paginated_response(serializer.data)
@@ -550,19 +623,9 @@ class RotatingWorkTypeAssignView(APIView):
     permission_classes = [IsAuthenticated]
     queryset = RotatingWorkTypeAssign.objects.none()  # For drf-yasg schema generation
 
-    def _permission_check(self, request, obj=None, pk=None):
-        if pk:
-            employee = request.user.employee_get
-            manager = obj.employee_id.get_reporting_manager()
-            if (
-                employee == obj.employee_id
-                or manager == employee
-                or request.user.has_perm("base.view_rotatingworktypeassign")
-            ):
-                return True
-            return False
-
-    @manager_permission_required("base.view_rotatingworktypeassign")
+    @manager_or_owner_permission_required(
+        RotatingWorkTypeAssign, "base.view_rotatingworktypeassign"
+    )
     def get(self, request, pk=None):
 
         if pk:
@@ -586,7 +649,7 @@ class RotatingWorkTypeAssignView(APIView):
                 request, url, field_name, rotating_work_type_assigns_filter_queryset
             )
 
-        pagenation = PageNumberPagination()
+        pagenation = HorillaPageNumberPagination()
         page = pagenation.paginate_queryset(
             rotating_work_type_assigns_filter_queryset, request
         )
@@ -603,11 +666,7 @@ class RotatingWorkTypeAssignView(APIView):
                 notify.send(
                     request.user.employee_get,
                     recipient=users,
-                    verb="You are added to rotating work type",
-                    verb_ar="تمت إضافتك إلى نوع العمل المتناوب",
-                    verb_de="Sie werden zum rotierenden Arbeitstyp hinzugefügt",
-                    verb_es="Se le agrega al tipo de trabajo rotativo",
-                    verb_fr="Vous êtes ajouté au type de travail rotatif",
+                    verb=gettext_noop("You are added to rotating work type"),
                     icon="infinite",
                     redirect="/employee/employee-profile/",
                     api_redirect="",
@@ -617,7 +676,9 @@ class RotatingWorkTypeAssignView(APIView):
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
-    @manager_permission_required("base.change_rotatingworktypeassign")
+    @manager_or_owner_permission_required(
+        RotatingWorkTypeAssign, "base.change_rotatingworktypeassign"
+    )
     def put(self, request, pk):
         rotating_work_type_assign = object_check(RotatingWorkTypeAssign, pk)
         if rotating_work_type_assign is None:
@@ -630,7 +691,9 @@ class RotatingWorkTypeAssignView(APIView):
             return Response(serializer.data, status=200)
         return Response(serializer.errors, status=400)
 
-    @manager_permission_required("base.delete_rotatingworktypeassign")
+    @manager_or_owner_permission_required(
+        RotatingWorkTypeAssign, "base.delete_rotatingworktypeassign"
+    )
     def delete(self, request, pk):
         rotating_work_type_assign = object_check(RotatingWorkTypeAssign, pk)
         if rotating_work_type_assign is None:
@@ -647,7 +710,7 @@ class IndividualWorkTypeRequestView(APIView):
 
     def get(self, request, pk=None):
         if individual_permssion_check(request) == False:
-            return Response({"error": _("you have no permssion to view")}, status=400)
+            return Response({"error": _("you have no permission to view")}, status=400)
 
         # individual object workflow
         if pk:
@@ -658,7 +721,7 @@ class IndividualWorkTypeRequestView(APIView):
             return Response(serializer.data, status=200)
         employee_id = request.GET.get("employee_id", None)
         work_type_request = WorkTypeRequest.objects.filter(employee_id=employee_id)
-        paginater = PageNumberPagination()
+        paginater = HorillaPageNumberPagination()
         page = paginater.paginate_queryset(work_type_request, request)
         serializer = self.serializer_class(page, many=True)
         return paginater.get_paginated_response(serializer.data)
@@ -823,7 +886,7 @@ class IndividualRotatingShiftView(APIView):
 
     def get(self, request, pk=None):
         if individual_permssion_check(request) == False:
-            return Response({"error": _("you have no permssion to view")}, status=400)
+            return Response({"error": _("you have no permission to view")}, status=400)
 
         if pk:
             rotating_shift_assign = object_check(RotatingShiftAssign, pk)
@@ -838,7 +901,7 @@ class IndividualRotatingShiftView(APIView):
             employee_id=employee_id
         )
 
-        paginator = PageNumberPagination()
+        paginator = HorillaPageNumberPagination()
         page = paginator.paginate_queryset(rotating_shift_assigns, request)
         serializer = self.serializer_class(page, many=True)
         return paginator.get_paginated_response(serializer.data)
@@ -850,7 +913,9 @@ class RotatingShiftAssignView(APIView):
     permission_classes = [IsAuthenticated]
     queryset = RotatingShiftAssign.objects.none()  # For drf-yasg schema generation
 
-    @manager_permission_required("base.view_rotatingshiftassign")
+    @manager_or_owner_permission_required(
+        RotatingShiftAssign, "base.view_rotatingshiftassign"
+    )
     def get(self, request, pk=None):
         if pk:
             rotating_shift_assign = object_check(RotatingShiftAssign, pk)
@@ -873,7 +938,7 @@ class RotatingShiftAssignView(APIView):
                 request, url, field_name, rotating_shift_assigns_filter_queryset
             )
 
-        paginator = PageNumberPagination()
+        paginator = HorillaPageNumberPagination()
         page = paginator.paginate_queryset(
             rotating_shift_assigns_filter_queryset, request
         )
@@ -888,7 +953,9 @@ class RotatingShiftAssignView(APIView):
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
-    @manager_permission_required("base.change_rotatingshiftassign")
+    @manager_or_owner_permission_required(
+        RotatingShiftAssign, "base.change_rotatingshiftassign"
+    )
     def put(self, request, pk):
         rotating_shift_assign = object_check(RotatingShiftAssign, pk)
         if rotating_shift_assign is None:
@@ -899,7 +966,9 @@ class RotatingShiftAssignView(APIView):
             return Response(serializer.data, status=200)
         return Response(serializer.errors, status=400)
 
-    @manager_permission_required("base.delete_rotatingshiftassign")
+    @manager_or_owner_permission_required(
+        RotatingShiftAssign, "base.delete_rotatingshiftassign"
+    )
     def delete(self, request, pk):
         rotating_shift_assign = object_check(RotatingShiftAssign, pk)
         if rotating_shift_assign is None:
@@ -914,7 +983,7 @@ class IndividualShiftRequestView(APIView):
 
     def get(self, request, pk=None):
         if individual_permssion_check(request) == False:
-            return Response({"error": _("you have no permssion to view")}, status=400)
+            return Response({"error": _("you have no permission to view")}, status=400)
 
         if pk:
             shift_request = object_check(ShiftRequest, pk)
@@ -924,7 +993,7 @@ class IndividualShiftRequestView(APIView):
             return Response(serializer.data, status=200)
         employee_id = request.GET.get("employee_id", None)
         shift_requests = ShiftRequest.objects.filter(employee_id=employee_id)
-        paginater = PageNumberPagination()
+        paginater = HorillaPageNumberPagination()
         page = paginater.paginate_queryset(shift_requests, request)
         serializer = self.serializer_class(page, many=True)
         return paginater.get_paginated_response(serializer.data)
@@ -969,13 +1038,16 @@ class ShiftRequestView(APIView):
                 request, url, field_name, shift_requests_filter_queryset
             )
         # pagination section
-        paginator = PageNumberPagination()
+        paginator = HorillaPageNumberPagination()
         page = paginator.paginate_queryset(shift_requests_filter_queryset, request)
         serializer = self.serializer_class(page, many=True)
         return paginator.get_paginated_response(serializer.data)
 
     def post(self, request):
-        serializer = self.serializer_class(data=request.data)
+        data = request.data.copy()
+        if not request.user.has_perm("base.add_shiftrequest"):
+            data["employee_id"] = request.user.employee_get.id
+        serializer = self.serializer_class(data=data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=201)
@@ -1119,13 +1191,24 @@ class ShiftRequestCancelView(APIView):
             or shift_request.employee_id == request.user.employee_get
             and shift_request.approved == False
         ):
+            was_approved = shift_request.approved
             shift_request.canceled = True
             shift_request.approved = False
-            shift_request.employee_id.employee_work_info.shift_id = (
-                shift_request.previous_shift_id
+            _revert_work_info(
+                shift_request.employee_id,
+                was_approved,
+                shift_id=shift_request.previous_shift_id,
             )
-            shift_request.employee_id.employee_work_info.save()
             shift_request.save()
+            reason = reject_reason_from(request)
+            if reason:
+                # Stored as a comment -- the request model has no reason
+                # field, and comments are what the web shows on a request.
+                ShiftRequestComment.objects.create(
+                    request_id=shift_request,
+                    employee_id=request.user.employee_get,
+                    comment=reason,
+                )
             return Response({"status": "success"}, status=200)
         return Response({"status": "failed"}, status=400)
 
@@ -1145,12 +1228,14 @@ class ShiftRequestBulkCancelView(APIView):
                 or shift_request.employee_id == request.user.employee_get
                 and shift_request.approved == False
             ):
+                was_approved = shift_request.approved
                 shift_request.canceled = True
                 shift_request.approved = False
-                shift_request.employee_id.employee_work_info.shift_id = (
-                    shift_request.previous_shift_id
+                _revert_work_info(
+                    shift_request.employee_id,
+                    was_approved,
+                    shift_id=shift_request.previous_shift_id,
                 )
-                shift_request.employee_id.employee_work_info.save()
                 shift_request.save()
                 count += 1
         if length == count:
@@ -1169,6 +1254,7 @@ class ShiftRequestDeleteView(APIView):
             or is_reportingmanger(request, shift_request)
         )
 
+    @method_decorator(permission_required("base.delete_shiftrequest"))
     def delete(self, request, pk=None):
 
         if pk is None:
@@ -1221,6 +1307,7 @@ class ShiftRequestExportView(APIView):
 class ShiftRequestAllocationView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @method_decorator(permission_required("base.change_shiftrequest"))
     def post(self, request, id):
         shift_request = ShiftRequest.objects.get(id=id)
         if not shift_request.is_any_request_exists():
@@ -1241,9 +1328,7 @@ class RotatingShiftAssignExport(APIView):
 class RotatingShiftAssignBulkArchive(APIView):
     permission_classes = [IsAuthenticated]
 
-    # Was IsAuthenticated only, while the web view behind the same action
-    # requires manager_can_enter("base.change_rotatingshiftassign").
-    @manager_permission_required("base.change_rotatingshiftassign")
+    @method_decorator(permission_required("base.change_rotatingshiftassign"))
     def put(self, request, status):
         ids = request.data.get("ids", None)
         try:
@@ -1257,9 +1342,7 @@ class RotatingShiftAssignBulkArchive(APIView):
 class RotatingShiftAssignBulkDelete(APIView):
     permission_classes = [IsAuthenticated]
 
-    # Was IsAuthenticated only, while the web view behind the same action
-    # requires manager_can_enter("base.delete_rotatingshiftassign").
-    @manager_permission_required("base.delete_rotatingshiftassign")
+    @method_decorator(permission_required("base.delete_rotatingshiftassign"))
     def delete(self, request):
         ids = request.data.get("ids", None)
         try:
@@ -1410,17 +1493,19 @@ class CheckUserLevel(APIView):
         return Response({"error": _("No permission")}, status=400)
 
 
-from datetime import datetime, timedelta
+class CapabilitiesAPIView(APIView):
+    """
+    What the signed-in user's client may show.
 
-from bs4 import BeautifulSoup
-from django.db.models import Q
+    The same payload login returns. Exposed separately so a long-lived client
+    can refresh it when permissions change, instead of forcing a re-login to
+    notice that someone became a manager.
+    """
 
-from base.models import Announcement, AnnouncementExpire
+    permission_classes = [IsAuthenticated]
 
-
-class AnnouncementPagination(PageNumberPagination):
-    page_size_query_param = "page_size"  # allow client to override
-    max_page_size = 100  # prevent abuse
+    def get(self, request):
+        return Response(build_capabilities(request.user), status=200)
 
 
 class AnnouncementListAPIView(APIView):
@@ -1434,7 +1519,7 @@ class AnnouncementListAPIView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-    pagination_class = AnnouncementPagination
+    pagination_class = HorillaPageNumberPagination
 
     def get(self, request, *args, **kwargs):
         # Update missing expire_date in bulk, using each announcement's
@@ -1463,52 +1548,37 @@ class AnnouncementListAPIView(APIView):
         if announcements_to_update:
             Announcement.objects.bulk_update(announcements_to_update, ["expire_date"])
 
-        # Base queryset: non-expired announcements
-        announcements = Announcement.objects.filter(
-            expire_date__gte=datetime.today().date()
-        )
-
-        # Permission filter
-        if not request.user.has_perm("base.view_announcement"):
-            announcements = announcements.filter(
-                Q(employees=request.user.employee_get) | Q(employees__isnull=True)
-            )
-
-        # Prefetch related views for efficiency
-        announcements = announcements.prefetch_related("announcementview_set").order_by(
-            "-created_at"
-        )
-
-        # Build response data
-        data = [
-            {
-                "id": ann.id,
-                "title": ann.title,
-                "content": self._parse_description(ann.description),
-                "created_at": ann.created_at,
-                "expire_date": ann.expire_date,
-                "has_viewed": ann.announcementview_set.filter(
-                    user=request.user, viewed=True
-                ).exists(),
-            }
-            for ann in announcements
-        ]
-
-        # Apply pagination
+        announcements = visible_announcements(request)
         paginator = self.pagination_class()
-        page = paginator.paginate_queryset(data, request)
-        return paginator.get_paginated_response(page)
+        page = paginator.paginate_queryset(announcements, request)
+        return paginator.get_paginated_response(
+            [serialize_announcement(ann, ann.has_viewed) for ann in page]
+        )
 
-    @staticmethod
-    def _parse_description(description: str) -> list[dict]:
-        """
-        Parse HTML description into structured text (headings + paragraphs).
-        """
-        soup = BeautifulSoup(description or "", "html.parser")
-        content = []
 
-        for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p"]):
-            tag_type = "heading" if tag.name.startswith("h") else "paragraph"
-            content.append({"type": tag_type, "text": tag.get_text(" ", strip=True)})
+class AnnouncementDetailAPIView(APIView):
+    """
+    One announcement with its attachments and author, if the caller is in
+    its audience. Opening it marks it viewed, as opening it on the web does.
+    """
 
-        return content
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        announcement = (
+            visible_announcements(request)
+            .prefetch_related("attachments")
+            .filter(pk=pk)
+            .first()
+        )
+        if announcement is None:
+            return Response({"error": "Announcement not found."}, status=404)
+        view, _ = AnnouncementView.objects.get_or_create(
+            user=request.user, announcement=announcement
+        )
+        if not view.viewed:
+            view.viewed = True
+            view.save()
+        return Response(
+            serialize_announcement(announcement, True, detail=True), status=200
+        )

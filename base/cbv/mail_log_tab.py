@@ -14,9 +14,29 @@ from base.filters import MailLogFilter
 from base.models import EmailLog
 from employee.cbv.accessibility import is_hr_user
 from employee.models import Employee
+from horilla.decorators import check_manager
 from horilla.http.response import HorillaRedirect
 from horilla_views.cbv_methods import login_required
 from horilla_views.generic.cbv.views import HorillaDetailedView, HorillaListView
+
+
+def _can_view_mail_log(request, employee):
+    """Own log, a subordinate's log, or the employee.view_employee permission."""
+    viewer = request.user.employee_get
+    return (
+        request.user.has_perm("employee.view_employee")
+        or employee == viewer
+        or check_manager(viewer, employee)
+    )
+
+
+def _employee_for_log(log):
+    if not log or not log.to:
+        return None
+    addresses = [a.strip().lower() for a in str(log.to).split(",") if a.strip()]
+    return Employee.objects.filter(
+        Q(email__in=addresses) | Q(employee_work_info__email__in=addresses)
+    ).first()
 
 
 @method_decorator(login_required, name="dispatch")
@@ -46,8 +66,12 @@ class MailLogTabList(HorillaListView):
             messages.info(request, _("You dont have access to the feature"))
             return HorillaRedirect(request)
         pk = kwargs.get("pk")
-        if not Employee.objects.filter(id=pk).exists():
+        employee = Employee.objects.filter(id=pk).first()
+        if not employee:
             messages.error(request, _("Employee not found."))
+            return HorillaRedirect(request)
+        if not _can_view_mail_log(request, employee):
+            messages.info(request, _("You don't have access to the feature"))
             return HorillaRedirect(request)
         return super().dispatch(request, *args, **kwargs)
 
@@ -92,6 +116,16 @@ class MailLogDetailView(HorillaDetailedView):
     template_name = "cbv/mail_log_tab/iframe.html"
     model = EmailLog
 
+    def dispatch(self, request, *args, **kwargs):
+        if not is_hr_user(request):
+            messages.info(request, _("You dont have access to the feature"))
+            return HorillaRedirect(request)
+        log = EmailLog.objects.filter(id=kwargs.get("pk")).first()
+        if not _can_view_mail_log(request, _employee_for_log(log)):
+            messages.info(request, _("You don't have access to the feature"))
+            return HorillaRedirect(request)
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs: Any):
         context = super().get_context_data(**kwargs)
         pk = self.kwargs.get("pk")
@@ -100,9 +134,3 @@ class MailLogDetailView(HorillaDetailedView):
         return context
 
     header = {"title": "", "subtitle": "", "avatar": ""}
-
-    def dispatch(self, request, *args, **kwargs):
-        if not is_hr_user(request):
-            messages.info(request, _("You dont have access to the feature"))
-            return HorillaRedirect(request)
-        return super().dispatch(request, *args, **kwargs)

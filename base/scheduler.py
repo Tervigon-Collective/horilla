@@ -1,10 +1,11 @@
 import calendar
-import sys
 from datetime import date, datetime, timedelta
 
-from horilla.db import SafeBackgroundScheduler
 from django.urls import reverse
+from django.utils.translation import gettext_noop
 
+from horilla.db import scheduled_job
+from horilla.scheduling import register_job
 from notifications.signals import notify
 
 
@@ -47,11 +48,7 @@ def update_rotating_work_type_assign(rotating_work_type, new_date):
         notify.send(
             bot,
             recipient=employee.employee_user_id,
-            verb="Your Work Type has been changed.",
-            verb_ar="لقد تغير نوع عملك.",
-            verb_de="Ihre Art der Arbeit hat sich geändert.",
-            verb_es="Su tipo de trabajo ha sido cambiado.",
-            verb_fr="Votre type de travail a été modifié.",
+            verb=gettext_noop("Your Work Type has been changed."),
             icon="infinite",
             redirect=reverse("employee-profile"),
         )
@@ -105,6 +102,7 @@ def work_type_rotate_every(rotating_work_type):
     return
 
 
+@scheduled_job
 def rotate_work_type():
     """
     This method will identify the based on condition to the rotating shift assign
@@ -160,11 +158,7 @@ def update_rotating_shift_assign(rotating_shift, new_date):
         notify.send(
             bot,
             recipient=employee.employee_user_id,
-            verb="Your shift has been changed.",
-            verb_ar="تم تغيير التحول الخاص بك.",
-            verb_de="Ihre Schicht wurde geändert.",
-            verb_es="Tu turno ha sido cambiado.",
-            verb_fr="Votre quart de travail a été modifié.",
+            verb=gettext_noop("Your shift has been changed."),
             icon="infinite",
             redirect=reverse("employee-profile"),
         )
@@ -215,6 +209,7 @@ def shift_rotate_every(rotating_shift, today):
     return
 
 
+@scheduled_job
 def rotate_shift():
     """
     This method will identify the based on condition to the rotating shift assign
@@ -250,6 +245,7 @@ def rotate_shift():
     return
 
 
+@scheduled_job
 def switch_shift():
     """
     This method change employees shift information regards to the shift request
@@ -277,17 +273,14 @@ def switch_shift():
                 notify.send(
                     bot,
                     recipient=employee.employee_user_id,
-                    verb="Shift Changes notification",
-                    verb_ar="التحول تغيير الإخطار",
-                    verb_de="Benachrichtigung über Schichtänderungen",
-                    verb_es="Notificación de cambios de turno",
-                    verb_fr="Notification des changements de quart de travail",
+                    verb=gettext_noop("Shift Changes notification"),
                     icon="refresh",
                     redirect=reverse("employee-profile"),
                 )
     return
 
 
+@scheduled_job
 def undo_shift():
     """
     This method undo previous employees shift information regards to the shift request
@@ -318,17 +311,16 @@ def undo_shift():
                 notify.send(
                     bot,
                     recipient=employee.employee_user_id,
-                    verb="Shift changes notification, Requested date expired.",
-                    verb_ar="التحول يغير الإخطار ، التاريخ المطلوب انتهت صلاحيته.",
-                    verb_de="Benachrichtigung über Schichtänderungen, gewünschtes Datum abgelaufen.",
-                    verb_es="Notificación de cambios de turno, Fecha solicitada vencida.",
-                    verb_fr="Notification de changement d'équipe, la date demandée a expiré.",
+                    verb=gettext_noop(
+                        "Shift changes notification, Requested date expired."
+                    ),
                     icon="refresh",
                     redirect=reverse("employee-profile"),
                 )
     return
 
 
+@scheduled_job
 def switch_work_type():
     """
     This method change employees work type information regards to the work type request
@@ -357,17 +349,14 @@ def switch_work_type():
             notify.send(
                 bot,
                 recipient=employee.employee_user_id,
-                verb="Work Type Changes notification",
-                verb_ar="إخطار تغييرات نوع العمل",
-                verb_de="Benachrichtigung über Änderungen des Arbeitstyps",
-                verb_es="Notificación de cambios de tipo de trabajo",
-                verb_fr="Notification de changement de type de travail",
+                verb=gettext_noop("Work Type Changes notification"),
                 icon="swap-horizontal",
                 redirect=reverse("employee-profile"),
             )
     return
 
 
+@scheduled_job
 def undo_work_type():
     """
     This method undo previous employees work type information regards to the work type request
@@ -398,17 +387,16 @@ def undo_work_type():
             notify.send(
                 bot,
                 recipient=employee.employee_user_id,
-                verb="Work type changes notification, Requested date expired.",
-                verb_ar="إعلام بتغيير نوع العمل ، انتهاء صلاحية التاريخ المطلوب.",
-                verb_de="Benachrichtigung über Änderungen des Arbeitstyps, angefordertes Datum abgelaufen.",
-                verb_es="Notificación de cambios de tipo de trabajo, fecha solicitada vencida.",
-                verb_fr="Notification de changement de type de travail, la date demandée a expiré.",
+                verb=gettext_noop(
+                    "Work type changes notification, Requested date expired."
+                ),
                 icon="swap-horizontal",
                 redirect=reverse("employee-profile"),
             )
     return
 
 
+@scheduled_job
 def recurring_holiday():
     from .models import Holidays
 
@@ -431,6 +419,7 @@ def recurring_holiday():
         recurring_holiday.save()
 
 
+@scheduled_job
 def sync_roster_shifts():
     """
     Daily at 00:05 — sync published roster entries to employee work info.
@@ -458,68 +447,16 @@ def sync_roster_shifts():
             pass
 
 
-if not any(
-    cmd in sys.argv
-    for cmd in ["makemigrations", "migrate", "compilemessages", "flush", "shell"]
-):
-    scheduler = SafeBackgroundScheduler()
-
-    # Add jobs with next_run_time set to the end of the previous job
-    try:
-        scheduler.add_job(rotate_shift, "interval", hours=4, id="job1")
-    except:
-        pass
-
-    try:
-        scheduler.add_job(
-            rotate_work_type,
-            "interval",
-            hours=4,
-            id="job2",
-        )
-    except:
-        pass
-
-    try:
-        scheduler.add_job(
-            undo_shift,
-            "interval",
-            hours=4,
-            id="job3",
-        )
-    except:
-        pass
-
-    try:
-        scheduler.add_job(
-            switch_shift,
-            "interval",
-            hours=4,
-            id="job4",
-        )
-    except:
-        pass
-
-    try:
-        scheduler.add_job(
-            undo_work_type,
-            "interval",
-            hours=4,
-            id="job6",
-        )
-    except:
-        pass
-
-    try:
-        scheduler.add_job(
-            switch_work_type,
-            "interval",
-            hours=4,
-            id="job5",
-        )
-    except:
-        pass
-
-    scheduler.add_job(recurring_holiday, "interval", hours=4)
-    scheduler.add_job(sync_roster_shifts, "interval", hours=4)
-    scheduler.start()
+# The job1..job6 ids are historical and deliberately preserved so existing
+# jobstore rows are replaced rather than duplicated. Note job5/job6 are swapped
+# relative to declaration order -- that is how they have always been persisted.
+# These registrations were previously wrapped in bare `except: pass`, which made
+# a failed registration indistinguishable from a working one.
+register_job(rotate_shift, "interval", job_id="job1", hours=4)
+register_job(rotate_work_type, "interval", job_id="job2", hours=4)
+register_job(undo_shift, "interval", job_id="job3", hours=4)
+register_job(switch_shift, "interval", job_id="job4", hours=4)
+register_job(undo_work_type, "interval", job_id="job6", hours=4)
+register_job(switch_work_type, "interval", job_id="job5", hours=4)
+register_job(recurring_holiday, "interval", hours=4)
+register_job(sync_roster_shifts, "interval", hours=4)

@@ -11,6 +11,7 @@ from django.shortcuts import render
 from django.urls import reverse
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from base.methods import has_export_access
 from employee import views as employee_view
@@ -261,7 +262,6 @@ class PayslipNav(HorillaNavView):
                     data-target = "#payslipExport"
                     hx-target="#payslipExportForm"
                     hx-get ="{reverse('payslip-bulk-export-data')}"
-                    hx-vals='js:{{"has_selection": (JSON.parse(document.getElementById("selectedInstances")?.getAttribute("data-ids")||"[]").length>0)}}'
                     style="cursor: pointer;"
                 """,
                 }
@@ -284,6 +284,11 @@ class PayslipNav(HorillaNavView):
     filter_instance = PayslipFilter()
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. PayslipFilter.ajax_fields carries the
+    # AJAX-loaded Employee combobox this needs.
+    modern_filter = True
 
     group_by_fields = [
         ("employee_id", _("Employee")),
@@ -335,7 +340,7 @@ class PayslipBulkExport(TemplateView):
     def get(self, request, *args, **kwargs):
         if not has_export_access(request, Payslip):
             return HorillaRedirect(
-                request, message=_("You dont have access to export this data")
+                request, message=_("You don't have access to export this data")
             )
         return super().get(request, *args, **kwargs)
 
@@ -353,7 +358,6 @@ class PayslipBulkExport(TemplateView):
         context = super().get_context_data(**kwargs)
         context["export_column"] = export_column
         context["export_filter"] = export_filter
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context
 
 
@@ -428,11 +432,7 @@ class PayrollCreateFormView(HorillaFormView):
             notify.send(
                 self.request.user.employee_get,
                 recipient=employee.employee_user_id,
-                verb="Payslip has been generated for you.",
-                verb_ar="تم إصدار كشف راتب لك.",
-                verb_de="Gehaltsabrechnung wurde für Sie erstellt.",
-                verb_es="Se ha generado la nómina para usted.",
-                verb_fr="La fiche de paie a été générée pour vous.",
+                verb=gettext_noop("Payslip has been generated for you."),
                 redirect=reverse(
                     "view-created-payslip", kwargs={"payslip_id": payslip.pk}
                 ),

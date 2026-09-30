@@ -1,6 +1,6 @@
 import operator
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 
 from dateutil.relativedelta import relativedelta
 from django.apps import apps
@@ -1600,7 +1600,7 @@ class Meetings(HorillaModel):
         if not getattr(self, "request", None):
             self.request = request
         if request.user.employee_get in self.manager.all():
-            return f'style="background-color: rgba(255, 166, 0, 0.158);" '
+            return f'style="background-color: #fff3cd;" '
 
     def meeting_detail_view(self):
         """

@@ -42,10 +42,13 @@ def format_time(seconds):
         seconds : seconds
     """
 
-    hour = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    seconds = int((seconds % 3600) % 60)
-    return f"{hour:02d}:{minutes:02d}"
+    # Floor division on a negative value steps to the next hour down and
+    # leaves a positive remainder, so -1:29 was stored as -2:31.
+    sign = "-" if seconds < 0 else ""
+    seconds = abs(int(seconds))
+    hour = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    return f"{sign}{hour:02d}:{minutes:02d}"
 
 
 def strtime_seconds(time):
@@ -55,8 +58,12 @@ def strtime_seconds(time):
         time : time in H:M format
     """
 
+    negative = isinstance(time, str) and time.startswith("-")
+    if negative:
+        time = time[1:]
     ftr = [3600, 60, 1]
-    return sum(a * b for a, b in zip(ftr, map(int, time.split(":"))))
+    total = sum(a * b for a, b in zip(ftr, map(int, time.split(":"))))
+    return -total if negative else total
 
 
 def get_diff_obj(first_instance, other_instance, exclude_fields=None):
@@ -157,6 +164,65 @@ def get_diff_dict(first_dict, other_dict, model=None):
     return difference
 
 
+def get_client_ip(request):
+    """
+    The caller's IP, honoring only as many proxy hops as this deployment has
+    declared trustworthy (AXES_PROXY_COUNT) -- the same setting django-axes
+    itself uses for lockouts. Trusting X-Forwarded-For unconditionally lets
+    any client claim to be calling from an allowed office network, since
+    that header is attacker-supplied unless a trusted reverse proxy is
+    known to overwrite rather than append to it.
+    """
+    from ipware import get_client_ip as _get_client_ip
+
+    ip, _is_routable = _get_client_ip(
+        request,
+        proxy_count=settings.AXES_IPWARE_PROXY_COUNT,
+        request_header_order=settings.AXES_IPWARE_META_PRECEDENCE_ORDER,
+    )
+    return ip or request.META.get("REMOTE_ADDR")
+
+
+def geofence_denial_web(request, company):
+    """
+    The web clock-in/out views' counterpart to
+    horilla_api...attendance.views.geofence_denial(): that one reads
+    request.data, which only exists on a DRF Request, not the plain
+    HttpRequest these views get. The mobile/API flow enforces a configured
+    geo-fence; the web flow previously didn't check it at all, so an
+    employee outside the fence could still punch in from a browser.
+
+    Fails closed, the same reasoning as the API version: a fence that is
+    enabled but can't be evaluated (no coordinates submitted, or the browser
+    denied location access) should block the punch, not silently allow it.
+
+    Returns an error message to show the employee, or None if the punch may
+    proceed.
+    """
+    from geopy.distance import geodesic
+
+    from geofencing.models import GeoFencing
+
+    if company is None:
+        return None
+    fence = GeoFencing.objects.filter(company_id=company).first()
+    if fence is None or not fence.start:
+        return None
+
+    try:
+        latitude = float(request.GET.get("latitude"))
+        longitude = float(request.GET.get("longitude"))
+    except (TypeError, ValueError):
+        return _(
+            "Could not verify your location. Please allow location access and try again."
+        )
+
+    distance = geodesic((fence.latitude, fence.longitude), (latitude, longitude)).meters
+    if distance > fence.radius_in_meters:
+        return _("Check-In Restricted: You are outside the permitted work location.")
+    return None
+
+
 def employee_exists(request):
     """
     This method return the employee instance and work info if not exists return None instead
@@ -165,8 +231,13 @@ def employee_exists(request):
     try:
         employee = request.user.employee_get
         employee_work_info = employee.employee_work_info
-    finally:
-        return (employee, employee_work_info)
+    except Exception:
+        # Either attribute is absent for an AnonymousUser or a user with no
+        # Employee/EmployeeWorkInformation row; callers expect None rather
+        # than an exception. `except Exception` instead of a bare `finally`
+        # so KeyboardInterrupt and SystemExit still propagate.
+        pass
+    return (employee, employee_work_info)
 
 
 def shift_schedule_today(day, shift):
@@ -328,6 +399,24 @@ def get_month_start_end_dates(year_month):
     return start_date, end_date
 
 
+def month_date_range(year, month):
+    """Return (first_day, last_day) for a month as real dates.
+
+    Exists so queries can say ``attendance_date__range=(...)`` instead of
+    ``attendance_date__month=`` / ``__year=``. Those two wrap the column in a
+    database function, which makes a plain B-tree index on the column
+    unusable -- so the range form is what lets an index be used at all.
+
+    ``get_month_start_end_dates`` above does the same thing from a "YYYY-MM"
+    string; this takes the parts separately, which is what the model methods
+    have to hand.
+    """
+    year = int(year)
+    month = int(month)
+    _, last_day = calendar.monthrange(year, month)
+    return date(year, month, 1), date(year, month, last_day)
+
+
 def worked_hour_data(labels, records):
     """
     To find all the worked hours
@@ -362,15 +451,6 @@ def pending_hour_data(labels, records):
         dept_records.append(total_sum / 3600 if total_sum else 0)
     data["data"] = dept_records
     return data
-
-
-def get_employee_last_name(attendance):
-    """
-    This method is used to return the last name
-    """
-    if attendance.employee_id.employee_last_name:
-        return attendance.employee_id.employee_last_name
-    return ""
 
 
 def attendance_day_checking(attendance_date, minimum_hour, employee=None):
@@ -539,6 +619,11 @@ class Request:
         self.time = time
         self.datetime = datetime
         self.META = META()
+        # Empty dict stands in for Django's QueryDict here -- only .get() is
+        # ever called on request.GET (e.g. horilla_crumbs' breadcrumbs context
+        # processor), and dict.get() already returns None for a missing key
+        # exactly like QueryDict.get() does.
+        self.GET = {}
 
     def build_absolute_uri(self, location=None):
         """
@@ -591,6 +676,14 @@ class META:
         """
         return default
 
+    def __contains__(self, key):
+        """
+        Support ``key in request.META`` (e.g. horilla_crumbs' breadcrumbs
+        context processor checks "HTTP_HX_REQUEST" in request.META directly,
+        not just via .keys()).
+        """
+        return key in self.keys()
+
 
 def parse_time(time_str):
     if isinstance(time_str, time):  # Check if it's already a time object
@@ -603,14 +696,6 @@ def parse_time(time_str):
             except ValueError:
                 continue
     return None
-
-
-def parse_datetime(date_str, time_str):
-    return (
-        datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-        if date_str and time_str
-        else None
-    )
 
 
 def parse_date(date_str, error_key, activity):

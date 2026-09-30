@@ -11,6 +11,7 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from base.forms import AnnouncementCommentForm, AnnouncementForm
 from base.methods import closest_numbers, filter_own_records
@@ -135,25 +136,21 @@ def create_announcement(request):
                         sender,
                         recipient=users,
                         verb=verb,
-                        verb_ar="لقد تم ذكرك في إعلان.",
-                        verb_de="Sie wurden in einer Ankündigung erwähnt.",
-                        verb_es="Has sido mencionado en un anuncio.",
-                        verb_fr="Vous avez été mentionné dans une annonce.",
                         redirect="/",
                         icon="chatbox-ellipses",
                     )
 
             send_notification(
                 user_map.filter(employee_get__id__in=dept_emp_ids),
-                _("Your department was mentioned in an announcement."),
+                gettext_noop("Your department was mentioned in an announcement."),
             )
             send_notification(
                 user_map.filter(employee_get__id__in=job_emp_ids),
-                _("Your job position was mentioned in an announcement."),
+                gettext_noop("Your job position was mentioned in an announcement."),
             )
             send_notification(
                 user_map.filter(employee_get__id__in=direct_only_ids),
-                _("You have been mentioned in an announcement."),
+                gettext_noop("You have been mentioned in an announcement."),
             )
 
             messages.success(request, _("Announcement created successfully."))
@@ -177,11 +174,7 @@ def create_announcement(request):
             notify.send(
                 request.user.employee_get,
                 recipient=emp_dep,
-                verb="Your department was mentioned in a post.",
-                verb_ar="تم ذكر قسمك في منشور.",
-                verb_de="Ihr Abteilung wurde in einem Beitrag erwähnt.",
-                verb_es="Tu departamento fue mencionado en una publicación.",
-                verb_fr="Votre département a été mentionné dans un post.",
+                verb=gettext_noop("Your department was mentioned in a post."),
                 redirect="/",
                 icon="chatbox-ellipses",
             )
@@ -189,11 +182,7 @@ def create_announcement(request):
             notify.send(
                 request.user.employee_get,
                 recipient=emp_jobs,
-                verb="Your job position was mentioned in a post.",
-                verb_ar="تم ذكر وظيفتك في منشور.",
-                verb_de="Ihre Arbeitsposition wurde in einem Beitrag erwähnt.",
-                verb_es="Tu puesto de trabajo fue mencionado en una publicación.",
-                verb_fr="Votre poste de travail a été mentionné dans un post.",
+                verb=gettext_noop("Your job position was mentioned in a post."),
                 redirect="/",
                 icon="chatbox-ellipses",
             )
@@ -203,6 +192,7 @@ def create_announcement(request):
 
 @login_required
 @hx_request_required
+@permission_required("base.delete_announcement")
 def delete_announcement(request, anoun_id):
     """
     This method is used to delete announcements.
@@ -287,11 +277,7 @@ def update_announcement(request, anoun_id):
             notify.send(
                 request.user.employee_get,
                 recipient=emp_dep,
-                verb="Your department was mentioned in a post.",
-                verb_ar="تم ذكر قسمك في منشور.",
-                verb_de="Ihr Abteilung wurde in einem Beitrag erwähnt.",
-                verb_es="Tu departamento fue mencionado en una publicación.",
-                verb_fr="Votre département a été mentionné dans un post.",
+                verb=gettext_noop("Your department was mentioned in a post."),
                 redirect="/",
                 icon="chatbox-ellipses",
             )
@@ -299,11 +285,7 @@ def update_announcement(request, anoun_id):
             notify.send(
                 request.user.employee_get,
                 recipient=emp_jobs,
-                verb="Your job position was mentioned in a post.",
-                verb_ar="تم ذكر وظيفتك في منشور.",
-                verb_de="Ihre Arbeitsposition wurde in einem Beitrag erwähnt.",
-                verb_es="Tu puesto de trabajo fue mencionado en una publicación.",
-                verb_fr="Votre poste de travail a été mentionné dans un post.",
+                verb=gettext_noop("Your job position was mentioned in a post."),
                 redirect="/",
                 icon="chatbox-ellipses",
             )
@@ -320,6 +302,7 @@ def update_announcement(request, anoun_id):
 
 @login_required
 @hx_request_required
+@permission_required("base.change_announcement")
 def remove_announcement_file(request, obj_id, attachment_id):
     announcement = get_object_or_404(Announcement, id=obj_id)
     attachment = get_object_or_404(Attachment, id=attachment_id)
@@ -360,11 +343,8 @@ def create_announcement_comment(request, anoun_id):
             notify.send(
                 request.user.employee_get,
                 recipient=unique_users,
-                verb=f"Comment under the announcement {anoun.title}.",
-                verb_ar=f"تعليق تحت الإعلان {anoun.title}.",
-                verb_de=f"Kommentar unter der Ankündigung {anoun.title}.",
-                verb_es=f"Comentario bajo el anuncio {anoun.title}.",
-                verb_fr=f"Commentaire sous l'annonce {anoun.title}.",
+                verb=gettext_noop("Comment under the announcement %(title)s."),
+                verb_params={"title": str(anoun.title)},
                 redirect="/",
                 icon="chatbox-ellipses",
             )
@@ -383,7 +363,10 @@ def comment_view(request, anoun_id):
     """
     This method is used to view all comments in the announcements
     """
-    announcement = Announcement.objects.get(id=anoun_id)
+    announcement = Announcement.objects.filter(id=anoun_id).first()
+    if not announcement:
+        messages.error(request, _("Announcement not found."))
+        return HorillaRedirect(request)
     comments = AnnouncementComment.objects.filter(announcement_id=anoun_id).order_by(
         "-created_at"
     )
@@ -429,6 +412,14 @@ def announcement_single_view(request, anoun_id=None):
     This method is used to render single announcements.
     """
     announcement_instance = Announcement.find(anoun_id)
+    if not announcement_instance:
+        # No id in the URL (the bare "announcement-single-view/" pattern)
+        # or an id that doesn't match any record -- the template assumes a
+        # real announcement (e.g. {% url 'update-announcement'
+        # announcement.id %}), which fails with NoReverseMatch on an empty
+        # id rather than rendering blank.
+        messages.error(request, _("Announcement not found."))
+        return HorillaRedirect(request)
     instance_ids = request.GET.get("instance_ids")
     instance_ids_list = json.loads(instance_ids) if instance_ids else []
     previous_instance_id, next_instance_id = (
@@ -437,7 +428,7 @@ def announcement_single_view(request, anoun_id=None):
         else (None, None)
     )
     if announcement_instance:
-        announcement_view_obj, _ = AnnouncementView.objects.get_or_create(
+        announcement_view_obj, _created = AnnouncementView.objects.get_or_create(
             user=request.user, announcement=announcement_instance
         )
         announcement_view_obj.viewed = True

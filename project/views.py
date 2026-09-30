@@ -12,7 +12,9 @@ from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
+from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
 
 from base.methods import filtersubordinates, get_key_instances, has_export_access
@@ -295,11 +297,13 @@ def change_project_status(request, project_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=employee.employee_user_id,
-                            verb=f"The status of the project '{project}' has been changed to {project.get_status_display()}.",
-                            verb_ar=f"تم تغيير حالة المشروع '{project}' إلى {project.get_status_display()}.",
-                            verb_de=f"Der Status des Projekts '{project}' wurde auf {project.get_status_display()} geändert.",
-                            verb_es=f"El estado del proyecto '{project}' ha sido cambiado a {project.get_status_display()}.",
-                            verb_fr=f"Le statut du projet '{project}' a été changé en {project.get_status_display()}.",
+                            verb=gettext_noop(
+                                "The status of the project '%(project)s' has been changed to %(get_status_display)s."
+                            ),
+                            verb_params={
+                                "project": str(project),
+                                "get_status_display": str(project.get_status_display()),
+                            },
                             redirect=reverse(
                                 "task-view",
                                 kwargs={"project_id": project.id},
@@ -525,6 +529,7 @@ def project_import(request):
 
 @login_required
 @permission_required("project.view_project")
+@require_http_methods(["POST"])
 def project_bulk_export(request):
     """
     This method is used to export bulk of Project instances
@@ -578,7 +583,6 @@ def project_bulk_export(request):
         {
             "bg_color": "#ffd0cc",
             "bold": True,
-            "font_size": 14,
             "align": "center",
             "valign": "vcenter",
             "font_size": 20,
@@ -741,13 +745,12 @@ def task_view(request, project_id, **kwargs):
     form = TaskAllFilter().form
     for field, value in form.fields.items():
         if form.fields.get(field) and form.fields[field].widget.attrs.get("id"):
-            del form.fields[field].widget.attrs["id"]
             form.fields[field].widget.attrs["class"] = "w-100 oh-select oh-select2"
     view_type = "card"
     stages = ProjectStage.objects.filter(project=project).order_by("sequence")
     tasks = Task.objects.filter(project=project)
     form.fields["stage"].queryset = ProjectStage.objects.filter(project=project.id)
-    if request.GET.get("view") == "list" or request.GET.get("view") == None:
+    if request.GET.get("view") == "list":
         view_type = "list"
     context = {
         "view_type": view_type,
@@ -764,7 +767,9 @@ def task_view(request, project_id, **kwargs):
 @login_required
 @hx_request_required
 def quick_create_task(request, stage_id):
-    project_stage = ProjectStage.objects.get(id=stage_id)
+    project_stage = ProjectStage.objects.filter(id=stage_id).first()
+    if not project_stage:
+        return HttpResponse()
     hx_target = request.META.get("HTTP_HX_TARGET")
     if can_add_task_to_project(request, project_stage.project):
         form = QuickTaskForm(
@@ -792,7 +797,7 @@ def quick_create_task(request, stage_id):
                 "hx_target": hx_target,
             },
         )
-    messages.info(request, _("You dont have permission."))
+    messages.info(request, _("You don't have permission."))
     return HorillaRedirect(request)
 
 
@@ -824,7 +829,7 @@ def create_task(request, stage_id):
             "task/new/forms/create_task.html",
             context={"form": form, "stage_id": stage_id},
         )
-    messages.info(request, _("You dont have permission."))
+    messages.info(request, _("You don't have permission."))
     return HorillaRedirect(request)
 
 
@@ -862,7 +867,7 @@ def create_task_in_project(request, project_id):
         return render(
             request, "task/new/forms/create_task_project.html", context=context
         )
-    messages.info(request, _("You dont have permission."))
+    messages.info(request, _("You don't have permission."))
     return HorillaRedirect(request)
 
 
@@ -948,11 +953,7 @@ def task_filter(request, project_id):
     For filtering task
     """
     templete = "task/new/task_kanban_view.html"
-    if (
-        request.GET.get("view") == "list"
-        or request.GET.get("view") == None
-        or request.GET.get("view") == ""
-    ):
+    if request.GET.get("view") == "list":
         templete = "task/new/task_list_view.html"
     tasks = TaskFilter(request.GET).qs.filter(project_id=project_id)
     stages = (
@@ -1430,8 +1431,15 @@ def delete_project_stage(request, stage_id):
     else:
         messages.warning(request, _("Can't Delete. This stage contain some tasks"))
     if request.META.get("HTTP_HX_REQUEST"):
+        # view_type is request-controlled and lands inside a single-quoted
+        # attribute in hand-built HTML; format_html escapes it.
         return HttpResponse(
-            f"<span hx-get='/project/task-filter/{project_id}/?view={view_type}' hx-trigger='load' hx-target='#viewContainer'></span>"
+            format_html(
+                "<span hx-get='/project/task-filter/{}/?view={}' "
+                "hx-trigger='load' hx-target='#viewContainer'></span>",
+                project_id,
+                view_type,
+            )
         )
     task_view_url = reverse("task-view", args=[project_id])
     redirected_url = f"{task_view_url}?view={view_type}"
@@ -1851,7 +1859,7 @@ def time_sheet_update(request, time_sheet_id):
             },
         )
     else:
-        messages.error(request, _("You dont have permission."))
+        messages.error(request, _("You don't have permission."))
         return HorillaRedirect(request)
 
 

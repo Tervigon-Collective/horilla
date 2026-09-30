@@ -14,6 +14,7 @@ from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils.translation import gettext as __
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
 
 from base.forms import MailTemplateForm
@@ -395,11 +396,10 @@ def remove_stage_manager(request, mid, sid):
     notify.send(
         request.user.employee_get,
         recipient=manager.employee_user_id,
-        verb=f"You are removed from stage managers from stage {stage_obj}",
-        verb_ar=f"تمت إزالتك من مديري المرحلة من المرحلة {stage_obj}",
-        verb_de=f"Sie wurden als Bühnenmanager von der Stufe {stage_obj} entfernt",
-        verb_es=f"Has sido eliminado/a de los gerentes de etapa de la etapa {stage_obj}",
-        verb_fr=f"Vous avez été supprimé(e) en tant que responsable de l'étape {stage_obj}",
+        verb=gettext_noop(
+            "You are removed from stage managers from stage %(stage_obj)s"
+        ),
+        verb_params={"stage_obj": str(stage_obj)},
         icon="person-remove",
         redirect="",
     )
@@ -448,12 +448,10 @@ def remove_recruitment_manager(request, mid, rid):
     notify.send(
         request.user.employee_get,
         recipient=manager.employee_user_id,
-        verb=f"You are removed from recruitment manager from {recruitment_obj}",
-        verb_ar=f"تمت إزالتك من وظيفة مدير التوظيف في {recruitment_obj}",
-        verb_de=f"Sie wurden als Personalvermittler von {recruitment_obj} entfernt",
-        verb_es=f"Has sido eliminado/a como gerente de contratación de {recruitment_obj}",
-        verb_fr=f"Vous avez été supprimé(e) en tant que responsable\
-                du recrutement de {recruitment_obj}",
+        verb=gettext_noop(
+            "You are removed from recruitment manager from %(recruitment_obj)s"
+        ),
+        verb_params={"recruitment_obj": str(recruitment_obj)},
         icon="person-remove",
         redirect="",
     )
@@ -539,6 +537,7 @@ def get_template_hint(request, obj_id=None):
 
 
 @login_required
+@hx_request_required
 def get_mail_preview(request):
     """
     Returns the mail template preview as HTML.
@@ -583,10 +582,4 @@ def get_mail_preview(request):
             f"</p>{rendered_body}"
         )
 
-    # Wrap in styled div
-    textarea_field = (
-        f'<div class="oh-input oh-input--textarea" '
-        f'style="border: solid .1px #dbd7d7; padding:5px;">{rendered_body}</div>'
-    )
-
-    return HttpResponse(textarea_field, content_type="text/html")
+    return HttpResponse(rendered_body, content_type="text/html")

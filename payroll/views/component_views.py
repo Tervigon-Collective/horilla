@@ -24,6 +24,7 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django.views.decorators.cache import never_cache
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, Side
@@ -320,8 +321,10 @@ def payroll_calculation(
 
     net_pay = gross_pay - total_deductions
     # loss_of_pay        -> actual lop amount
-    # loss_of_pay_amount -> actual lop if deduct from basic-
-    #                       pay from contract is enabled
+    # loss_of_pay_amount -> actual lop amount, but only when it wasn't
+    #                       already subtracted from basic_pay above (i.e.
+    #                       zero when deduct_leave_from_basic_pay is
+    #                       enabled, since basic_pay already reflects it)
     net_pay = compute_net_pay(
         net_pay=net_pay,
         gross_pay=gross_pay,
@@ -409,7 +412,9 @@ def allowances_deductions_tab(request, emp_id):
     user = request.user
     employee_deductions = []
     employee_allowances = []
-    employee = Employee.objects.get(id=emp_id)
+    employee = Employee.objects.filter(id=emp_id).first()
+    if not employee:
+        return HttpResponse()
     if getattr(user, "employee_get", None) != employee and not (
         user.has_perm("payroll.view_allowance")
         and user.has_perm("payroll.view_deduction")
@@ -1169,11 +1174,7 @@ def generate_payslip(request):
                 notify.send(
                     request.user.employee_get,
                     recipient=employee.employee_user_id,
-                    verb="Payslip has been generated for you.",
-                    verb_ar="تم إصدار كشف راتب لك.",
-                    verb_de="Gehaltsabrechnung wurde für Sie erstellt.",
-                    verb_es="Se ha generado la nómina para usted.",
-                    verb_fr="La fiche de paie a été générée pour vous.",
+                    verb=gettext_noop("Payslip has been generated for you."),
                     redirect=reverse(
                         "view-created-payslip", kwargs={"payslip_id": instance.id}
                     ),
@@ -1339,11 +1340,7 @@ def create_payslip(request, new_post_data=None):
                 notify.send(
                     request.user.employee_get,
                     recipient=employee.employee_user_id,
-                    verb="Payslip has been generated for you.",
-                    verb_ar="تم إصدار كشف راتب لك.",
-                    verb_de="Gehaltsabrechnung wurde für Sie erstellt.",
-                    verb_es="Se ha generado la nómina para usted.",
-                    verb_fr="La fiche de paie a été générée pour vous.",
+                    verb=gettext_noop("Payslip has been generated for you."),
                     redirect=reverse(
                         "view-created-payslip", kwargs={"payslip_id": payslip.pk}
                     ),
@@ -1352,7 +1349,7 @@ def create_payslip(request, new_post_data=None):
                 return HorillaRedirect(
                     request,
                     redirect_to=reverse(
-                        "view-payslip", kwargs={"payslip_id": payslip.pk}
+                        "view-created-payslip", kwargs={"payslip_id": payslip.pk}
                     ),
                 )
     return render(
@@ -1588,7 +1585,7 @@ def payslip_export(request):
     """
     if not has_export_access(request, Payslip):
         return HorillaRedirect(
-            request, message=_("You dont have access to export this data")
+            request, message=_("You don't have access to export this data")
         )
 
     if request.META.get("HTTP_HX_REQUEST"):
@@ -1659,7 +1656,7 @@ def payslip_export(request):
             if column_name == "Status":
                 data = choices_mapping.get(value, "")
 
-            if type(value) == date:
+            if type(value) is date:
                 date_format = request.user.employee_get.get_date_format()
                 start_date = datetime.strptime(str(value), "%Y-%m-%d").date()
 
@@ -1788,7 +1785,7 @@ def add_bonus(request):
                     return HorillaRedirect(
                         request,
                         redirect_to=reverse(
-                            "view-payslip", kwargs={"payslip_id": payslip.id}
+                            "view-created-payslip", kwargs={"payslip_id": payslip.id}
                         ),
                     )
                 else:
@@ -1851,7 +1848,9 @@ def add_deduction(request):
 
             return HorillaRedirect(
                 request,
-                redirect_to=reverse("view-payslip", kwargs={"payslip_id": payslip.id}),
+                redirect_to=reverse(
+                    "view-created-payslip", kwargs={"payslip_id": payslip.id}
+                ),
             )
 
     else:
@@ -2371,11 +2370,9 @@ def approve_reimbursements(request):
                     notify.send(
                         request.user.employee_get,
                         recipient=emp.employee_user_id,
-                        verb="Your reimbursement request has been rejected.",
-                        verb_ar="تم رفض طلب استرداد النفقات الخاص بك.",
-                        verb_de="Ihr Erstattungsantrag wurde abgelehnt.",
-                        verb_es="Su solicitud de reembolso ha sido rechazada.",
-                        verb_fr="Votre demande de remboursement a été rejetée.",
+                        verb=gettext_noop(
+                            "Your reimbursement request has been rejected."
+                        ),
                         redirect=reverse("view-reimbursement")
                         + f"?id={reimbursement.id}",
                         icon="checkmark",
@@ -2384,11 +2381,9 @@ def approve_reimbursements(request):
                     notify.send(
                         request.user.employee_get,
                         recipient=emp.employee_user_id,
-                        verb="Your reimbursement request has been approved.",
-                        verb_ar="تمت الموافقة على طلب استرداد نفقاتك.",
-                        verb_de="Ihr Rückerstattungsantrag wurde genehmigt.",
-                        verb_es="Se ha aprobado tu solicitud de reembolso.",
-                        verb_fr="Votre demande de remboursement a été approuvée.",
+                        verb=gettext_noop(
+                            "Your reimbursement request has been approved."
+                        ),
                         redirect=reverse("view-reimbursement")
                         + f"?id={reimbursement.id}",
                         icon="checkmark",
@@ -2425,11 +2420,7 @@ def delete_reimbursements(request):
         notify.send(
             request.user.employee_get,
             recipient=recipients,
-            verb="Your reimbursement request has been deleted.",
-            verb_ar="تم حذف طلب استرداد نفقاتك.",
-            verb_de="Ihr Rückerstattungsantrag wurde gelöscht.",
-            verb_es="Tu solicitud de reembolso ha sido eliminada.",
-            verb_fr="Votre demande de remboursement a été supprimée.",
+            verb=gettext_noop("Your reimbursement request has been deleted."),
             redirect="/",
             icon="trash",
         )
@@ -2920,7 +2911,7 @@ def payslip_detailed_export(request):
                 cell.font = Font(bold=True)
             cell.border = thin_border
 
-    for col_num, _ in enumerate(header_row, 1):
+    for col_num, _unused in enumerate(header_row, 1):
         max_length = max(
             len(str(cell.value))
             for cell in ws[get_column_letter(col_num)]

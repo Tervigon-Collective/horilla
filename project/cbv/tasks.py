@@ -208,25 +208,33 @@ class TasksNavBar(HorillaNavView):
     filter_instance = TaskAllFilter()
     search_swap_target = "#listContainer"
     filter_body_template = "cbv/tasks/task_filter.html"
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. TaskAllFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.search_url = reverse("tasks-list-view")
+        # Card is the default landing view for Tasks -- see TaskCardView's
+        # custom_card_content_template for the assignees/due-date/manager/
+        # status additions that make the card useful as the primary view.
+        self.search_url = reverse("tasks-card-view")
         self.view_types = [
-            {
-                "type": "list",
-                "icon": "list-outline",
-                "url": reverse("tasks-list-view"),
-                "attrs": f"""
-                    title ='{_("List")}'
-                """,
-            },
             {
                 "type": "card",
                 "icon": "grid-outline",
                 "url": reverse("tasks-card-view"),
                 "attrs": f"""
                     title ='{_("Card")}'
+                """,
+            },
+            {
+                "type": "list",
+                "icon": "list-outline",
+                "url": reverse("tasks-list-view"),
+                "attrs": f"""
+                    title ='{_("List")}'
                 """,
             },
         ]
@@ -550,6 +558,7 @@ class TaskCardView(HorillaKanbanView):
     filter_keys_to_remove = ["field"]
     group_key = "status"
     show_kanban_confirmation = False
+    custom_card_content_template = "cbv/tasks/task_card_extra.html"
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -617,7 +626,6 @@ class TaskCardView(HorillaKanbanView):
         "title": "{title}",
         "Project": "{if_project}",
         "Stage": "{stage}",
-        "End Date": "{end_date}",
     }
 
     kanban_attrs = """

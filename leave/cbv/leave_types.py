@@ -12,6 +12,7 @@ from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.text import format_lazy
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from employee.models import Employee
 from horilla_views.cbv_methods import login_required, permission_required
@@ -25,9 +26,19 @@ from horilla_views.generic.cbv.views import (
 )
 from leave.filters import LeaveTypeFilter
 from leave.forms import AssignLeaveForm, LeaveOneAssignForm
-from leave.models import AvailableLeave, LeaveType
+from leave.models import AvailableLeave, LeaveGeneralSetting, LeaveType
 from leave.services import evaluate_leave_type_conditions
 from notifications.signals import notify
+
+
+def _exclude_disabled_compensatory_leave(queryset):
+    """Hide the Compensatory Leave type unless the feature is actually
+    enabled.
+    """
+    setting = LeaveGeneralSetting.objects.first()
+    if setting and setting.compensatory_leave:
+        return queryset
+    return queryset.exclude(is_compensatory_leave=True)
 
 
 @method_decorator(login_required, name="dispatch")
@@ -57,6 +68,9 @@ class LeaveTypeListView(HorillaListView):
 
     filter_class = LeaveTypeFilter
     model = LeaveType
+
+    def get_queryset(self):
+        return _exclude_disabled_compensatory_leave(super().get_queryset())
 
     columns = [
         (_("Leave Type"), "name", "get_avatar"),
@@ -159,6 +173,11 @@ class LeaveTypeNavView(HorillaNavView):
     filter_instance = LeaveTypeFilter()
     search_swap_target = "#listContainer"
     template_name = "generic/inline_nav.html"
+    # Modern slide-over filter panel (generic/inline_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. LeaveTypeFilter has no FK/M2M fields, so no
+    # ajax_fields are needed here.
+    modern_filter = True
 
 
 @method_decorator(login_required, name="dispatch")
@@ -192,6 +211,8 @@ class LeaveTypeDetailView(HorillaDetailedView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         instance = self.instance
+        if not instance:
+            return context
         body = list(self.body)
 
         # Function to insert item after a specific key
@@ -249,6 +270,9 @@ class LeaveTypeCardView(HorillaCardView):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.search_url = reverse("leave-type-card-view")
+
+    def get_queryset(self):
+        return _exclude_disabled_compensatory_leave(super().get_queryset())
 
     details = {
         "image_src": "get_avatar",
@@ -409,11 +433,9 @@ class LeaveTypeAssignForm(HorillaFormView):
                                 notify.send(
                                     self.request.user.employee_get,
                                     recipient=employee.employee_user_id,
-                                    verb="New leave type is assigned to you",
-                                    verb_ar="تم تعيين نوع إجازة جديد لك",
-                                    verb_de="Ihnen wurde ein neuer Urlaubstyp zugewiesen",
-                                    verb_es="Se le ha asignado un nuevo tipo de permiso",
-                                    verb_fr="Un nouveau type de congé vous a été attribué",
+                                    verb=gettext_noop(
+                                        "New leave type is assigned to you"
+                                    ),
                                     icon="people-circle",
                                     redirect=reverse("user-request-view"),
                                 )
@@ -425,7 +447,7 @@ class LeaveTypeAssignForm(HorillaFormView):
                 else:
                     messages.info(
                         self.request,
-                        _("Compensatory leave type cant assigned manually"),
+                        _("Compensatory leave type can't assigned manually"),
                     )
 
             return self.HttpResponse()

@@ -121,7 +121,6 @@ class HolidayNavView(HorillaNavView):
                         data-target = "#genericModal"
                         hx-target="#genericModalBody"
                         hx-get ="{reverse('holiday-nav-export')}"
-                        hx-vals='js:{{"has_selection": (JSON.parse(document.getElementById("selectedInstances")?.getAttribute("data-ids")||"[]").length>0)}}'
                         style="cursor: pointer;"
                     """,
                 }
@@ -144,6 +143,11 @@ class HolidayNavView(HorillaNavView):
     filter_instance = HolidayFilter()
     search_swap_target = "#listContainer"
     template_name = "generic/inline_nav.html"
+    # Modern slide-over filter panel (generic/inline_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. HolidayFilter has no FK/M2M fields, so no
+    # ajax_fields are needed here.
+    modern_filter = True
 
 
 @method_decorator(login_required, name="dispatch")
@@ -188,7 +192,6 @@ class HolidayExport(TemplateView):
         context = super().get_context_data(**kwargs)
         context["export_column"] = export_column
         context["export_filter"] = export_filter
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context
 
 

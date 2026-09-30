@@ -10,6 +10,7 @@ from django.shortcuts import render
 from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from base.cbv.settings_rotatingwork import DynamicRotatingWorkTypeCreate
 from base.decorators import manager_can_enter
@@ -197,7 +198,6 @@ class RotatingWorkNavView(HorillaNavView):
                     data-target = "#genericModal"
                     hx-target="#genericModalBody"
                     hx-get ="{reverse('rotating-action-export')}"
-                    hx-vals='js:{{"has_selection": (JSON.parse(document.getElementById("selectedInstances")?.getAttribute("data-ids")||"[]").length>0)}}'
                     style="cursor: pointer;"
                 """,
                 },
@@ -218,6 +218,12 @@ class RotatingWorkNavView(HorillaNavView):
     filter_instance = RotatingWorkTypeAssignFilter()
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel (generic/inline_nav.html's own
+    # {% if modern_filter %} branch, mirroring horilla_nav.html's
+    # .oh-filter-modern styles) -- same treatment as every other panel
+    # this session. RotatingWorkTypeAssignFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
 
     group_by_fields = [
         ("employee_id", _("Employee")),
@@ -264,8 +270,15 @@ class RotatingWorkDetailView(HorillaDetailedView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        instance = context["object"]
-        instance.ordered_ids = context["instance_ids"]
+        instance = context.get("object")
+        if instance is None:
+            # No matching row (e.g. a stale/invalid pk) -- the parent's own
+            # get_context_data already skips setting instance_ids for this
+            # case, and its get() renders empty_template / redirects with
+            # "No record found" once this returns, so there's nothing to
+            # attach ordered_ids to here.
+            return context
+        instance.ordered_ids = context.get("instance_ids", [])
         return context
 
 
@@ -291,7 +304,6 @@ class RotatingWorkExport(TemplateView):
         context = super().get_context_data(**kwargs)
         context["export_columns"] = export_columns
         context["export_filter"] = export_filter
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context
 
 
@@ -307,6 +319,17 @@ class RotatingWorkTypeFormView(HorillaFormView):
 
     new_display_title = _("Rotating Work Type Assign")
     dynamic_create_fields = [("rotating_work_type_id", DynamicRotatingWorkTypeCreate)]
+
+    def dispatch(self, request, *args, **kwargs):
+        # This endpoint returns only the modal form fragment, loaded from an
+        # employee's individual profile "Work Type" tab via ?emp_id=. There's
+        # no generic standalone page for it to send a genuine top-level
+        # navigation to, so show nothing instead of the raw, unstyled
+        # fragment (whose "search and pick" modal isn't hidden without
+        # site CSS).
+        if request.headers.get("Sec-Fetch-Mode") == "navigate":
+            return HttpResponse()
+        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -351,11 +374,7 @@ class RotatingWorkTypeFormView(HorillaFormView):
                 notify.send(
                     self.request.user.employee_get,
                     recipient=users,
-                    verb="You are added to rotating work type",
-                    verb_ar="تمت إضافتك إلى نوع العمل المتناوب",
-                    verb_de="Sie werden zum rotierenden Arbeitstyp hinzugefügt",
-                    verb_es="Se le agrega al tipo de trabajo rotativo",
-                    verb_fr="Vous êtes ajouté au type de travail rotatif",
+                    verb=gettext_noop("You are added to rotating work type"),
                     icon="infinite",
                     redirect=reverse("employee-profile"),
                 )

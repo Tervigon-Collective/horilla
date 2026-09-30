@@ -121,7 +121,7 @@ class LoanListView(HorillaListView):
         (_("Title"), "title"),
         (_("Provided Date"), "provided_date"),
         (_("Installment Start Date"), "installment_start_date"),
-        (_("Toatal Installments"), "installments"),
+        (_("Total Installments"), "installments"),
         (_("Amount"), "loan_amount"),
         (_("Description"), "description"),
         (_("Progress Bar"), "progress_bar_col"),
@@ -131,7 +131,7 @@ class LoanListView(HorillaListView):
         (_("Employee"), "employee_id__get_full_name", "employee_id__get_avatar"),
         (_("Provided Date"), "provided_date"),
         (_("Installment Start Date"), "installment_start_date"),
-        (_("Toatal Installments"), "installments"),
+        (_("Total Installments"), "installments"),
         (_("Amount"), "loan_amount"),
     ]
 
@@ -219,6 +219,12 @@ class _LoanTabNavBase(HorillaNavView):
              data-target="#genericModal"
              data-toggle="oh-modal-toggle"
          """
+
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. LoanAccountFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
 
 
 @method_decorator(login_required, name="dispatch")
@@ -324,7 +330,9 @@ class LoanDetailView(HorillaDetailedView):
     def get_context_data(self, **kwargs: Any):
         context = super().get_context_data(**kwargs)
         pk = self.kwargs.get("pk")
-        loan = LoanAccount.objects.get(id=pk)
+        loan = LoanAccount.objects.filter(id=pk).first()
+        if not loan:
+            return context
         installments = list(loan.deduction_ids.all())
         self._attach_installment_payslips(installments)
         loan_id = self.request.GET.get("loan_id")
@@ -379,10 +387,11 @@ class LoanFormView(HorillaFormView):
 
     def get_form(self, form_class=None):
         form = super().get_form(form_class)
-        if not form.instance.pk:
+        if not getattr(form.instance, "pk", None):
             # Each tab only ever creates its own type, so there's nothing
             # for the user to choose here.
-            form.instance.type = self.loan_type
+            if form.instance is not None:
+                form.instance.type = self.loan_type
         form.fields.pop("type", None)
         return form
 

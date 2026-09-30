@@ -153,10 +153,7 @@ class ListCandidates(HorillaListView):
         super().__init__(**kwargs)
         self.export_fields = []
         self.search_url = reverse("list-candidate")
-        if self.request.user.has_perm("recruitment.change_candidate"):
-            self.option_method = "options"
-        else:
-            self.option_method = None
+        self.option_method = None
         self.action_method = "actions_col"
 
         unique_questions = RecruitmentSurvey.objects.values("question").annotate(
@@ -196,11 +193,8 @@ class ListCandidates(HorillaListView):
     default_columns = columns
 
     header_attrs = {
-        "option": """
-                   style ="width : 180px !important;"
-                   """,
         "action": """
-                   style ="width : 150px !important;"
+                   style ="width : 260px !important;"
                    """,
         "email": """
                    style ="width : 200px !important;"
@@ -710,7 +704,6 @@ class CandidateNav(HorillaNavView):
                  data-target="#genericModal"
                  hx-get="{reverse('export')}"
                  hx-target="#genericModalBody"
-                 hx-vals='js:{{"has_selection": (JSON.parse(document.getElementById("selectedInstances")?.getAttribute("data-ids")||"[]").length>0)}}'
                  """,
                 }
             )
@@ -781,6 +774,11 @@ class CandidateNav(HorillaNavView):
     filter_body_template = "cbv/candidates/filter.html"
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. CandidateFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
     group_by_fields = [
         ("recruitment_id", _("Recruitment")),
         ("job_position_id", _("Job Position")),
@@ -835,7 +833,6 @@ class ExportView(TemplateView):
         export_filter = CandidateFilter(queryset=candidates)
         context["export_column"] = export_column
         context["export_filter"] = export_filter
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context
 
 
@@ -916,6 +913,7 @@ class CandidateDetail(HorillaDetailedView):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(hx_request_required, name="dispatch")
 @method_decorator(
     all_manager_can_enter(perm="recruitment.change_candidate"), name="dispatch"
 )
@@ -927,6 +925,11 @@ class ToSkillZoneFormView(HorillaFormView):
     model = SkillZoneCandidate
     form_class = ToSkillZoneForm
     new_display_title = _("Add to Talent Pool")
+
+    def dispatch(self, request, *args, **kwargs):
+        if not Candidate.objects.filter(id=kwargs.get("cand_id")).exists():
+            return HttpResponse()
+        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         """

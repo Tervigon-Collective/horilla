@@ -3,6 +3,7 @@ base.py — Main Django settings for Horilla
 """
 
 import os
+import sys
 from datetime import timedelta
 from os.path import join
 from pathlib import Path
@@ -60,8 +61,13 @@ INSTALLED_APPS = [
     "widget_tweaks",
     "auditlog",
     "django_apscheduler",
+    "axes",
     "rest_framework",
     "rest_framework_simplejwt",
+    # Backs /auth/logout/ and BLACKLIST_AFTER_ROTATION. Without it a
+    # refresh token stays valid for its full lifetime after logout, and
+    # rotation silently leaves every superseded token usable.
+    "rest_framework_simplejwt.token_blacklist",
     "drf_yasg",
     # Core Horilla apps
     "horilla_auth",
@@ -105,17 +111,66 @@ REST_FRAMEWORK = {
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend"],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        # Subclasses JWTAuthentication to also set the company ContextVar that
+        # HorillaCompanyManager scopes on. CompanyMiddleware cannot do it for
+        # API calls: middleware runs before DRF resolves the token, so it sees
+        # AnonymousUser and returns early, leaving queries unscoped. See
+        # horilla_api/authentication.py.
+        "horilla_api.authentication.TenantScopedJWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
     "EXCEPTION_HANDLER": "horilla_api.exceptions.horilla_api_exception_handler",
     "PAGE_SIZE": 20,
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.ScopedRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        # django-axes already locks an account after AXES_FAILURE_LIMIT bad
+        # passwords, but it counts failures only: a caller can hammer the
+        # login endpoint with valid credentials, or any authenticated
+        # endpoint at any rate, without tripping it. These bound that.
+        #
+        # Deliberately generous. The point is to stop enumeration and
+        # runaway clients, not to police normal use -- the HR UI itself is
+        # a heavy API consumer, and a limit that fires during ordinary work
+        # gets raised until it is meaningless.
+        "anon": env("THROTTLE_ANON", default="60/min"),
+        "user": env("THROTTLE_USER", default="600/min"),
+        # Login is the one unauthenticated write path. Tighter, because a
+        # successful-login flood is how you mint tokens in bulk.
+        "login": env("THROTTLE_LOGIN", default="12/min"),
+        # Export and import walk whole tables and build files; a handful a
+        # minute is well past what a person does.
+        "bulk": env("THROTTLE_BULK", default="6/min"),
+    },
 }
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    # Mobile clients cannot ask a person to sign in every hour, so login now
+    # returns a refresh token and /auth/refresh/ exchanges it. 30 days is the
+    # ordinary choice for a phone app; it is safe to make it this long only
+    # because of the two settings below plus CHECK_REVOKE_TOKEN.
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
+    # Each refresh returns a *new* refresh token and blacklists the one just
+    # used. A stolen refresh token is therefore good for one use, and the
+    # moment the legitimate client refreshes again the theft breaks the chain
+    # visibly instead of granting 30 days of silent access.
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    # Embeds a hash of the user's password in each token and rejects the
+    # token once the stored hash no longer matches, so changing or resetting
+    # a password revokes every token issued before it. Without this an
+    # access token stays valid for its full hour after a password reset,
+    # which is the one window a compromised account cannot be closed --
+    # there is no blacklist for access tokens. /auth/logout/ blacklists the
+    # refresh token, and the refresh endpoint re-checks this claim, so a
+    # password change stops the chain at the next exchange as well.
+    "CHECK_REVOKE_TOKEN": True,
 }
 
 SWAGGER_SETTINGS = {
@@ -139,6 +194,9 @@ APSCHEDULER_RUN_NOW_TIMEOUT = 25  # Seconds
 # MIDDLEWARE
 # ========================================
 MIDDLEWARE = [
+    # First, so every log line emitted while handling the request -- including
+    # ones from middleware below -- carries the correlation id.
+    "horilla.observability.RequestIDMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -160,6 +218,10 @@ MIDDLEWARE = [
     "horilla.horilla_middlewares.SVGSecurityMiddleware",
     "horilla.horilla_middlewares.MissingParameterMiddleware",
     "auditlog.middleware.AuditlogMiddleware",
+    # Last: needs request.user from AuthenticationMiddleware, and
+    # converts a PermissionDenied from the Axes backend into the
+    # lockout response.
+    "axes.middleware.AxesMiddleware",
 ]
 
 ROOT_URLCONF = "horilla.urls"
@@ -224,7 +286,11 @@ if REDIS_URL:
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
-STATICFILES_STORAGE = "whitenoise.storage.CompressedStaticFilesStorage"
+# STATICFILES_STORAGE = "whitenoise.storage.CompressedStaticFilesStorage"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media/")
@@ -269,10 +335,12 @@ TEMPLATES = [
             "context_processors": [
                 "django.template.context_processors.debug",
                 "django.template.context_processors.request",
+                "django.template.context_processors.i18n",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 # Horilla dynamic context processors
                 "horilla.config.get_MENUS",
+                "base.context_processors.horilla_version",
                 "base.context_processors.get_companies",
                 "base.context_processors.white_labelling_company",
                 "base.context_processors.doc_base_url",
@@ -329,6 +397,31 @@ LOCALE_PATHS = [join(BASE_DIR, "horilla", "locale")]
 # ========================================
 # LOGGING, MESSAGES, OTHER GLOBALS
 # ========================================
+# There are ~79 getLogger() call sites and, until now, no LOGGING config, so all
+# of them fell through to Django's defaults: unstructured, uncorrelated, and in
+# production nothing but gunicorn's access log. JSON when DEBUG is off so log
+# aggregators can parse it; human-readable locally.
+from horilla.observability import build_logging_config  # noqa: E402
+
+LOGGING = build_logging_config(
+    debug=DEBUG, level=env("DJANGO_LOG_LEVEL", default="INFO")
+)
+
+# Error tracking. Does nothing unless SENTRY_DSN is set, so an open-source
+# install sends nothing anywhere by default. PII is scrubbed in before_send
+# rather than trusting the receiving project's config -- a stack trace here can
+# hold salaries, bank details and reset tokens.
+from horilla.__version__ import __version__ as _horilla_version  # noqa: E402
+from horilla.observability import init_sentry  # noqa: E402
+
+SENTRY_DSN = env("SENTRY_DSN", default="")
+init_sentry(
+    dsn=SENTRY_DSN,
+    environment=HORILLA_ENV or ("development" if DEBUG else "production"),
+    release=_horilla_version,
+    traces_sample_rate=env.float("SENTRY_TRACES_SAMPLE_RATE", default=0.0),
+)
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 _LOG_DIR = join(BASE_DIR, "logs")
@@ -399,6 +492,9 @@ DJANGO_NOTIFICATIONS_CONFIG = {
 WHITE_LABELLING = False
 NESTED_SUBORDINATE_VISIBILITY = False
 TWO_FACTORS_AUTHENTICATION = False
+# When True, /ready/ returns 503 until run_scheduler has registered jobs.
+# Off by default so Docker CI (web without the scheduler service) still passes.
+HORILLA_REQUIRE_SCHEDULER = env.bool("HORILLA_REQUIRE_SCHEDULER", default=False)
 
 SIDEBARS = [
     "employee",
@@ -564,11 +660,43 @@ DEFAULT_LDAP_CONFIG = {
 # COMPANY_SCOPED_PERMISSIONS is False. It must REPLACE ModelBackend (Django
 # unions grants across backends, so listing both would keep global perms).
 AUTHENTICATION_BACKENDS = [
+    # MUST be first: AxesStandaloneBackend short-circuits authenticate() for a
+    # locked-out user, so any backend listed ahead of it would still verify the
+    # password and let an attacker keep testing credentials.
+    "axes.backends.AxesStandaloneBackend",
     "base.auth_backends.CompanyScopedBackend",
     # "django_auth_ldap.backend.LDAPBackend",
 ]
 
 AUTH_LDAP_ALWAYS_UPDATE_USER = True
+
+# ========================================
+# BRUTE-FORCE PROTECTION (django-axes)
+# ========================================
+# The login view previously accepted unlimited attempts: no counter, no
+# lockout, no delay, and no rate limiting at the proxy either.
+#
+# Lock on the (username, IP) pair rather than IP alone -- IP-only locks out
+# everyone behind a shared NAT when one account is attacked, and username-only
+# lets an attacker lock a known user out on purpose (a denial-of-service).
+AXES_FAILURE_LIMIT = env.int("AXES_FAILURE_LIMIT", default=5)
+AXES_COOLOFF_TIME = timedelta(minutes=env.int("AXES_COOLOFF_MINUTES", default=30))
+AXES_LOCKOUT_PARAMETERS = [["username", "ip_address"]]
+AXES_RESET_ON_SUCCESS = True
+# Count only real failures; a lockout response is not itself a new attempt.
+AXES_LOCKOUT_TEMPLATE = None
+AXES_ENABLE_ADMIN = True
+# Behind nginx/ELB the client IP is in X-Forwarded-For. Only trust it when the
+# deployment actually sets a proxy count, otherwise a client can spoof the
+# header and dodge the IP half of the lock.
+AXES_IPWARE_PROXY_COUNT = env.int("AXES_PROXY_COUNT", default=None)
+# With no proxy count declared, ipware takes the first X-Forwarded-For value
+# as-is, so a client could send a fresh header per attempt and the IP half of
+# the lock never matches. Read the header only when AXES_PROXY_COUNT is set;
+# the shipped compose sets it to 1 for its nginx.
+AXES_IPWARE_META_PRECEDENCE_ORDER = (
+    ["HTTP_X_FORWARDED_FOR"] if AXES_IPWARE_PROXY_COUNT else []
+) + ["REMOTE_ADDR"]
 
 
 # ========================================
@@ -587,5 +715,31 @@ IS_PRODUCTION = is_production_mode(DEBUG, HORILLA_ENV)
 if IS_PRODUCTION:
     validate_production_secrets(SECRET_KEY, ALLOWED_HOSTS, DB_INIT_PASSWORD)
 
-if not DEBUG:
+if IS_PRODUCTION:
+    # Same switch as the secrets gate above: HORILLA_ENV=production must not
+    # pass secret validation and then ship insecure cookies because DEBUG was
+    # left on.
     globals().update(apply_secure_defaults(env, DEBUG))
+
+# Idle-session timeout. Django's default is a fixed two weeks from login;
+# saving the session on every request turns SESSION_COOKIE_AGE into an
+# inactivity window instead, which is what access-control audits ask for.
+SESSION_COOKIE_AGE = env.int("SESSION_COOKIE_AGE", default=12 * 60 * 60)
+SESSION_SAVE_EVERY_REQUEST = True
+
+# Rate limiting is production protection, not behaviour the rest of the suite
+# should have to work around. Throttle counters live in the cache keyed by
+# client IP, and the test client always presents the same one, so every login
+# the suite makes accumulates into a single bucket: with six API test modules
+# logging in, later tests fail with 429 for reasons unrelated to what they
+# assert.
+#
+# Disabling the rates here rather than clearing the cache per test keeps the
+# mechanism in one place. horilla_api/tests/test_throttling.py still proves
+# the throttles work, because it sets its own rate on
+# SimpleRateThrottle.THROTTLE_RATES -- the class attribute the throttle
+# actually reads -- rather than relying on these settings.
+if "test" in sys.argv:
+    REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {
+        scope: None for scope in REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]
+    }

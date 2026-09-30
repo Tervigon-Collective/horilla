@@ -14,7 +14,7 @@ import pandas as pd
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from django.db.models import F, Q
+from django.db.models import F, Q, Sum
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
@@ -25,6 +25,7 @@ from attendance.methods.utils import (
     attendance_date_validate,
     format_time,
     get_diff_dict,
+    month_date_range,
     strtime_seconds,
     validate_hh_mm_ss_format,
     validate_time_format,
@@ -402,6 +403,59 @@ class Attendance(HorillaModel):
         if self.request_type == "created_request":
             return 'style="background-color: #FFE4B3"'
 
+    # Per-column CSS classes for the "Requested Attendances" list. Consumed by
+    # HorillaListView.cell_class_method, which looks the rendered column's
+    # attribute name up in this dict. Kept here (rather than as per-column
+    # {% if %} branches in a forked list template) so the tab renders through
+    # the shared generic table and cannot drift from it again.
+    REQUEST_CELL_FORMAT_CLASSES = {
+        "attendance_date": "dateformat_changer",
+        "attendance_clock_in": "timeformat_changer",
+        "attendance_clock_in_date": "dateformat_changer",
+        "attendance_clock_out": "timeformat_changer",
+        "attendance_clock_out_date": "dateformat_changer",
+    }
+    REQUEST_DIFF_FIELDS = [
+        "attendance_date",
+        "attendance_day",
+        "attendance_clock_in",
+        "attendance_clock_in_date",
+        "attendance_clock_out",
+        "attendance_clock_out_date",
+        "shift_id",
+        "work_type_id",
+        "minimum_hour",
+        "attendance_worked_hour",
+        "attendance_overtime",
+    ]
+
+    def request_cell_classes(self):
+        """
+        Map column attribute -> CSS classes for the attendance request list.
+
+        `diff-cell` shades the fields this request actually wants changed, so a
+        reviewer can see at a glance what differs. `requested_fields` re-parses
+        the requested JSON on every call, and the template resolves this once
+        per rendered column, so memoise the whole map per instance.
+        """
+        cached = getattr(self, "_request_cell_classes", None)
+        if cached is not None:
+            return cached
+        highlight_all = self.request_type == "create_request"
+        changed = set() if highlight_all else set(self.requested_fields())
+        classes = {}
+        for field in self.REQUEST_DIFF_FIELDS:
+            names = []
+            if highlight_all or field in changed:
+                names.append("diff-cell")
+            format_class = self.REQUEST_CELL_FORMAT_CLASSES.get(field)
+            if format_class:
+                names.append(format_class)
+            if names:
+                classes[field] = " ".join(names)
+        self._request_cell_classes = classes
+        return classes
+
     def status_col(self):
         """
         This method for get custome coloumn for rating.
@@ -443,6 +497,22 @@ class Attendance(HorillaModel):
         """
 
         unique_together = ("employee_id", "attendance_date")
+        # The unique_together above yields a (employee_id, attendance_date)
+        # index, which serves lookups that pin an employee. It cannot serve a
+        # date-range scan that does not -- which is what every dashboard and
+        # report does -- because attendance_date is not the leading column.
+        indexes = [
+            models.Index(
+                fields=["attendance_date"],
+                name="attendance_date_idx",
+            ),
+            # Validation queues and payroll both filter unvalidated rows
+            # within a period; date leads because it is the selective half.
+            models.Index(
+                fields=["attendance_date", "attendance_validated"],
+                name="attendance_date_validated_idx",
+            ),
+        ]
         permissions = [
             ("change_validateattendance", "Validate Attendance"),
             ("change_approveovertime", "Change Approve Overtime"),
@@ -475,15 +545,6 @@ class Attendance(HorillaModel):
     def __str__(self) -> str:
         return f"{self.employee_id.employee_first_name} \
             {self.employee_id.employee_last_name} - {self.attendance_date}"
-
-    def activities(self):
-        """
-        This method is used to return the activites and count of activites comes for an attendance
-        """
-        activities = AttendanceActivity.objects.filter(
-            attendance_date=self.attendance_date, employee_id=self.employee_id
-        )
-        return {"query": activities, "count": activities.count()}
 
     def attendance_actions(self):
         """
@@ -1146,12 +1207,16 @@ class Attendance(HorillaModel):
         month_attendances = (
             Attendance.objects.filter(
                 employee_id=self.employee_id,
-                attendance_date__month=self.attendance_date.month,
-                attendance_date__year=self.attendance_date.year,
+                # Range rather than __month/__year: those wrap the column in a
+                # database function, which a B-tree index on attendance_date
+                # cannot serve.
+                attendance_date__range=month_date_range(
+                    self.attendance_date.year, self.attendance_date.month
+                ),
                 attendance_validated=True,
             )
             .exclude(exclude_condition)
-            .values("minimum_hour", "at_work_second")
+            .values("minimum_hour", "at_work_second", "attendance_worked_hour")
         )
 
         # Calculate hour balance and hours pending in a single loop
@@ -1159,14 +1224,21 @@ class Attendance(HorillaModel):
         minimum_hour_second = 0
         for attendance in month_attendances:
             required_work_second = strtime_seconds(attendance["minimum_hour"])
-            actual_work_second = attendance["at_work_second"] or 0
-            at_work_second = min(required_work_second, actual_work_second)
+            at_work_second = attendance["at_work_second"]
+            # bulk_create leaves the integer empty and the worked-hour string set.
+            if at_work_second is None:
+                at_work_second = strtime_seconds(
+                    attendance["attendance_worked_hour"] or "00:00"
+                )
+            at_work_second = min(required_work_second, at_work_second)
             hour_balance += at_work_second
             minimum_hour_second += required_work_second
 
         hours_pending = minimum_hour_second - hour_balance
-        employee_ot.worked_hours = format_time(hour_balance)
-        employee_ot.pending_hours = format_time(hours_pending)
+        # save() rewrites the text fields from these integers. Setting only
+        # the text fields is discarded.
+        employee_ot.hour_account_second = hour_balance
+        employee_ot.hour_pending_second = hours_pending
         employee_ot.save()
 
         return employee_ot
@@ -1422,14 +1494,18 @@ class AttendanceOverTime(HorillaModel):
         """
         This method will return not validated hours in a month
         """
-        hrs_to_vlaidate = sum(
-            second or 0
-            for second in Attendance.objects.filter(
-                attendance_date__month=MONTH_MAPPING[self.month],
-                attendance_date__year=self.year,
+        # Range rather than __month/__year so an index on attendance_date can
+        # be used, and Sum() rather than pulling every row into Python to add
+        # up -- the database can do this without transferring the rows.
+        hrs_to_vlaidate = (
+            Attendance.objects.filter(
+                attendance_date__range=month_date_range(
+                    self.year, MONTH_MAPPING[self.month]
+                ),
                 employee_id=self.employee_id,
                 attendance_validated=False,
-            ).values_list("at_work_second", flat=True)
+            ).aggregate(total=Sum("at_work_second"))["total"]
+            or 0
         )
         return format_time(hrs_to_vlaidate)
 
@@ -1437,17 +1513,17 @@ class AttendanceOverTime(HorillaModel):
         """
         This method will return the overtime hours to be approved
         """
-        hrs_to_approve = sum(
-            list(
-                Attendance.objects.filter(
-                    attendance_date__month=MONTH_MAPPING[self.month],
-                    attendance_date__year=self.year,
-                    employee_id=self.employee_id,
-                    attendance_validated=True,
-                    attendance_overtime_approve=False,
-                    overtime_second__isnull=False,
-                ).values_list("overtime_second", flat=True)
-            )
+        hrs_to_approve = (
+            Attendance.objects.filter(
+                attendance_date__range=month_date_range(
+                    self.year, MONTH_MAPPING[self.month]
+                ),
+                employee_id=self.employee_id,
+                attendance_validated=True,
+                attendance_overtime_approve=False,
+                overtime_second__isnull=False,
+            ).aggregate(total=Sum("overtime_second"))["total"]
+            or 0
         )
         return format_time(hrs_to_approve)
 

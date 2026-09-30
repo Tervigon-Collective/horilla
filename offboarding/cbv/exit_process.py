@@ -12,14 +12,17 @@ from django.apps import apps
 from django.contrib import messages
 from django.db.models import Count
 from django.http import HttpResponse, JsonResponse
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
+from django.utils.html import escapejs
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django.views import View
 
 from base.context_processors import intial_notice_period
 from base.methods import eval_validate
+from horilla.http.response import HorillaRedirect
 from horilla.methods import get_horilla_model_class
 from horilla_views.cbv_methods import (
     hx_request_required,
@@ -79,7 +82,10 @@ def offboarding_pipeline_modal_success_response(request) -> HttpResponse:
     if qs:
         tab_url = f"{tab_url}?{qs}"
 
-    tab_url_lit = json.dumps(tab_url)
+    # json.dumps escapes quotes but NOT "</script>", so a crafted value
+    # could close the script block that this literal is embedded in.
+    # escapejs encodes angle brackets as \u003C/\u003E.
+    tab_url_lit = f'"{escapejs(tab_url)}"'
 
     snippet = rf"""
 <script>
@@ -107,6 +113,7 @@ def offboarding_pipeline_modal_success_response(request) -> HttpResponse:
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(hx_request_required, name="dispatch")
 @method_decorator(
     offboarding_manager_can_enter("offboarding.add_offboardingstage"), name="dispatch"
 )
@@ -119,10 +126,23 @@ class OffboardingStageFormView(HorillaFormView):
     model = OffboardingStage
     new_display_title = _("Create Offboarding Stage")
 
+    def dispatch(self, request, *args, **kwargs):
+        # Creating a new stage requires knowing which offboarding process it
+        # belongs to; with no pk (editing an existing stage) and no
+        # offboarding_id, there's nothing sensible to show.
+        if (
+            request.method == "GET"
+            and not kwargs.get("pk")
+            and not request.GET.get("offboarding_id")
+        ):
+            return HttpResponse()
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        offboarding_id = self.request.GET["offboarding_id"]
-        self.form.fields["offboarding_id"].initial = offboarding_id
+        offboarding_id = self.request.GET.get("offboarding_id")
+        if offboarding_id:
+            self.form.fields["offboarding_id"].initial = offboarding_id
         self.form.fields["offboarding_id"].widget = forms.HiddenInput()
         if self.form.instance.pk:
             self.form_class.verbose_name = _("Update Offboarding Stage")
@@ -155,6 +175,18 @@ class OffboardingStageAddEmployeeForm(HorillaFormView):
     model = OffboardingEmployee
     new_display_title = _("Add Employee")
 
+    def dispatch(self, request, *args, **kwargs):
+        # Adding a new employee requires knowing which stage to add them to;
+        # with no pk (editing an existing entry) and no stage_id, there's
+        # nothing sensible to show.
+        if (
+            request.method == "GET"
+            and not kwargs.get("pk")
+            and not request.GET.get("stage_id")
+        ):
+            return HttpResponse()
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         default_notice_period = (
@@ -182,11 +214,13 @@ class OffboardingStageAddEmployeeForm(HorillaFormView):
                 notify.send(
                     self.request.user.employee_get,
                     recipient=instance.employee_id.employee_user_id,
-                    verb=f"You have been added to the {stage} of {stage.offboarding_id}",
-                    verb_ar=f"لقد تمت إضافتك إلى {stage} من {stage.offboarding_id}",
-                    verb_de=f"Du wurdest zu {stage} von {stage.offboarding_id} hinzugefügt",
-                    verb_es=f"Has sido añadido a {stage} de {stage.offboarding_id}",
-                    verb_fr=f"Vous avez été ajouté à {stage} de {stage.offboarding_id}",
+                    verb=gettext_noop(
+                        "You have been added to the %(stage)s of %(offboarding_id)s"
+                    ),
+                    verb_params={
+                        "stage": str(stage),
+                        "offboarding_id": str(stage.offboarding_id),
+                    },
                     redirect=reverse("offboarding-pipeline"),
                     icon="information",
                 )
@@ -240,6 +274,14 @@ class OffboardingTaskFormView(HorillaFormView):
     model = OffboardingTask
     form_class = TaskForm
     new_display_title = _("Create Task")
+
+    def dispatch(self, request, *args, **kwargs):
+        # This endpoint returns only the modal form fragment; a genuine
+        # top-level browser navigation/reload should land on the real
+        # Offboarding Pipeline page instead of showing the raw fragment.
+        if request.headers.get("Sec-Fetch-Mode") == "navigate":
+            return redirect(reverse("offboarding-pipeline"))
+        return super().dispatch(request, *args, **kwargs)
 
     def get_initial(self) -> dict:
         initial = super().get_initial()
@@ -319,7 +361,6 @@ class OffboardingPipelineView(HorillaSectionView):
     """
 
     template_name = "cbv/exit_process/pipeline_view.html"
-    nav_url = reverse_lazy("offboarding-pipeline-nav")
     view_url = reverse_lazy("get-offboarding-tab")
     view_container_id = "pipelineContainer"
 
@@ -334,6 +375,12 @@ class OffboardingPipelineView(HorillaSectionView):
 class OffboardingPipelineNav(HorillaNavView):
     """
     Offboarding Pipeline Navigation View
+
+    No longer rendered by the Pipeline page itself, which now follows the
+    Recruitment pipeline and shows its tab view alone - each offboarding
+    tab's own OffboardingPipelineTabNav carries the title, Create button,
+    view-type toggles, Search+Filter and Actions. Kept only because
+    `offboarding-pipeline-nav` is still routed.
     """
 
     nav_title = _("Exit Process")
@@ -341,6 +388,12 @@ class OffboardingPipelineNav(HorillaNavView):
     search_url = reverse_lazy("get-offboarding-tab")
     filter_body_template = "cbv/exit_process/pipeline_filter.html"
     apply_first_filter = False
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. PipelineEmployeeFilter/PipelineFilter/
+    # PipelineStageFilter each carry their own ajax_fields for the FK
+    # pickers this combined panel renders.
+    modern_filter = True
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -381,9 +434,38 @@ class OffboardingPipelineNav(HorillaNavView):
         # field (including "Stage > Status") always renders blank, so that
         # auto-submit silently wipes out any filter (e.g. ?type=archived)
         # that arrived via a deep link before the page ever settles.
-        context["employee_filter"] = PipelineEmployeeFilter(self.request.GET)
-        context["pipeline_filter"] = PipelineFilter(self.request.GET)
-        context["stage_filter"] = PipelineStageFilter(self.request.GET)
+        employee_filter = PipelineEmployeeFilter(self.request.GET)
+        pipeline_filter = PipelineFilter(self.request.GET)
+        stage_filter = PipelineStageFilter(self.request.GET)
+        context["employee_filter"] = employee_filter
+        context["pipeline_filter"] = pipeline_filter
+        context["stage_filter"] = stage_filter
+
+        # This Nav has no single filter_instance of its own (all three
+        # filtersets above are combined into one panel), so the generic
+        # custom_filter_fields/custom_filter_rows context
+        # (HorillaNavView.get_context_data) is never populated -- expose
+        # each filterset's own registry/restore-rows under its own key
+        # instead, matching the namespaced builder each accordion uses
+        # in the template.
+        context["employee_custom_filter_fields"] = getattr(
+            employee_filter, "custom_filter_fields", []
+        )
+        context["employee_custom_filter_rows"] = getattr(
+            employee_filter, "custom_filter_rows", []
+        )
+        context["pipeline_custom_filter_fields"] = getattr(
+            pipeline_filter, "custom_filter_fields", []
+        )
+        context["pipeline_custom_filter_rows"] = getattr(
+            pipeline_filter, "custom_filter_rows", []
+        )
+        context["stage_custom_filter_fields"] = getattr(
+            stage_filter, "custom_filter_fields", []
+        )
+        context["stage_custom_filter_rows"] = getattr(
+            stage_filter, "custom_filter_rows", []
+        )
 
         return context
 
@@ -512,9 +594,15 @@ class OffboardingPipelineContentShell(TemplateView):
 
     template_name = "cbv/exit_process/offboarding_pipeline_shell.html"
 
+    def dispatch(self, request, *args, **kwargs):
+        if not Offboarding.objects.filter(pk=kwargs.get("pk")).exists():
+            messages.error(request, _("No Offboarding found matching the query."))
+            return HorillaRedirect(request)
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        offboarding = get_object_or_404(Offboarding, pk=self.kwargs.get("pk"))
+        offboarding = Offboarding.objects.filter(pk=self.kwargs.get("pk")).first()
         view_type = self.request.GET.get("view", "list")
         content_url = reverse(
             "get-offboarding-stage", kwargs={"offboarding_id": offboarding.pk}
@@ -527,9 +615,120 @@ class OffboardingPipelineContentShell(TemplateView):
         extra_params.pop("view", None)
         if extra_params:
             content_url = f"{content_url}?{extra_params.urlencode()}"
-        context["actions"] = offboarding_pipeline_actions(self.request, offboarding)
         context["content_url"] = content_url
+        context["offboarding"] = offboarding
+        # Always pass the resolved view_type through, not just when ?view=
+        # was explicitly on this shell's own request - HorillaNavView only
+        # marks a view-type button active (oh-view-btn--active) when its
+        # own request carries ?view=, and inline_nav.html's onload script
+        # fires an extra full-board resubmit whenever no button is active.
+        # Checking self.request.GET.get("view") here (truthy only on an
+        # explicit toggle click) left every first visit without an active
+        # button, so the whole board re-fetched itself a second time right
+        # after its first load - doubling load time for large stages.
+        nav_url = reverse("offboarding-pipeline-tab-nav", kwargs={"pk": offboarding.pk})
+        nav_params = self.request.GET.copy()
+        nav_params["view"] = view_type
+        context["nav_url"] = f"{nav_url}?{nav_params.urlencode()}"
         return context
+
+
+@method_decorator(login_required, name="dispatch")
+@method_decorator(
+    any_manager_can_enter(
+        "offboarding.view_offboarding", offboarding_employee_can_enter=True
+    ),
+    name="dispatch",
+)
+class OffboardingPipelineTabNav(HorillaNavView):
+    """
+    Per-offboarding-tab Search+Filter for the Exit Process pipeline.
+
+    The page-level OffboardingPipelineNav's Search+Filter searched/filtered
+    which OFFBOARDINGS show up as tabs - it said nothing about any one
+    offboarding's own employees, and was shared/common across every tab.
+    This Nav is the opposite: one instance per offboarding tab, searching/
+    filtering that offboarding's own employees (PipelineEmployeeFilter),
+    so switching stage/list vs kanban and searching one offboarding's
+    pipeline doesn't touch any other tab. Mirrors
+    recruitment.cbv.pipeline.RecruitmentCandidateNav.
+    """
+
+    filter_form_context_name = "form"
+    filter_body_template = "cbv/exit_process/pipeline_tab_filter.html"
+    filter_instance = PipelineEmployeeFilter()
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as the page-level
+    # OffboardingPipelineNav/pipeline_filter.html. PipelineEmployeeFilter
+    # already carries ajax_fields for the FK pickers this panel renders.
+    modern_filter = True
+    # The shell already fetches this tab's board into
+    # #pipelineTabContent<pk> on its own load, so this Nav must not fire a
+    # second `load` fetch at the same target (see
+    # RecruitmentCandidateNav for the failure mode this avoids).
+    apply_first_filter = True
+    template_name = "generic/inline_nav.html"
+    nav_title = _("Pipeline")
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        offboarding_id = self.request.resolver_match.kwargs.get("pk")
+        view_type = self.request.GET.get("view")
+        if view_type == "list":
+            self.search_url = reverse(
+                "get-offboarding-stage", kwargs={"offboarding_id": offboarding_id}
+            )
+        else:
+            self.search_url = reverse(
+                "get-offboarding-kanban-stage", kwargs={"pk": offboarding_id}
+            )
+        self.search_swap_target = f"#pipelineTabContent{offboarding_id}"
+
+        if self.request.user.has_perm(
+            "offboarding.add_offboardingemployee"
+        ) or is_offboarding_manager(self.request.user.employee_get):
+            first_stage = (
+                OffboardingStage.objects.filter(
+                    offboarding_id=offboarding_id, is_active=True
+                )
+                .order_by("sequence")
+                .first()
+            )
+            if first_stage:
+                self.create_attrs = f"""
+                    data-toggle="oh-modal-toggle"
+                    data-target="#genericModal"
+                    hx-get="{first_stage.get_add_employee_url()}"
+                    hx-target="#genericModalBody"
+                """
+
+        self.view_types = [
+            {
+                "type": "list",
+                "icon": "list-outline",
+                "url": reverse(
+                    "get-offboarding-stage",
+                    kwargs={"offboarding_id": offboarding_id},
+                ),
+                "attrs": """
+                    title ='List'
+                """,
+            },
+            {
+                "type": "card",
+                "icon": "grid-outline",
+                "url": reverse(
+                    "get-offboarding-kanban-stage", kwargs={"pk": offboarding_id}
+                ),
+                "attrs": """
+                    title ='Card'
+                """,
+            },
+        ]
+
+        offboarding = Offboarding.objects.filter(pk=offboarding_id).first()
+        if offboarding:
+            self.actions = offboarding_pipeline_actions(self.request, offboarding)
 
 
 @method_decorator(login_required, name="dispatch")
@@ -597,6 +796,27 @@ class OffboardingPipelineStage(Pipeline):
         )
         self.queryset = queryset.order_by("sequence")
         return self.queryset
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Deep links (dashboard cards/charts/notice-tracker rows, or this
+        # tab's own Employee/Advanced filter panel) narrow which employees
+        # match via PipelineEmployeeFilter -- when one of those is active,
+        # only the stage(s) that actually contain a match should render
+        # open, instead of every stage auto-expanding like a plain,
+        # unfiltered visit does.
+        is_filtered = bool(self.request.GET.get("custom_field")) or any(
+            self.request.GET.get(name) for name in PipelineEmployeeFilter.base_filters
+        )
+        for stage in context["groups"]:
+            stage.pipeline_open = (
+                not is_filtered
+                or PipelineEmployeeFilter(
+                    self.request.GET,
+                    queryset=OffboardingEmployee.objects.filter(stage_id=stage.pk),
+                ).qs.exists()
+            )
+        return context
 
 
 @method_decorator(login_required, name="dispatch")
@@ -794,7 +1014,9 @@ class OffboardingEmployeeList(HorillaListView):
     next_prev = False
     quick_export = False
     filter_selected = False
+    records_per_page = 10
     records_count_in_tab = False
+    template_name = "cbv/exit_process/employee_list.html"
     custom_empty_template = "cbv/pipeline/empty.html"
     columns = [
         (_("Employee"), "employee_id", "employee_id__get_avatar"),
@@ -821,6 +1043,14 @@ class OffboardingEmployeeList(HorillaListView):
         data-target="#genericModal"
     """
     bulk_update_fields = ["stage_id"]
+
+    def dispatch(self, request, *args, **kwargs):
+        # This endpoint returns only the pipeline's list/export fragment; a
+        # genuine top-level browser navigation/reload should land on the
+        # real Offboarding Pipeline page instead of showing the raw fragment.
+        if request.headers.get("Sec-Fetch-Mode") == "navigate":
+            return redirect(reverse("offboarding-pipeline"))
+        return super().dispatch(request, *args, **kwargs)
 
     def get(self, request, *args, **kwargs):
         self.selected_instances_key_id = (
@@ -864,8 +1094,15 @@ class OffboardingEmployeeList(HorillaListView):
         ).values_list("pk", flat=True)
         self.request.managing_offboardings = self.managing_offboardings
 
-        stage_id = self.request.GET["offboarding_stage_id"]
-        tasks = OffboardingTask.objects.filter(stage_id=stage_id)
+        stage_id = self.request.GET.get("offboarding_stage_id")
+        context["stage"] = (
+            OffboardingStage.objects.filter(pk=stage_id).first() if stage_id else None
+        )
+        tasks = (
+            OffboardingTask.objects.filter(stage_id=stage_id)
+            if stage_id
+            else OffboardingTask.objects.none()
+        )
         for task in tasks:
             context["columns"].append(
                 (

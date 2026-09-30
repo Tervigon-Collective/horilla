@@ -38,6 +38,11 @@ class _TicketTabNavBase(HorillaNavView):
     filter_body_template = "cbv/pipeline/ticket_filter_form.html"
     filter_instance = TicketFilter()
     filter_form_context_name = "form"
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. TicketFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
 
     group_by_fields = [
         ("employee_id", _("Owner")),
@@ -268,11 +273,6 @@ class TicketTabView(HorillaTabView):
                     "badge": all_tickets_count,
                 }
             )
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["show_filter_tags"] = True
-        return context
 
 
 @method_decorator(login_required, name="dispatch")

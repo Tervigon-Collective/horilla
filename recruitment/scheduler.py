@@ -1,14 +1,16 @@
 import calendar
 import datetime as dt
-import sys
 from datetime import datetime, timedelta
 
-from horilla.db import SafeBackgroundScheduler
 from dateutil.relativedelta import relativedelta
+
+from horilla.db import scheduled_job
+from horilla.scheduling import register_job
 
 today = datetime.now()
 
 
+@scheduled_job
 def recruitment_close():
     """
     Closes recruitment campaigns that have reached their end date.
@@ -28,6 +30,7 @@ def recruitment_close():
                 rec.save()
 
 
+@scheduled_job
 def candidate_convert():
     """
     Converts candidates to a "converted" state if they already exist as users.
@@ -48,15 +51,5 @@ def candidate_convert():
     ).update(converted=True)
 
 
-if not any(
-    cmd in sys.argv
-    for cmd in ["makemigrations", "migrate", "compilemessages", "flush", "shell"]
-):
-    """
-    Initializes and starts background tasks using APScheduler when the server is running.
-    """
-    scheduler = SafeBackgroundScheduler()
-    scheduler.add_job(candidate_convert, "interval", minutes=5)
-    scheduler.add_job(recruitment_close, "interval", hours=1)
-
-    scheduler.start()
+register_job(candidate_convert, "interval", minutes=5)
+register_job(recruitment_close, "interval", hours=1)

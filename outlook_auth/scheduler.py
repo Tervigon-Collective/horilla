@@ -4,13 +4,14 @@ outlook_auth/scheduler.py
 """
 
 import logging
-import sys
 
-from horilla.db import SafeBackgroundScheduler
+from horilla.db import scheduled_job
+from horilla.scheduling import register_job
 
 logger = logging.getLogger(__name__)
 
 
+@scheduled_job
 def refresh_outlook_auth_token():
     """
     scheduler method to refresh token
@@ -28,15 +29,9 @@ def refresh_outlook_auth_token():
             logger.error(e)
 
 
-if not any(
-    cmd in sys.argv
-    for cmd in ["makemigrations", "migrate", "compilemessages", "flush", "shell"]
-):
-    scheduler = SafeBackgroundScheduler()
-    scheduler.add_job(
-        refresh_outlook_auth_token,
-        "interval",
-        minutes=50,
-        id="refresh_outlook_auth_token",
-    )
-    scheduler.start()
+register_job(
+    refresh_outlook_auth_token,
+    "interval",
+    job_id="refresh_outlook_auth_token",
+    minutes=50,
+)

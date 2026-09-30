@@ -112,9 +112,6 @@ class SurveyTemplate(HorillaModel):
 class Skill(HorillaModel):
     title = models.CharField(max_length=100)
 
-    def __str__(self):
-        return self.title
-
     def save(self, *args, **kwargs):
         title = self.title
         self.title = title.capitalize()
@@ -781,6 +778,11 @@ class Candidate(HorillaModel):
         """
         Stage drop down
         """
+        # stage_id is nullable (e.g. a candidate already converted to an
+        # employee) - there's no recruitment to pull sibling stages from,
+        # so there's nothing to build a dropdown out of.
+        if self.stage_id is None:
+            return ""
         request = getattr(_thread_locals, "request", None)
         all_rec_stages = getattr(request, "all_rec_stages", {})
         if all_rec_stages.get(self.stage_id.recruitment_id.pk) is None:
@@ -859,9 +861,20 @@ class Candidate(HorillaModel):
         return self.resume.url
 
     def onboarding_portal_html(self):
+        # A hired candidate has no OnboardingPortal row until HR actually
+        # sends them the portal invite (see the Candidates list's "Portal
+        # Not-Sent" filter) -- that's an expected, common state, not an
+        # error, so render a neutral placeholder instead of crashing.
+        try:
+            count = self.onboarding_portal.count
+        except ObjectDoesNotExist:
+            return format_html(
+                '<div class="oh-checkpoint-badge oh-checkpoint-badge--light">{}</div>',
+                _("Not sent"),
+            )
         return format_html(
             '<div class="oh-checkpoint-badge oh-checkpoint-badge--secondary">{}/4</div>',
-            self.onboarding_portal.count,
+            count,
         )
 
     def rating(self):
@@ -888,10 +901,18 @@ class Candidate(HorillaModel):
         """
         This method for get custome coloumn for tasks.
         """
-        from onboarding.models import CandidateStage, CandidateTask
+        from onboarding.models import CandidateTask
 
-        cand_stage = self.onboarding_stage.id
-        cand_stage_obj = CandidateStage.objects.get(id=cand_stage)
+        # Same "not started onboarding yet" state as onboarding_portal_html
+        # above -- a hired candidate has no CandidateStage until the portal
+        # invite is sent, so this reverse accessor legitimately has nothing
+        # to return yet rather than being a data error.
+        try:
+            cand_stage_obj = self.onboarding_stage
+        except ObjectDoesNotExist:
+            return format_html(
+                '<span class="text-muted">{}</span>', _("Onboarding not started yet")
+            )
         choices = CandidateTask.choice
 
         return render_template(
@@ -923,9 +944,9 @@ class Candidate(HorillaModel):
             context={"instance": self},
         )
 
-    def options(self):
+    def actions_col(self):
         """
-        This method for get custom coloumn for options.
+        This method for get custom column for actions.
         """
 
         request = getattr(_thread_locals, "request", None)
@@ -940,18 +961,8 @@ class Candidate(HorillaModel):
         )
 
         return render_template(
-            path="cbv/candidates/option.html",
-            context={"instance": self, "emp_list": emp_list},
-        )
-
-    def actions_col(self):
-        """
-        This method for get custom column for actions.
-        """
-
-        return render_template(
             path="cbv/candidates/actions.html",
-            context={"instance": self},
+            context={"instance": self, "emp_list": emp_list},
         )
 
     def get_profile_url(self):
@@ -1167,6 +1178,7 @@ class Candidate(HorillaModel):
         """
         return get_diff(self)
 
+    @cached_property
     def get_last_sent_mail(self):
         """
         This method is used to get last send mail
@@ -2078,6 +2090,11 @@ class LinkedInAccount(HorillaModel):
     company_id = models.ForeignKey(
         Company, on_delete=models.CASCADE, null=True, verbose_name=_("Company")
     )
+    # This row holds an api_token, and the detail/delete views fetch it by raw
+    # pk (recruitment/cbvs.py, recruitment/views/linkedin.py) with no company
+    # check of their own -- an IDOR on a credential. Scoping the manager fixes
+    # every one of those call sites at once.
+    objects = HorillaCompanyManager()
 
     class Meta:
         verbose_name = _("LinkedIn Account")
@@ -2091,7 +2108,7 @@ class LinkedInAccount(HorillaModel):
         url = "https://api.linkedin.com/v2/userinfo"
         headers = {"Authorization": f"Bearer {self.api_token}"}
 
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=30)
 
         if response.status_code == 200:
             data = response.json()

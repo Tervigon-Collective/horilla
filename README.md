@@ -46,7 +46,26 @@ See [Discussion #1127](https://github.com/horilla/horilla-hr/discussions/1127) f
 
 ## ⚡ Quick Start
 
-### Using Docker (Recommended)
+### Using the official Docker image (Recommended)
+
+Published for `linux/amd64` and `linux/arm64` as
+[`horilla/horilla-hr`](https://hub.docker.com/r/horilla/horilla-hr):
+
+```bash
+docker pull horilla/horilla-hr:2.1.5
+```
+
+Pin an exact version in production rather than `latest`, so a deploy cannot
+pick up a new release unattended; see
+[all tags](https://hub.docker.com/r/horilla/horilla-hr/tags) for the current
+one. The
+[repository overview](https://hub.docker.com/r/horilla/horilla-hr) documents
+every environment variable, the volumes to back up, and a working Compose file.
+
+First boot applies the full migration set before the web server binds, which
+takes a few minutes on an empty database.
+
+### Building from source with Docker
 
 ```bash
 # Clone the repository (defaults to the stable 2.0 branch)
@@ -54,13 +73,19 @@ git clone https://github.com/horilla/horilla-hr.git
 cd horilla-hr
 
 # Start with Docker Compose
-docker-compose up -d
+docker compose up -d
 
 # Access the application
 open http://localhost:8000
 ```
 
+Full Docker guide, including production deployment: [docker/README.md](docker/README.md)
+
 ### Manual Installation
+
+Requires **Python 3.12, 3.13 or 3.14**, and pip 21.3 or newer. Python 3.15 is
+not usable yet: `spacy` declares `Requires-Python <3.15` and is imported at
+module scope, so the app cannot start on it.
 
 ```bash
 # Clone and setup (defaults to the stable 2.0 branch)
@@ -70,6 +95,12 @@ cd horilla-hr
 # Create virtual environment
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Upgrade pip FIRST. A venv inherits the system pip, and an older one does not
+# recognise current manylinux wheel tags -- it then tries to compile packages
+# like cryptography and PyMuPDF from source, which needs a C toolchain most
+# machines do not have. The Docker build already does this; do the same here.
+python -m pip install --upgrade pip
 
 # Install dependencies
 pip install -r requirements.txt

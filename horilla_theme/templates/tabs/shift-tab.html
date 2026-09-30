@@ -14,7 +14,7 @@
 
 <div class="oh-wrapper mt-4">
 	{% if employee.employee_work_info.shift_id %}
-	<span class="fw-bold" style="font-size:17px;"> {% if employee.employee_work_info.shift_id %} {% trans "Current Shifeet" %} &nbsp : &nbsp {{employee.employee_work_info.shift_id}} {% endif %}</span>
+	<span class="fw-bold" style="font-size:17px;"> {% if employee.employee_work_info.shift_id %} {% trans "Current Shift" %} &nbsp : &nbsp {{employee.employee_work_info.shift_id}} {% endif %}</span>
 	<button style="display:inline-block;"
 			class="oh-btn oh-btn--secondary ms-3"
 			data-toggle="oh-modal-toggle"
@@ -1016,7 +1016,7 @@
                                                         {% if shift_request.approved == False and shift_request.canceled == False %}
                                                             <a  href="{% url 'shift-request-approve' shift_request.id %}"
                                                                 title="{% trans 'Approve' %}"
-                                                                onclick="return confirm('{% trans "Do you want to approve this request?" %}')"
+                                                                onclick="return confirm('{% trans "Do you want to approve this request?"|escapejs %}')"
                                                                 class="oh-btn oh-btn--success">
                                                                 <ion-icon class="me-1" name="checkmark-outline"></ion-icon>
                                                             </a>
@@ -1036,7 +1036,7 @@
                                                             <a
                                                                 href="{% url 'shift-request-cancel' shift_request.id %}"
                                                                 title="{% trans 'Reject' %}"
-                                                                onclick="return confirm('{% trans "Do you want to reject this request?" %}')"
+                                                                onclick="return confirm('{% trans "Do you want to reject this request?"|escapejs %}')"
                                                                 class="oh-btn oh-btn--danger">
                                                                 <ion-icon class="me-1" name="close-circle-outline"></ion-icon>
                                                             </a>

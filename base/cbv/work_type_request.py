@@ -12,6 +12,7 @@ from django.shortcuts import render
 from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from base.filters import WorkTypeRequestFilter
 from base.forms import WorkTypeForm, WorkTypeRequestColumnForm, WorkTypeRequestForm
@@ -221,7 +222,6 @@ class WorkRequestNavView(HorillaNavView):
                 data-toggle = "oh-modal-toggle"
                 data-target = "#genericModal"
                 hx-get ="{reverse('work-export-candidate')}"
-                hx-vals='js:{{"has_selection": (JSON.parse(document.getElementById("selectedInstances")?.getAttribute("data-ids")||"[]").length>0)}}'
                 style="cursor: pointer;"
             """,
                 },
@@ -240,6 +240,12 @@ class WorkRequestNavView(HorillaNavView):
     filter_instance = WorkTypeRequestFilter()
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel (generic/inline_nav.html's own
+    # {% if modern_filter %} branch, mirroring horilla_nav.html's
+    # .oh-filter-modern styles) -- same treatment as every other panel
+    # this session. WorkTypeRequestFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
 
     group_by_fields = [
         ("employee_id", _("Employee")),
@@ -310,7 +316,6 @@ class WorkExportCandidate(TemplateView):
         context = super().get_context_data(**kwargs)
         context["export_fields"] = export_fields
         context["export_filter"] = export_filter
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context
 
 
@@ -432,19 +437,11 @@ class WorkTypeFormView(HorillaFormView):
                 with contextlib.suppress(Exception):
                     notify.send(
                         instance.employee_id,
-                        recipient=(
-                            instance.employee_id.employee_work_info.reporting_manager_id.employee_user_id
+                        recipient=instance.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
+                        verb=gettext_noop(
+                            "You have new work type request to validate for %(employee)s"
                         ),
-                        verb=f"You have new work type request to \
-                            validate for {instance.employee_id}",
-                        verb_ar=f"لديك طلب نوع وظيفة جديد للتحقق من \
-                                {instance.employee_id}",
-                        verb_de=f"Sie haben eine neue Arbeitstypanfrage zur \
-                                Validierung für {instance.employee_id}",
-                        verb_es=f"Tiene una nueva solicitud de tipo de trabajo para \
-                                validar para {instance.employee_id}",
-                        verb_fr=f"Vous avez une nouvelle demande de type de travail\
-                                à valider pour {instance.employee_id}",
+                        verb_params={"employee": str(instance.employee_id)},
                         icon="information",
                         redirect=reverse("work-type-request-view")
                         + f"?id={instance.id}",

@@ -42,14 +42,16 @@
     .pd-kpi-card__sub { font-size: 11px; opacity: 0.6; }
     .pd-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 999px; }
     .pd-badge--green { background: #dcfce7; color: #166534; } .pd-badge--amber { background: #fef3c7; color: #92400e; }
-    .pd-badge--red { background: #fee2e2; color: #991b1b; }
+    .pd-badge--red { background: #fee2e2; color: #991b1b; } .pd-badge--blue { background: #dbeafe; color: #1e40af; }
     .dark .pd-badge--green { background: #166534; color: #bbf7d0; } .dark .pd-badge--amber { background: #92400e; color: #fde68a; }
-    .dark .pd-badge--red { background: #7f1d1d; color: #fca5a5; }
+    .dark .pd-badge--red { background: #7f1d1d; color: #fca5a5; } .dark .pd-badge--blue { background: #1e3a8a; color: #bfdbfe; }
 
     /* Layout */
     .pd-layout { display: grid; grid-template-columns: 1fr 300px; gap: 20px; align-items: start; }
     .pd-main { min-width: 0; }
-    .pd-sidebar { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 90px; }
+    .pd-sidebar { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 90px; max-height: calc(100vh - 90px - 24px); overflow-y: auto; }
+    .pd-sidebar::-webkit-scrollbar { width: 3px; }
+    .pd-sidebar::-webkit-scrollbar-thumb { border-radius: 3px; background: rgba(128,128,128,0.2); }
 
     /* Chart Grid */
     .pd-chart-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 20px; }
@@ -68,7 +70,7 @@
     .pd-skeleton--kpi { height: 100px; }
 
     /* Sidebar panels */
-    .pd-info-panel { border-radius: 12px; background: #ffffff; border: 1px solid rgba(128,128,128,0.12); overflow: hidden; display: flex; flex-direction: column; }
+    .pd-info-panel { border-radius: 12px; background: #ffffff; border: 1px solid rgba(128,128,128,0.12); overflow: hidden; display: flex; flex-direction: column; flex-shrink: 0; }
     .dark .pd-info-panel { background: #242424; border-color: rgba(255,255,255,0.08); }
     .pd-info-panel__header { padding: 14px 16px 10px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid rgba(128,128,128,0.08); }
     .pd-info-panel__title { font-size: 13px; font-weight: 700; }
@@ -93,7 +95,8 @@
 
     /* Pipeline steps */
     .pd-pipeline { display: flex; gap: 4px; padding: 10px 0; }
-    .pd-pipeline-step { flex: 1; text-align: center; padding: 12px 8px; border-radius: 8px; }
+    .pd-pipeline-step { flex: 1; text-align: center; padding: 12px 8px; border-radius: 8px; text-decoration: none; color: inherit; display: block; transition: all 0.2s; }
+    .pd-pipeline-step:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); transform: translateY(-1px); text-decoration: none; color: inherit; }
     .pd-pipeline-step__count { font-size: 22px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
     .pd-pipeline-step__label { font-size: 10px; font-weight: 600; text-transform: uppercase; opacity: 0.7; }
 
@@ -152,7 +155,7 @@
 
 
     /* Responsive */
-    @media (max-width: 1280px) { .pd-kpi-grid { grid-template-columns: repeat(3, 1fr); } .pd-layout { grid-template-columns: 1fr; } .pd-sidebar { position: static; display: grid; grid-template-columns: 1fr 1fr 1fr; } }
+    @media (max-width: 1280px) { .pd-kpi-grid { grid-template-columns: repeat(3, 1fr); } .pd-layout { grid-template-columns: 1fr; } .pd-sidebar { position: static; display: grid; grid-template-columns: 1fr 1fr 1fr; max-height: none; overflow-y: visible; } }
     @media (max-width: 1024px) { .pd-kpi-grid { grid-template-columns: repeat(2, 1fr); } .pd-chart-grid { grid-template-columns: 1fr; } .pd-chart-card--wide { grid-column: span 1; } .pd-sidebar { grid-template-columns: 1fr; } .pd-pipeline { flex-wrap: wrap; } .pd-pipeline-step { min-width: 70px; } }
     @media (max-width: 640px) { .pd-kpi-grid { grid-template-columns: 1fr; } }
 </style>
@@ -323,8 +326,12 @@
     const COLORS = ['#E54F38','#22c55e','#f59e0b','#ef4444','#3b82f6','#a855f7','#06b6d4','#ec4899','#14b8a6','#f97316'];
     const emptyHtml = (msg) => `<div class="pd-empty"><img src="/static/images/ui/no_records.svg" alt="">${msg}</div>`;
     const fmt = v => Number(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-    const empViewUrl = "{% url 'employee-view-individual' obj_id=0 %}";
-    const empUrlFor = id => id ? empViewUrl.replace('/0/', '/' + id + '/') : '#';
+    const payslipUrl = "{% url 'view-payslip' %}";
+    const payslipUrlFor = id => id ? `${payslipUrl}?employee_id=${id}` : '#';
+    const contractUrl = "{% url 'view-contract' %}";
+    const contractUrlFor = id => id ? `${contractUrl}?employee_id=${id}` : '#';
+    const loanUrl = "{% url 'view-loan' %}";
+    const loanUrlFor = id => id ? `${loanUrl}?employee_id=${id}` : '#';
 
     document.getElementById('pd-date').textContent = new Date().toLocaleDateString('en-US', {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
@@ -442,7 +449,7 @@
 
     function updateRefreshText() {
         const mins = Math.floor((Date.now() - lastRefresh) / 60000);
-        refreshText.textContent = mins < 1 ? '{% trans "Just now" %}' : mins + '{% trans "m ago" %}';
+        refreshText.textContent = mins < 1 ? '{% trans "Just now"|escapejs %}' : mins + '{% trans "m ago"|escapejs %}';
     }
     (window.registerAutoRefresh || function () {})(setInterval(updateRefreshText, 30000));
 
@@ -451,12 +458,14 @@
         localStorage.setItem(REFRESH_KEY, 'on');
         refreshDot.classList.add('pd-refresh__dot--pulse');
         refreshToggle.textContent = '⟳';
-        refreshToggle.title = '{% trans "Auto-refresh ON (5 min)" %}';
-        refreshTimer = setInterval(() => {
+        refreshToggle.title = '{% trans "Auto-refresh ON (5 min)"|escapejs %}';
+        // Wrapped so a hidden tab does not keep fetching; refreshes once on return.
+        const refreshTick = autoRefreshWhenVisible(() => {
             lastRefresh = Date.now();
             updateRefreshText();
             refreshAllData();
-        }, REFRESH_INTERVAL);
+        });
+        refreshTimer = setInterval(refreshTick, REFRESH_INTERVAL);
         if (window.registerAutoRefresh) window.registerAutoRefresh(refreshTimer);
     }
     function stopAutoRefresh() {
@@ -464,7 +473,7 @@
         localStorage.setItem(REFRESH_KEY, 'off');
         refreshDot.classList.remove('pd-refresh__dot--pulse');
         refreshToggle.textContent = '⏸';
-        refreshToggle.title = '{% trans "Auto-refresh OFF" %}';
+        refreshToggle.title = '{% trans "Auto-refresh OFF"|escapejs %}';
         if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
     }
     refreshToggle.addEventListener('click', () => { if (autoRefreshOn) stopAutoRefresh(); else startAutoRefresh(); });
@@ -478,35 +487,35 @@
             const changeIcon = data.change_pct > 0 ? '↑' : data.change_pct < 0 ? '↓' : '→';
             const changeClass = data.change_pct > 0 ? 'pd-badge--amber' : data.change_pct < 0 ? 'pd-badge--green' : '';
             document.getElementById('pd-kpi-grid').innerHTML = `
-                <a href="{% url 'view-payslip' %}" class="pd-kpi-card">
+                <a href="{% url 'view-payslip' %}?start_date_from=${fromInput.value}&start_date_till=${toInput.value}&filter_applied=1" class="pd-kpi-card">
                     <div class="pd-kpi-card__icon pd-kpi-card__icon--green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
-                    <div class="pd-kpi-card__label">{% trans "Net Payroll" %}</div>
+                    <div class="pd-kpi-card__label">{% trans "Net Payroll"|escapejs %}</div>
                     <div class="pd-kpi-card__value">${fmt(data.total_net)}</div>
-                    <div class="pd-kpi-card__sub"><span class="pd-badge ${changeClass}">${changeIcon} ${Math.abs(data.change_pct)}% {% trans "vs last month" %}</span></div>
+                    <div class="pd-kpi-card__sub"><span class="pd-badge ${changeClass}">${changeIcon} ${Math.abs(data.change_pct)}% {% trans "vs last month"|escapejs %}</span></div>
                 </a>
-                <a href="{% url 'view-payslip' %}" class="pd-kpi-card">
+                <a href="{% url 'view-payslip' %}?start_date_from=${fromInput.value}&start_date_till=${toInput.value}&filter_applied=1" class="pd-kpi-card">
                     <div class="pd-kpi-card__icon pd-kpi-card__icon--blue"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></div>
-                    <div class="pd-kpi-card__label">{% trans "Gross Pay" %}</div>
+                    <div class="pd-kpi-card__label">{% trans "Gross Pay"|escapejs %}</div>
                     <div class="pd-kpi-card__value">${fmt(data.total_gross)}</div>
-                    <div class="pd-kpi-card__sub">${data.total_payslips} {% trans "payslips" %}</div>
+                    <div class="pd-kpi-card__sub"><span class="pd-badge pd-badge--blue">${data.total_payslips} {% trans "payslips"|escapejs %}</span></div>
                 </a>
-                <a href="{% url 'view-payslip' %}" class="pd-kpi-card">
+                <a href="{% url 'view-payslip' %}?start_date_from=${fromInput.value}&start_date_till=${toInput.value}&filter_applied=1" class="pd-kpi-card">
                     <div class="pd-kpi-card__icon pd-kpi-card__icon--red"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg></div>
-                    <div class="pd-kpi-card__label">{% trans "Deductions" %}</div>
+                    <div class="pd-kpi-card__label">{% trans "Deductions"|escapejs %}</div>
                     <div class="pd-kpi-card__value">${fmt(data.total_deductions)}</div>
-                    <div class="pd-kpi-card__sub">${data.month}</div>
+                    <div class="pd-kpi-card__sub"><span class="pd-badge pd-badge--blue">${data.month}</span></div>
                 </a>
-                <a href="{% url 'view-loan' %}" class="pd-kpi-card">
+                <a href="{% url 'view-loan' %}?open_tab=1&settled=False&filter_applied=1" class="pd-kpi-card">
                     <div class="pd-kpi-card__icon pd-kpi-card__icon--amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg></div>
-                    <div class="pd-kpi-card__label">{% trans "Active Loans" %}</div>
+                    <div class="pd-kpi-card__label">{% trans "Active Loans"|escapejs %}</div>
                     <div class="pd-kpi-card__value">${data.active_loans}</div>
-                    <div class="pd-kpi-card__sub">${data.loan_amount > 0 ? fmt(data.loan_amount) + ' {% trans "total" %}' : '{% trans "No active loans" %}'}</div>
+                    <div class="pd-kpi-card__sub">${data.loan_amount > 0 ? '<span class="pd-badge pd-badge--amber">' + fmt(data.loan_amount) + ' {% trans "total"|escapejs %}</span>' : '<span class="pd-badge pd-badge--green">{% trans "No active loans"|escapejs %}</span>'}</div>
                 </a>
                 <a href="{% url 'view-reimbursement' %}?open_tab=1&status=requested&type=reimbursement&filter_applied=1" class="pd-kpi-card">
                     <div class="pd-kpi-card__icon pd-kpi-card__icon--purple"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
-                    <div class="pd-kpi-card__label">{% trans "Reimbursements" %}</div>
+                    <div class="pd-kpi-card__label">{% trans "Reimbursements"|escapejs %}</div>
                     <div class="pd-kpi-card__value">${data.pending_reimbursements}</div>
-                    <div class="pd-kpi-card__sub">{% trans "Pending requests" %}</div>
+                    <div class="pd-kpi-card__sub"><span class="pd-badge pd-badge--amber">{% trans "Pending requests"|escapejs %}</span></div>
                 </a>`;
         });
     }
@@ -518,14 +527,14 @@
         .then(r => r.json())
         .then(data => {
             const el = document.getElementById('pd-pipeline');
-            if (data.total === 0) { el.innerHTML = emptyHtml('{% trans "No payslips this month" %}'); return; }
+            if (data.total === 0) { el.innerHTML = emptyHtml('{% trans "No payslips this month"|escapejs %}'); return; }
             const colors = { draft: 'rgba(148,163,184,0.15)', review_ongoing: 'rgba(59,130,246,0.15)', confirmed: 'rgba(245,158,11,0.15)', paid: 'rgba(34,197,94,0.15)' };
             const textColors = { draft: '#64748b', review_ongoing: '#2563eb', confirmed: '#d97706', paid: '#16a34a' };
             el.innerHTML = '<div class="pd-pipeline">' + data.statuses.map(s =>
-                `<div class="pd-pipeline-step" style="background:${colors[s.status]};">
+                `<a href="{% url 'view-payslip' %}?status=${s.status}&start_date_from=${fromInput.value}&start_date_till=${toInput.value}&filter_applied=1" class="pd-pipeline-step" style="background:${colors[s.status]};">
                     <div class="pd-pipeline-step__count" style="color:${textColors[s.status]};">${s.count}</div>
                     <div class="pd-pipeline-step__label">${s.label}</div>
-                </div>`
+                </a>`
             ).join('<div style="display:flex;align-items:center;opacity:0.3;font-size:18px;">→</div>') + '</div>';
         });
     }
@@ -536,12 +545,12 @@
     fetchP("{% url 'payroll-dashboard-trend' %}")
         .then(r => r.json())
         .then(data => {
-            if (!data.months.length || !data.months.some(m => m.net > 0)) { document.querySelector("#chart-payroll-trend").innerHTML = emptyHtml('{% trans "No payroll data" %}'); return; }
+            if (!data.months.length || !data.months.some(m => m.net > 0)) { document.querySelector("#chart-payroll-trend").innerHTML = emptyHtml('{% trans "No payroll data"|escapejs %}'); return; }
             renderChart('payroll-trend', document.querySelector("#chart-payroll-trend"), {
                 series: [
-                    { name: '{% trans "Gross" %}', data: data.months.map(m => m.gross) },
-                    { name: '{% trans "Deductions" %}', data: data.months.map(m => m.deductions) },
-                    { name: '{% trans "Net" %}', data: data.months.map(m => m.net) },
+                    { name: '{% trans "Gross"|escapejs %}', data: data.months.map(m => m.gross) },
+                    { name: '{% trans "Deductions"|escapejs %}', data: data.months.map(m => m.deductions) },
+                    { name: '{% trans "Net"|escapejs %}', data: data.months.map(m => m.net) },
                 ],
                 chart: { type: 'area', height: 300, toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
                 colors: ['#3b82f6', '#ef4444', '#22c55e'],
@@ -564,9 +573,9 @@
         .then(r => r.json())
         .then(data => {
             document.getElementById('dept-month').textContent = data.month;
-            if (!data.departments.length) { document.querySelector("#chart-dept-cost").innerHTML = emptyHtml('{% trans "No data" %}'); return; }
+            if (!data.departments.length) { document.querySelector("#chart-dept-cost").innerHTML = emptyHtml('{% trans "No data"|escapejs %}'); return; }
             renderChart('dept-cost', document.querySelector("#chart-dept-cost"), {
-                series: [{ name: '{% trans "Net" %}', data: data.departments.map(d => d.net) }],
+                series: [{ name: '{% trans "Net"|escapejs %}', data: data.departments.map(d => d.net) }],
                 chart: { type: 'bar', height: 300, toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit',
                     events: { dataPointSelection: (e, ctx, config) => {
                         const d = data.departments[config.dataPointIndex];
@@ -598,7 +607,7 @@
         .then(data => {
             const s = data.summary;
             const el = document.querySelector("#chart-reimbursement");
-            if (s.requested === 0 && s.approved === 0 && s.rejected === 0) { el.innerHTML = emptyHtml('{% trans "No reimbursements" %}'); return; }
+            if (s.requested === 0 && s.approved === 0 && s.rejected === 0) { el.innerHTML = emptyHtml('{% trans "No reimbursements"|escapejs %}'); return; }
 
             if (data.by_type.length) {
                 renderChart('reimbursement', el, {
@@ -607,21 +616,28 @@
                         events: { dataPointSelection: (event, ctx, opts) => {
                             const t = data.by_type[opts.dataPointIndex];
                             const base = "{% url 'view-reimbursement' %}";
-                            window.location.href = t && t.type_key
-                                ? base + "?type=" + encodeURIComponent(t.type_key)
-                                : base;
+                            if (!t || !t.type_key) { window.location.href = base; return; }
+                            // Reimbursements/Leave Encashments/Bonus Encashments are
+                            // separate tabs (in that order) on the destination page --
+                            // without open_tab, whichever tab was last active there
+                            // (persisted per user) wins instead of the one this segment
+                            // is actually about.
+                            const tabIndexByType = { reimbursement: 1, leave_encashment: 2, bonus_encashment: 3 };
+                            const openTab = tabIndexByType[t.type_key] || 1;
+                            window.location.href = base + "?open_tab=" + openTab +
+                                "&type=" + encodeURIComponent(t.type_key) + "&status__in=requested,approved&filter_applied=1";
                         }}
                     },
                     labels: data.by_type.map(t => t.type),
                     colors: ['#E54F38', '#f59e0b', '#22c55e'],
-                    plotOptions: { pie: { donut: { size: '65%', labels: { show: true, total: { show: true, label: '{% trans "Total" %}', color: textColor, fontSize: '12px', fontWeight: 600, formatter: w => w.globals.seriesTotals.reduce((a,b)=>a+b,0) } } } } },
+                    plotOptions: { pie: { donut: { size: '65%', labels: { show: true, total: { show: true, label: '{% trans "Total"|escapejs %}', color: textColor, fontSize: '12px', fontWeight: 600, formatter: w => w.globals.seriesTotals.reduce((a,b)=>a+b,0) } } } } },
                     stroke: { width: 2, colors: [cardBg] },
                     dataLabels: { enabled: false },
                     legend: { position: 'bottom', labels: { colors: textColor }, fontSize: '11px' },
                     tooltip: { theme: isDark ? 'dark' : 'light', y: { formatter: (v, { seriesIndex: i }) => `${v} (${fmt(data.by_type[i].amount)})` } },
                 });
             } else {
-                el.innerHTML = `<div style="text-align:center;padding:20px;"><div style="font-size:24px;font-weight:800;">${s.requested + s.approved}</div><div style="font-size:12px;opacity:0.5;">{% trans "Total requests" %}</div></div>`;
+                el.innerHTML = `<div style="text-align:center;padding:20px;"><div style="font-size:24px;font-weight:800;">${s.requested + s.approved}</div><div style="font-size:12px;opacity:0.5;">{% trans "Total requests"|escapejs %}</div></div>`;
             }
         });
     }
@@ -632,9 +648,9 @@
     fetchP("{% url 'payroll-dashboard-salary-dist' %}")
         .then(r => r.json())
         .then(data => {
-            if (!data.bands.length) { document.querySelector("#chart-salary-dist").innerHTML = emptyHtml('{% trans "No salary data" %}'); return; }
+            if (!data.bands.length) { document.querySelector("#chart-salary-dist").innerHTML = emptyHtml('{% trans "No salary data"|escapejs %}'); return; }
             renderChart('salary-dist', document.querySelector("#chart-salary-dist"), {
-                series: [{ name: '{% trans "Employees" %}', data: data.bands.map(b => b.count) }],
+                series: [{ name: '{% trans "Employees"|escapejs %}', data: data.bands.map(b => b.count) }],
                 chart: { type: 'bar', height: 300, toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit',
                     events: { dataPointSelection: (e, ctx, config) => {
                         const b = data.bands[config.dataPointIndex];
@@ -664,9 +680,9 @@
     fetchP("{% url 'payroll-dashboard-components' %}")
         .then(r => r.json())
         .then(data => {
-            if (!data.components.length) { document.querySelector("#chart-components").innerHTML = emptyHtml('{% trans "No data" %}'); return; }
+            if (!data.components.length) { document.querySelector("#chart-components").innerHTML = emptyHtml('{% trans "No data"|escapejs %}'); return; }
             renderChart('components', document.querySelector("#chart-components"), {
-                series: [{ name: '{% trans "Amount" %}', data: data.components.map(c => c.amount) }],
+                series: [{ name: '{% trans "Amount"|escapejs %}', data: data.components.map(c => c.amount) }],
                 chart: { type: 'bar', height: 300, toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit',
                     events: { dataPointSelection: (event, ctx, opts) => {
                         const title = data.components[opts.dataPointIndex] && data.components[opts.dataPointIndex].title;
@@ -693,20 +709,20 @@
         .then(data => {
             const el = document.getElementById('pd-top-earners');
             document.getElementById('earners-month').textContent = data.month;
-            if (!data.earners.length) { el.innerHTML = '<div class="pd-info-panel__empty">{% trans "No payslips this month" %}</div>'; return; }
+            if (!data.earners.length) { el.innerHTML = '<div class="pd-info-panel__empty">{% trans "No payslips this month"|escapejs %}</div>'; return; }
             el.innerHTML = data.earners.map(e => {
                 const initials = e.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
                 const avatarInner = e.avatar ? `<img src="${e.avatar}" alt="">` : initials;
-                return `<a href="${empUrlFor(e.id)}" class="pd-list-item">
+                return `<a href="${payslipUrlFor(e.id)}" class="pd-list-item">
                     <div class="pd-list-item__avatar">${avatarInner}</div>
                     <div class="pd-list-item__info">
                         <div class="pd-list-item__name">${e.name}</div>
-                        <div class="pd-list-item__detail">{% trans "Gross" %}: ${fmt(e.gross)}</div>
+                        <div class="pd-list-item__detail">{% trans "Gross"|escapejs %}: ${fmt(e.gross)}</div>
                     </div>
                     <div class="pd-list-item__value" style="color:var(--pd-green);">${fmt(e.net)}</div>
                 </a>`;
             }).join('');
-        }).catch(() => { document.getElementById('pd-top-earners').innerHTML = '<div class="pd-info-panel__empty">{% trans "No data" %}</div>'; });
+        }).catch(() => { document.getElementById('pd-top-earners').innerHTML = '<div class="pd-info-panel__empty">{% trans "No data"|escapejs %}</div>'; });
     }
     loadTopEarners();
 
@@ -717,12 +733,12 @@
         .then(data => {
             const el = document.getElementById('pd-contracts');
             const items = [...data.ending_soon.map(c => ({...c, type: 'ending'})), ...data.expired.map(c => ({...c, type: 'expired'}))];
-            if (!items.length) { el.innerHTML = '<div class="pd-info-panel__empty">{% trans "No contracts ending soon" %}</div>'; return; }
+            if (!items.length) { el.innerHTML = '<div class="pd-info-panel__empty">{% trans "No contracts ending soon"|escapejs %}</div>'; return; }
             el.innerHTML = items.map(c => {
                 const badge = c.type === 'ending'
                     ? `<span class="pd-badge pd-badge--amber">${c.days_left}d</span>`
-                    : `<span class="pd-badge pd-badge--red">{% trans "Expired" %}</span>`;
-                return `<a href="/employee/employee-view/${c.id}/" class="pd-list-item">
+                    : `<span class="pd-badge pd-badge--red">{% trans "Expired"|escapejs %}</span>`;
+                return `<a href="${contractUrlFor(c.id)}" class="pd-list-item">
                     <div class="pd-list-item__info">
                         <div class="pd-list-item__name">${c.name}</div>
                         <div class="pd-list-item__detail">${c.contract} · ${c.end_date}</div>
@@ -730,7 +746,7 @@
                     ${badge}
                 </a>`;
             }).join('');
-        }).catch(() => { document.getElementById('pd-contracts').innerHTML = '<div class="pd-info-panel__empty">{% trans "No data" %}</div>'; });
+        }).catch(() => { document.getElementById('pd-contracts').innerHTML = '<div class="pd-info-panel__empty">{% trans "No data"|escapejs %}</div>'; });
     }
     loadContractsEnding();
 
@@ -740,9 +756,9 @@
         .then(r => r.json())
         .then(data => {
             const el = document.getElementById('pd-loans');
-            if (!data.loans.length) { el.innerHTML = '<div class="pd-info-panel__empty">{% trans "No active loans" %}</div>'; return; }
+            if (!data.loans.length) { el.innerHTML = '<div class="pd-info-panel__empty">{% trans "No active loans"|escapejs %}</div>'; return; }
             el.innerHTML = data.loans.map(l => {
-                return `<a href="${empUrlFor(l.employee_id)}" class="pd-list-item">
+                return `<a href="${loanUrlFor(l.employee_id)}" class="pd-list-item">
                     <div class="pd-list-item__info">
                         <div class="pd-list-item__name">${l.employee}</div>
                         <div class="pd-list-item__detail">${l.title} · ${l.type}</div>
@@ -753,7 +769,7 @@
                     </div>
                 </a>`;
             }).join('');
-        }).catch(() => { document.getElementById('pd-loans').innerHTML = '<div class="pd-info-panel__empty">{% trans "No data" %}</div>'; });
+        }).catch(() => { document.getElementById('pd-loans').innerHTML = '<div class="pd-info-panel__empty">{% trans "No data"|escapejs %}</div>'; });
     }
     loadActiveLoans();
 

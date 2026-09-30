@@ -223,6 +223,11 @@ urlpatterns = [
         name="onboarding-candidates-nav",
     ),
     path(
+        "get-cand-tasks/<int:pk>/",
+        onboarding_candidates.CandidateProfileTasks.as_view(),
+        name="get-cand-task",
+    ),
+    path(
         "offer-letter-bulk-status-update/",
         views.offer_letter_bulk_status_update,
         name="offer-letter-bulk-status-update",
@@ -288,6 +293,11 @@ urlpatterns = [
         "onboarding-pipeline-shell/<int:rec_id>/",
         pipeline.RecruitmentPipelineContentShell.as_view(),
         name="onboarding-pipeline-shell",
+    ),
+    path(
+        "onboarding-pipeline-tab-nav/<int:rec_id>/",
+        pipeline.RecruitmentCandidateNav.as_view(),
+        name="onboarding-pipeline-tab-nav",
     ),
     # path("cbv-change-stage/<int:pk>/",pipeline.ChangeStage.as_view(),name="cbv-change-stage")
     # ── Onboarding Modern Dashboard ──────────────────────────────────────────

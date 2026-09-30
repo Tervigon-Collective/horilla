@@ -10,6 +10,7 @@ from django.shortcuts import render
 from django.urls import resolve, reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from horilla_views.cbv_methods import login_required
 from horilla_views.generic.cbv.views import (
@@ -66,6 +67,11 @@ class InterviewNavView(HorillaNavView):
     filter_body_template = "cbv/interview/interview_filter.html"
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. InterviewFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
 
     # Mirrors InterviewLIstView.nested_group_by_fields
     nested_group_by_fields = [
@@ -251,11 +257,14 @@ class InterviewForm(HorillaFormView):
             notify.send(
                 self.request.user.employee_get,
                 recipient=users,
-                verb=f"You are scheduled as an interviewer for an interview with {cand_id.name} on {interview_date} at {interview_time}.",
-                verb_ar=f"أنت مجدول كمقابلة مع {cand_id.name} يوم {interview_date} في توقيت {interview_time}.",
-                verb_de=f"Sie sind als Interviewer für ein Interview mit {cand_id.name} am {interview_date} um {interview_time} eingeplant.",
-                verb_es=f"Estás programado como entrevistador para una entrevista con {cand_id.name} el {interview_date} a las {interview_time}.",
-                verb_fr=f"Vous êtes programmé en tant qu'intervieweur pour un entretien avec {cand_id.name} le {interview_date} à {interview_time}.",
+                verb=gettext_noop(
+                    "You are scheduled as an interviewer for an interview with %(name)s on %(interview_date)s at %(interview_time)s."
+                ),
+                verb_params={
+                    "name": str(cand_id.name),
+                    "interview_date": str(interview_date),
+                    "interview_time": str(interview_time),
+                },
                 icon="people-circle",
                 redirect=reverse("interview-view"),
             )

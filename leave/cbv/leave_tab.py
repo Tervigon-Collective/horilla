@@ -4,14 +4,19 @@ This page is handling the cbv methods of leave tab in employee profile page.
 
 from typing import Any
 
+from django.http import HttpResponse
 from django.urls import reverse
+from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 
 from base.methods import is_reportingmanager
 from employee.models import Employee
+from horilla.decorators import hx_request_required, login_required
 from leave.cbv.my_leave_request import MainParentListView, MyLeaveRequestListView
 
 
+@method_decorator(login_required, name="dispatch")
+@method_decorator(hx_request_required, name="dispatch")
 class IndividualLeaveTab(MainParentListView):
     """
     class for rendering leave tab in employee profile
@@ -20,6 +25,13 @@ class IndividualLeaveTab(MainParentListView):
     template_name = "cbv/employee_individual/leave_tab.html"
 
     def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            # Let the parent's login_required-decorated dispatch handle the
+            # redirect to login, rather than short-circuiting with an empty
+            # response before authentication is even checked.
+            return super().dispatch(request, *args, **kwargs)
+        if not Employee.objects.filter(id=kwargs.get("pk")).exists():
+            return HttpResponse()
         from employee.cbv.accessibility import deny_without_employee_record_access
 
         blocked = deny_without_employee_record_access(request, kwargs.get("pk"))

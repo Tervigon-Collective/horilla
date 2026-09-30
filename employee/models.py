@@ -411,6 +411,29 @@ class Employee(models.Model):
             attendance_date=datetime.today()
         ).first()
 
+    def sync_login_access(self):
+        """Mirror ``is_active`` onto the linked user account.
+
+        Archiving an employee is the expected way to offboard someone, but the
+        login gate is ``HorillaUser.is_active`` -- ``CompanyScopedBackend``
+        inherits ``ModelBackend.user_can_authenticate``, which reads that flag
+        and knows nothing about ``Employee.is_active``. Setting the employee
+        flag alone therefore hid the person from every list while leaving their
+        credentials working.
+
+        Call this immediately after a save that changed ``is_active``. It is
+        deliberately NOT wired into ``save()``: ``ToggleDashboardAccess``
+        revokes a login while leaving the employee active, and syncing on every
+        save would silently hand that access back.
+
+        Derives the user's value from ``self.is_active`` rather than negating
+        anything, so it cannot reintroduce the inversion this replaces.
+        """
+        user = self.employee_user_id
+        if user is not None and user.is_active != self.is_active:
+            user.is_active = self.is_active
+            user.save(update_fields=["is_active"])
+
     def get_archive_condition(self):
         """
         Determine whether an employee is eligible for archiving based on their
@@ -1176,6 +1199,27 @@ class PolicyMultipleFile(HorillaModel):
 
     attachment = models.FileField(upload_to=upload_path)
 
+    @property
+    def _attachment_name(self):
+        """Never None: an attachment row whose file failed to save has no name."""
+        return (self.attachment.name or "").lower()
+
+    @property
+    def is_pdf(self):
+        """Lets templates inline the document instead of linking an icon."""
+        return self._attachment_name.endswith(".pdf")
+
+    @property
+    def is_image(self):
+        """Images get the same inline treatment as PDFs.
+
+        SVG is deliberately absent: it is browser-executable, and inlining one
+        from this origin would be stored XSS.
+        """
+        return self._attachment_name.endswith(
+            (".png", ".jpg", ".jpeg", ".gif", ".webp")
+        )
+
 
 class Policy(HorillaModel):
     """
@@ -1184,10 +1228,34 @@ class Policy(HorillaModel):
 
     title = models.CharField(max_length=50)
     body = models.TextField()
-    is_visible_to_all = models.BooleanField(default=True)
-    specific_employees = models.ManyToManyField(Employee, blank=True, editable=False)
+    employees = models.ManyToManyField(
+        Employee,
+        related_name="policy_employees",
+        blank=True,
+        help_text=_(
+            "Used only when 'Publish' is disabled below -- restricts the "
+            "policy to these employees plus anyone in the selected department(s) "
+            "or job position(s)."
+        ),
+    )
+    department = models.ManyToManyField(Department, blank=True)
+    job_position = models.ManyToManyField(
+        JobPosition, blank=True, verbose_name=_("Job Position")
+    )
+    filtered_employees = models.ManyToManyField(
+        Employee, related_name="policy_filtered_employees", editable=False
+    )
     attachments = models.ManyToManyField(PolicyMultipleFile, blank=True)
     company_id = models.ManyToManyField(Company, blank=True, verbose_name=_("Company"))
+    is_visible_to_all = models.BooleanField(
+        default=True,
+        verbose_name=_("Publish to all"),
+        help_text=_(
+            "When enabled, the policy is visible to every employee in the "
+            "selected company. Disable it to restrict visibility to the "
+            "employees/department/job position selected above."
+        ),
+    )
 
     objects = HorillaCompanyManager("company_id")
 
@@ -1207,7 +1275,7 @@ class BonusPoint(HorillaModel):
 
     CONDITIONS = [
         ("==", _("equals")),
-        (">", _("grater than")),
+        (">", _("greater than")),
         ("<", _("less than")),
         (">=", _("greater than or equal")),
         ("<=", _("less than or equal")),

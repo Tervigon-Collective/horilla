@@ -46,6 +46,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from horilla.config import logger
+from horilla.export_safety import safe_cell
 from horilla.horilla_middlewares import _thread_locals
 from horilla.methods import handle_no_permission
 from horilla_views.templatetags.generic_template_filters import getattribute
@@ -233,6 +234,14 @@ def owner_can_enter(
         if not getattr(self, "request", None):
             self.request = request
 
+        if not request.user.is_authenticated:
+            login_url = reverse("login")
+            params = urlencode(request.GET)
+            url = f"{login_url}?next={request.path}"
+            if params:
+                url += f"&{params}"
+            return redirect(url)
+
         instance_id = None
         if kwargs:
             instance_id = kwargs[list(kwargs.keys())[0]]
@@ -292,8 +301,14 @@ def hx_request_required(function):
     """
 
     def _function(request, *args, **kwargs):
+        # Sec-Fetch-Mode is set by the browser itself for a genuine
+        # top-level navigation and can't be spoofed by an htmx fetch()
+        # call, unlike the HX-Request header alone -- some browser setups
+        # send HX-Request even on a real address-bar visit, which would
+        # otherwise slip through this check and render the raw fragment.
+        is_real_navigation = request.META.get("HTTP_SEC_FETCH_MODE") == "navigate"
         key = "HTTP_HX_REQUEST"
-        if key not in request.META.keys():
+        if is_real_navigation or key not in request.META.keys():
             return render(request, "405.html", status=405)
         return function(request, *args, **kwargs)
 
@@ -422,12 +437,18 @@ def get_short_uuid(length: int, prefix: str = "hlv"):
     return prefix + str(uuid_str[:length]).replace("-", "")
 
 
+# Session-scoped cache entries. Written with no timeout they lived until Redis
+# evicted them, so every visitor's view state accumulated forever; the natural
+# lifetime is the session that keyed them.
+SESSION_CACHE_TIMEOUT = getattr(settings, "SESSION_COOKIE_AGE", 1209600)
+
+
 def update_initial_cache(request: object, cache: dict, view: object):
 
     if cache.get(request.session.session_key + "cbv"):
         cache.get(request.session.session_key + "cbv").update({view: {}})
         return
-    cache.set(request.session.session_key + "cbv", {view: {}})
+    cache.set(request.session.session_key + "cbv", {view: {}}, SESSION_CACHE_TIMEOUT)
     return
 
 
@@ -521,11 +542,60 @@ def sortby(
     return queryset
 
 
+# GET params that vary between the write (a request explicitly submitting a
+# search/filter) and a later bare reload of the same embedded list, so they
+# must be left out of saved_filter_cache_key's identity - see its docstring.
+SAVED_FILTER_CACHE_VOLATILE_PARAMS = {
+    "filter_applied",
+    "search",
+    "referrer",
+    "nav_url",
+    "page",
+    "view_id",
+}
+
+
+def saved_filter_cache_key(request):
+    """
+    Cache key for a request's "last search/filter" on a HorillaListView /
+    HorillaCardView page.
+
+    Keying on request.path alone collides whenever the same URL embeds more
+    than one independent list in a single session - e.g. every pipeline
+    stage's candidate list shares one path
+    (candidate-lists-cbv/, get-offboarding-employees-cbv/, ...) and is only
+    told apart by its own GET params (onboarding_stage_id, recruitment_id,
+    stage_id, ...). Without those in the key, stage A's cached filter (or
+    stage B's, whichever wrote last) got served back to every other stage's
+    plain reload on the same path - each stage's own identifying params
+    got silently swapped for a sibling stage's, filtering its queryset by
+    the wrong stage and rendering "No records found" despite the tab's own
+    badge count being correct.
+
+    Folding in this request's GET params - minus the volatile ones that
+    only ever appear on the "search submitted" request
+    (filter_applied/search themselves, plus referrer/nav_url/page/view_id
+    that ride along with it) - keeps the key symmetric between that write
+    and a later plain-reload read of the same identity: both carry the same
+    identifying params (onboarding_stage_id and friends), so they resolve
+    to the same key, while two different stages' requests - which never
+    share those identifying params - no longer collide.
+    """
+    identity_params = sorted(
+        (key, value)
+        for key, value in request.GET.items()
+        if key not in SAVED_FILTER_CACHE_VOLATILE_PARAMS
+    )
+    return (
+        request.session.session_key + request.path + urlencode(identity_params) + "cbv"
+    )
+
+
 def update_saved_filter_cache(request, cache):
     """
     Method to save filter on cache
     """
-    key = request.session.session_key + request.path + "cbv"
+    key = saved_filter_cache_key(request)
     existing = cache.get(key)
     if existing:
         existing.update(
@@ -535,7 +605,7 @@ def update_saved_filter_cache(request, cache):
                 # "request": request,
             }
         )
-        cache.set(key, existing)
+        cache.set(key, existing, SESSION_CACHE_TIMEOUT)
         return cache
     cache.set(
         key,
@@ -544,23 +614,9 @@ def update_saved_filter_cache(request, cache):
             "query_dict": request.GET,
             # "request": request,
         },
+        SESSION_CACHE_TIMEOUT,
     )
     return cache
-
-
-def get_nested_field(model_class: models.Model, field_name: str) -> object:
-    """
-    Recursion function to execute nested field logic
-    """
-    if "__" in field_name:
-        splits = field_name.split("__", 1)
-        related_model_class = getmodelattribute(
-            model_class,
-            splits[0],
-        ).related.related_model
-        return get_nested_field(related_model_class, splits[1])
-    field = getattribute(model_class, field_name)
-    return field
 
 
 def get_field_class_map(model_class: models.Model, bulk_update_fields: list) -> dict:
@@ -786,7 +842,9 @@ def export_xlsx(json_data, columns, file_name="quick_export", extra_info=None):
                 nested_item = nested_data[i] if i < len(nested_data) else {}
                 for dyn_key in nested_info["keys"]:
                     row.append(nested_item.get(dyn_key, ""))
-            ws.append(row)
+            # Text carried through from user-entered data can execute when
+            # the workbook is opened; guard it on the way in.
+            ws.append([safe_cell(value) for value in row])
 
             for col_idx in range(1, len(row) + 1):
                 ws.cell(row=row_index, column=col_idx).border = thin_border
@@ -884,7 +942,7 @@ def generate_import_excel(
     ws.append(headers)
 
     # Apply styles to header row
-    for col_num, _ in enumerate(headers, 1):
+    for col_num, _unused in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_num)
         cell.font = bold_font
         cell.fill = header_fill
@@ -899,7 +957,7 @@ def generate_import_excel(
             str(getattribute(obj, import_mapping.get(field, field)))
             for field in import_fields
         ]
-        ws.append(row)
+        ws.append([safe_cell(value) for value in row])
     ws.freeze_panes = "A2"
     ws.freeze_panes = "B2"
     return wb

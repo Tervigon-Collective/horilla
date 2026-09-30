@@ -40,6 +40,7 @@ from django.utils import timezone
 from django.utils.html import format_html
 from django.utils.translation import gettext as __
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
 
 from accessibility.decorators import enter_if_accessible
@@ -399,6 +400,8 @@ def _apply_work_info_salary_policy(request, work_info):
     return work_info
 
 
+@login_required
+@permission_required("accessibility.change_defaultaccessibility")
 def profile_edit_access(request, emp_id):
     feature = request.GET.get("feature", None)
     accessibility = DefaultAccessibility.objects.filter(feature=feature).first()
@@ -511,7 +514,10 @@ def about_tab(request, pk, **kwargs):
     """
     This method is used to view profile of an employee.
     """
-    employee = Employee.objects.get(id=pk)
+    employee = Employee.objects.filter(id=pk).first()
+    if not employee:
+        messages.error(request, _("Employee not found."))
+        return HorillaRedirect(request)
     contracts = employee.contract_set.all() if apps.is_installed("payroll") else None
     employee_leaves = (
         employee.available_leave.all() if apps.is_installed("leave") else None
@@ -552,7 +558,10 @@ def allowances_deductions_tab(request, pk):
     condition-based rules. The results are then rendered in the allowance and
     deduction tab template.
     """
-    employee = Employee.objects.get(id=pk)
+    employee = Employee.objects.filter(id=pk).first()
+    if not employee:
+        messages.error(request, _("Employee not found."))
+        return HorillaRedirect(request)
     from employee.cbv.accessibility import can_view_salary
 
     if not can_view_salary(request, employee):
@@ -674,7 +683,10 @@ def shift_tab(request, pk):
 
     Returns: return shift-tab template
     """
-    employee = Employee.objects.get(id=pk)
+    employee = Employee.objects.filter(id=pk).first()
+    if not employee:
+        messages.error(request, _("Employee not found."))
+        return HorillaRedirect(request)
     work_type_requests = WorkTypeRequest.objects.filter(employee_id=pk)
     work_type_requests_ids = json.dumps(
         [instance.id for instance in work_type_requests]
@@ -796,11 +808,8 @@ def document_request_create(request):
             notify.send(
                 request.user.employee_get,
                 recipient=employees,
-                verb=f"{request.user.employee_get} requested a document.",
-                verb_ar=f"طلب {request.user.employee_get} مستنداً.",
-                verb_de=f"{request.user.employee_get} hat ein Dokument angefordert.",
-                verb_es=f"{request.user.employee_get} solicitó un documento.",
-                verb_fr=f"{request.user.employee_get} a demandé un document.",
+                verb=gettext_noop("%(employee_get)s requested a document."),
+                verb_params={"employee_get": str(request.user.employee_get)},
                 redirect=reverse("employee-profile"),
                 icon="chatbox-ellipses",
             )
@@ -877,7 +886,7 @@ def document_tab(request, pk):
 @login_required
 @hx_request_required
 @owner_can_enter("horilla_documents.add_document", Employee)
-def document_create(request, emp_id):
+def document_create(request, emp_id=None):
     """
     This function is used to create documents from employee individual & profile view.
 
@@ -887,7 +896,10 @@ def document_create(request, emp_id):
 
     Returns: return document_tab template
     """
-    employee_id = Employee.objects.get(id=emp_id)
+    employee_id = Employee.objects.filter(id=emp_id).first() if emp_id else None
+    if not employee_id:
+        messages.error(request, _("Employee not found."))
+        return HorillaRedirect(request)
     form = DocumentForm(initial={"employee_id": employee_id, "expiry_date": None})
     if request.method == "POST":
         form = DocumentForm(request.POST, request.FILES)
@@ -905,6 +917,8 @@ def document_create(request, emp_id):
 
 @hx_request_required
 def get_notify_field(request):
+    if not request.user.is_authenticated:
+        return redirect(f"{reverse('login')}?next={request.path}")
     expiry_date = request.GET.get("expiry_date")
     form = DocumentForm()
     if not expiry_date:
@@ -1060,11 +1074,8 @@ def file_upload(request, id):
                 notify.send(
                     request.user.employee_get,
                     recipient=request.user.employee_get.get_reporting_manager().employee_user_id,
-                    verb=f"{request.user.employee_get} uploaded a document",
-                    verb_ar=f"قام {request.user.employee_get} بتحميل مستند",
-                    verb_de=f"{request.user.employee_get} hat ein Dokument hochgeladen",
-                    verb_es=f"{request.user.employee_get} subió un documento",
-                    verb_fr=f"{request.user.employee_get} a téléchargé un document",
+                    verb=gettext_noop("%(employee_get)s uploaded a document"),
+                    verb_params={"employee_get": str(request.user.employee_get)},
                     redirect=reverse(
                         "employee-view-individual",
                         kwargs={"obj_id": request.user.employee_get.id},
@@ -1114,7 +1125,16 @@ def view_file(request, id):
     Returns: return view_file template
     """
 
-    document_obj = Document.objects.filter(id=id).first()
+    # Scoped to the owner unless the caller may view documents generally.
+    # @login_required alone meant any authenticated employee could read any
+    # colleague's uploads -- resumes, identity documents, certificates -- by
+    # incrementing the id. This is the employee-side twin of the candidate
+    # portal issue reported as GHSA-p745-9729-g8jw, and it mirrors the scoping
+    # document_delete above already applies.
+    document_qs = Document.objects.filter(id=id)
+    if not request.user.has_perm("horilla_documents.view_document"):
+        document_qs = document_qs.filter(employee_id__employee_user_id=request.user)
+    document_obj = document_qs.first()
     if document_obj is None:
         return HorillaRedirect(
             request, message=_("No Document found matching the query.")
@@ -1183,16 +1203,16 @@ def document_approve(request, id):
         return refreshed
 
     if refresh_url:
-        span = f"""
-        <span
-            hx-trigger="load"
-            hx-get="{refresh_url}"
-            hx-target="#requestDocument{id}"
-            hx-select="#requestDocument{id}"
-            hx-swap="outerHTML"
-            ">
-        </span>
-        """
+        # refresh_url comes from the request and is interpolated into
+        # hand-built HTML, so autoescaping does not apply. format_html
+        # escapes it.
+        span = format_html(
+            '<span hx-trigger="load" hx-get="{}" hx-target="#requestDocument{}" '
+            'hx-select="#requestDocument{}" hx-swap="outerHTML"></span>',
+            refresh_url,
+            id,
+            id,
+        )
         return HttpResponse(span)
 
     return HorillaRedirect(request)
@@ -1904,11 +1924,7 @@ def employee_view_update(request, obj_id, **kwargs):
                     notify.send(
                         request.user.employee_get,
                         recipient=instance.employee_id.employee_user_id,
-                        verb="Your work details has been updated.",
-                        verb_ar="تم تحديث تفاصيل عملك.",
-                        verb_de="Ihre Arbeitsdetails wurden aktualisiert.",
-                        verb_es="Se han actualizado los detalles de su trabajo.",
-                        verb_fr="Vos informations professionnelles ont été mises à jour.",
+                        verb=gettext_noop("Your work details have been updated."),
                         redirect=reverse("employee-profile"),
                         icon="briefcase",
                     )
@@ -2356,7 +2372,10 @@ def employee_update(request, obj_id):
     args:
         obj_id : employee id
     """
-    employee = Employee.objects.get(id=obj_id)
+    employee = Employee.objects.filter(id=obj_id).first()
+    if not employee:
+        messages.error(request, _("Employee not found."))
+        return HorillaRedirect(request)
     form = EmployeeForm(instance=employee)
     work_info = EmployeeWorkInformation.objects.filter(employee_id=employee).first()
     bank_info = EmployeeBankDetails.objects.filter(employee_id=employee).first()
@@ -2483,9 +2502,9 @@ def employee_bulk_archive(request):
                 return HttpResponse("<script>$('#filterEmployee').click();</script>")
 
         employee.is_active = is_active
-        employee.employee_user_id.is_active = is_active
         if employee.get_archive_condition() is False:
             employee.save()
+            employee.sync_login_access()
             message = _("archived")
             if is_active:
                 message = _("un-archived")
@@ -2508,9 +2527,11 @@ def employee_archive(request, obj_id):
     Args:
             obj_id : Employee instance id
     """
-    employee = Employee.objects.get(id=obj_id)
+    employee = Employee.objects.filter(id=obj_id).first()
+    if not employee:
+        messages.error(request, _("Employee not found."))
+        return HorillaRedirect(request)
     employee.is_active = not employee.is_active
-    employee.employee_user_id.is_active = not employee.is_active
     save = True
     message = "Employee un-archived"
     if not employee.is_active:
@@ -2533,6 +2554,7 @@ def employee_archive(request, obj_id):
             message = _("Employee archived")
     if save:
         employee.save()
+        employee.sync_login_access()
         messages.success(request, message)
         key = "HTTP_HX_REQUEST"
         if key not in request.META.keys():
@@ -2671,7 +2693,6 @@ def get_manager_in(request):
     else:
         title = _("Can't Archive")
     employee.is_active = not employee.is_active
-    employee.employee_user_id.is_active = not employee.is_active
     save = True
     message = "Employee un-archived"
     if not employee.is_active:
@@ -2682,6 +2703,7 @@ def get_manager_in(request):
             message = _("Employee archived")
     if save:
         employee.save()
+        employee.sync_login_access()
         messages.success(request, message)
         return HorillaRedirect(request)
     else:
@@ -2976,7 +2998,7 @@ def employee_export(request):
     """
     if not has_export_access(request, Employee):
         return HorillaRedirect(
-            request, message=_("You dont have access to export this data")
+            request, message=_("You don't have access to export this data")
         )
 
     # Get the list of field names for your model
@@ -3128,7 +3150,7 @@ def work_info_import(request):
                     thread.start()
 
                 except Exception as e:
-                    messages.error(request, _("Error Occured {}").format(e))
+                    messages.error(request, _("Error Occurred {}").format(e))
                     logger.error(e)
 
             path_info = (
@@ -3180,7 +3202,7 @@ def work_info_export(request):
     """
     if not has_export_access(request, Employee):
         return HorillaRedirect(
-            request, message=_("You dont have access to export this data")
+            request, message=_("You don't have access to export this data")
         )
 
     if request.META.get("HTTP_HX_REQUEST"):
@@ -3581,7 +3603,10 @@ def note_tab(request, pk):
     Returns: return note-tab template
 
     """
-    employee_obj = Employee.objects.get(id=pk)
+    employee_obj = Employee.objects.filter(id=pk).first()
+    if not employee_obj:
+        messages.error(request, _("Employee not found."))
+        return HorillaRedirect(request)
     notes = EmployeeNote.objects.filter(employee_id=pk).order_by("-id")
     notes = paginator_qry(notes, request.GET.get("page"))
 
@@ -3618,7 +3643,10 @@ def employee_history_sidebar(request, pk):
     same way HorillaModel-based lists open their auto-added History column
     (see generic/history_col.html / horilla_history_view.html).
     """
-    employee_obj = Employee.objects.get(id=pk)
+    employee_obj = Employee.objects.filter(id=pk).first()
+    if not employee_obj:
+        messages.error(request, _("Employee not found."))
+        return HorillaRedirect(request)
     return render(
         request,
         "employee/history_sidebar.html",
@@ -3635,6 +3663,11 @@ def add_note(request, emp_id=None):
     Saves the note and redirects to the employee's note tab upon successful submission.
     """
 
+    employee_obj = Employee.objects.filter(id=emp_id).first()
+    if not employee_obj:
+        messages.error(request, _("Employee not found."))
+        return HorillaRedirect(request)
+
     form = EmployeeNoteForm(initial={"employee_id": emp_id})
     if request.method == "POST":
         form = EmployeeNoteForm(
@@ -3644,15 +3677,13 @@ def add_note(request, emp_id=None):
 
         if form.is_valid():
             note, attachment_ids = form.save(commit=False)
-            employee = Employee.objects.get(id=emp_id)
-            note.employee_id = employee
+            note.employee_id = employee_obj
             note.updated_by = request.user.employee_get
             note.save()
             note.note_files.set(attachment_ids)
             messages.success(request, _("Note added successfully.."))
             return redirect(f"/employee/note-tab/{emp_id}")
 
-    employee_obj = Employee.objects.get(id=emp_id)
     return render(
         request,
         "tabs/add_note.html",
@@ -3729,7 +3760,10 @@ def add_more_employee_files(request, note_id):
     Args:
         id : stage note instance id
     """
-    note = EmployeeNote.objects.get(id=note_id)
+    note = EmployeeNote.objects.filter(id=note_id).first()
+    if not note:
+        messages.error(request, _("Note not found."))
+        return HorillaRedirect(request)
     employee_id = note.employee_id.id
 
     if request.method == "POST":
@@ -3761,8 +3795,9 @@ def delete_employee_note_file(request, note_file_id):
     Args:
         id : stage file instance id
     """
-    file = NoteFiles.objects.get(id=note_file_id)
-    file.delete()
+    file = NoteFiles.objects.filter(id=note_file_id).first()
+    if file:
+        file.delete()
     return HttpResponse()
 
 
@@ -3843,7 +3878,10 @@ def bonus_points_tab(request, pk):
 
     from payroll.cbv.accessibility import bonus_accessibility
 
-    employee_obj = Employee.objects.get(id=pk)
+    employee_obj = Employee.objects.filter(id=pk).first()
+    if not employee_obj:
+        messages.error(request, _("Employee not found."))
+        return HorillaRedirect(request)
     if not bonus_accessibility(request, employee_obj, PermWrapper(request.user)):
         messages.info(request, _("You dont have access to the feature"))
         return HorillaRedirect(request)
@@ -3877,7 +3915,10 @@ def bonus_points_history_tab(request, pk):
 
     from payroll.cbv.accessibility import bonus_accessibility
 
-    employee_obj = Employee.objects.get(id=pk)
+    employee_obj = Employee.objects.filter(id=pk).first()
+    if not employee_obj:
+        messages.error(request, _("Employee not found."))
+        return HorillaRedirect(request)
     if not bonus_accessibility(request, employee_obj, PermWrapper(request.user)):
         messages.info(request, _("You dont have access to the feature"))
         return HorillaRedirect(request)
@@ -4096,6 +4137,59 @@ def organisation_chart(request):
 
     manager = request.user.employee_get
 
+    def top_of_chain(employee):
+        """Walk up the reporting chain, staying inside the employee's company.
+
+        The chart is company-scoped everywhere else in this view, so the walk
+        stops at a company boundary: without that, an employee of one company
+        who reports into another would be re-rooted onto that other company's
+        tree and shown staff they cannot otherwise see.
+
+        One query per hop, each pulling the next manager and their work info,
+        and a hard depth cap so a pathological chain cannot dominate the view.
+        """
+        max_depth = 30
+        start_company_id = getattr(
+            getattr(employee, "employee_work_info", None), "company_id_id", None
+        )
+        seen = {employee.id}
+        for _ in range(max_depth):
+            work_info = (
+                EmployeeWorkInformation.objects.filter(employee_id=employee)
+                .select_related(
+                    "reporting_manager_id",
+                    "reporting_manager_id__employee_work_info",
+                )
+                .first()
+            )
+            above = getattr(work_info, "reporting_manager_id", None)
+            # Bad data can point a chain back at itself; stop rather than spin.
+            if above is None or not above.is_active or above.id in seen:
+                return employee
+            above_company_id = getattr(
+                getattr(above, "employee_work_info", None), "company_id_id", None
+            )
+            if above_company_id != start_company_id:
+                return employee
+            seen.add(above.id)
+            employee = above
+        return employee
+
+    # Rooting the chart at the logged-in employee gives anyone with no
+    # subordinates a chart of exactly one node - themselves - which reads as a
+    # chart that failed to load. Root at the top of their reporting chain
+    # instead, so the chart shows the organisation they sit in. The dropdown and
+    # the POST branch below still re-root it wherever the user wants.
+    has_subordinates = (
+        Employee.objects.filter(
+            is_active=True, employee_work_info__reporting_manager_id=manager
+        )
+        .exclude(id=manager.id)
+        .exists()
+    )
+    if not has_subordinates:
+        manager = top_of_chain(manager)
+
     if len(reporting_managers) == 0:
         new_dict = {}
     else:
@@ -4128,6 +4222,7 @@ def organisation_chart(request):
 
 
 @login_required
+@hx_request_required
 @permission_required("payroll.add_encashmentgeneralsettings")
 def encashment_condition_create(request):
     """
@@ -4168,6 +4263,101 @@ def encashment_condition_create(request):
     if request.headers.get("HX-Request"):
         return HttpResponse("", status=400)
     return HorillaRedirect(request)
+
+
+@login_required
+@hx_request_required
+@permission_required("payroll.change_encashmentgeneralsettings")
+def toggle_leave_encashment(request):
+    """
+    Enable/disable the Leave Encashment section on its own -- kept separate
+    from the redeem-unit form so toggling visibility doesn't depend on (or
+    interfere with) saving the bonus/leave unit amounts.
+    """
+    if not apps.is_installed("payroll"):
+        return HttpResponse("", status=400)
+
+    EncashmentGeneralSettings = get_horilla_model_class(
+        app_label="payroll", model="encashmentgeneralsettings"
+    )
+    instance = EncashmentGeneralSettings.objects.first()
+    if not instance:
+        instance = EncashmentGeneralSettings()
+    instance.leave_encashment_enabled = (
+        request.POST.get("leave_encashment_enabled") == "on"
+    )
+    instance.save()
+    if instance.leave_encashment_enabled:
+        messages.success(request, _("Leave Encashment is enabled successfully!"))
+    else:
+        messages.success(request, _("Leave Encashment is disabled successfully!"))
+    return HttpResponse("")
+
+
+@login_required
+@hx_request_required
+@permission_required("payroll.change_encashmentgeneralsettings")
+def toggle_encashment_apply_to_all(request):
+    """
+    "Apply to all employees" on its own -- an instant toggle like the
+    enable/disable one above, instead of requiring the Employees/Department/
+    Job Position form's Save button.
+    """
+    if not apps.is_installed("payroll"):
+        return HttpResponse("", status=400)
+
+    EncashmentGeneralSettings = get_horilla_model_class(
+        app_label="payroll", model="encashmentgeneralsettings"
+    )
+    instance = EncashmentGeneralSettings.objects.first()
+    if not instance:
+        instance = EncashmentGeneralSettings()
+    instance.is_applicable_to_all = request.POST.get("is_applicable_to_all") == "on"
+    instance.save()
+    if instance.is_applicable_to_all:
+        messages.success(request, _("Leave Encashment now applies to all employees."))
+    else:
+        messages.success(
+            request,
+            _("Leave Encashment now applies only to the selected employees."),
+        )
+    return HttpResponse("")
+
+
+@login_required
+@hx_request_required
+@permission_required("payroll.change_encashmentgeneralsettings")
+def encashment_eligibility_settings(request):
+    """
+    Who Leave Encashment applies to -- saved on its own, separate from both
+    the redeem-unit amounts form and the enable/disable toggle.
+    """
+    if not apps.is_installed("payroll"):
+        return HttpResponse("", status=400)
+
+    from payroll.forms.forms import EncashmentEligibilityForm
+
+    EncashmentGeneralSettings = get_horilla_model_class(
+        app_label="payroll", model="encashmentgeneralsettings"
+    )
+    instance = EncashmentGeneralSettings.objects.first()
+    if not instance:
+        instance = EncashmentGeneralSettings.objects.create()
+
+    if request.method == "POST":
+        eligibility_form = EncashmentEligibilityForm(request.POST, instance=instance)
+        if eligibility_form.is_valid():
+            eligibility_form.save()
+            messages.success(request, _("Leave Encashment eligibility updated."))
+            eligibility_form = EncashmentEligibilityForm(instance=instance)
+    else:
+        eligibility_form = EncashmentEligibilityForm(instance=instance)
+
+    return render(
+        request,
+        "settings/encashment_eligibility.html",
+        {"eligibility_form": eligibility_form},
+    )
 
 
 @login_required
@@ -4218,11 +4408,14 @@ def first_last_badge(request):
 @login_required
 @hx_request_required
 @manager_can_enter("employee.view_employee")
-def employee_get_mail_log(request, pk):
+def employee_get_mail_log(request, pk=None):
     """
     This method is used to track mails sent along with the status
     """
-    employee = Employee.objects.get(id=pk)
+    employee = Employee.objects.filter(id=pk).first() if pk else None
+    if not employee:
+        messages.error(request, _("Employee not found."))
+        return HorillaRedirect(request)
     tracked_mails = EmailLog.objects.filter(to__icontains=employee.email)
     try:
         if employee.employee_work_info and employee.employee_work_info.email:
@@ -4426,7 +4619,10 @@ def employee_tag_update(request, tag_id):
     """
     This method renders form and template to create Ticket type
     """
-    tag = EmployeeTag.objects.get(id=tag_id)
+    tag = EmployeeTag.objects.filter(id=tag_id).first()
+    if not tag:
+        messages.error(request, _("Tag not found."))
+        return HorillaRedirect(request)
     form = EmployeeTagForm(instance=tag)
     if request.method == "POST":
         form = EmployeeTagForm(request.POST, instance=tag)

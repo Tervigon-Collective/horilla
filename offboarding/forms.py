@@ -11,6 +11,7 @@ from django import forms
 from django.contrib import messages
 from django.template.loader import render_to_string
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from base.forms import ModelForm
 from employee.forms import MultipleFileField
@@ -206,12 +207,15 @@ class TaskForm(ModelForm):
         self.fields["stage_id"].empty_label = "All Stages in Offboarding"
         self.fields["managers"].empty_label = None
         if not self.instance.pk:
-            queryset = OffboardingEmployee.objects.filter(
-                stage_id__offboarding_id=OffboardingStage.objects.filter(
-                    id=self.initial.get("stage_id")
+            stage = OffboardingStage.objects.filter(
+                id=self.initial.get("stage_id")
+            ).first()
+            queryset = (
+                OffboardingEmployee.objects.filter(
+                    stage_id__offboarding_id=stage.offboarding_id
                 )
-                .first()
-                .offboarding_id
+                if stage
+                else OffboardingEmployee.objects.none()
             )
             self.fields["tasks_to"].queryset = queryset
 
@@ -318,11 +322,10 @@ class ResignationLetterForm(ModelForm):
                 notify.send(
                     request.user.employee_get,
                     recipient=self.instance.employee_id.get_reporting_manager().employee_user_id,
-                    verb=f"{self.instance.employee_id.get_full_name()} requested for resignation.",
-                    verb_ar=f"",
-                    verb_de=f"",
-                    verb_es=f"",
-                    verb_fr=f"",
+                    verb=gettext_noop("%(get_full_name)s requested for resignation."),
+                    verb_params={
+                        "get_full_name": str(self.instance.employee_id.get_full_name())
+                    },
                     redirect="#",
                     icon="information",
                 )

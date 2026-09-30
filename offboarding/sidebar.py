@@ -28,10 +28,27 @@ SUBMENUS = [
         "menu": _("Resignation Letters"),
         "redirect": reverse("resignation-request-view"),
         "accessibility": "offboarding.sidebar.resignation_letter_accessibility",
+        # These are sibling URLs (not sub-paths of resignation-request-view's
+        # own path), so they need explicit prefixes for the sidebar's
+        # path-based active-link highlighting to match them.
+        "match_prefixes": [
+            "/offboarding/resignation-requests-detail-view/",
+            "/offboarding/resignation-requests-single-view/",
+            "/offboarding/tab-resignation-requests-detail-view/",
+            "/offboarding/tab-resignation-requests/",
+        ],
     },
     {
         "menu": _("Exit Process"),
         "redirect": reverse("offboarding-pipeline"),
+        # offboarding-pipeline-shell/<pk>/ and offboarding-individual-view/<pk>/
+        # are sibling URLs (not sub-paths of offboarding-pipeline/), so they
+        # need explicit prefixes for the sidebar's path-based active-link
+        # highlighting to match them.
+        "match_prefixes": [
+            "/offboarding/offboarding-pipeline-shell/",
+            "/offboarding/offboarding-individual-view/",
+        ],
     },
     {
         "menu": _("F&F Settlements"),
@@ -49,8 +66,12 @@ def offboarding_accessibility(request, menu, user_perms, *args, **kwargs):
             or any_manager(request.user.employee_get)
             or is_offboarding_employee(request.user.employee_get)
         )
-    finally:
-        return accessible
+    except Exception:
+        # employee_get raises for a user with no Employee row; the menu
+        # should then simply not be shown. `except Exception` instead of a
+        # bare `finally` so KeyboardInterrupt and SystemExit still propagate.
+        pass
+    return accessible
 
 
 def resignation_letter_accessibility(request, menu, user_perms, *args, **kwargs):

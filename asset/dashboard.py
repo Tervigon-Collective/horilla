@@ -4,12 +4,13 @@ Modern asset dashboard views — KPI summary + ApexCharts.
 Accessible at /asset/dashboard/modern/ alongside the existing dashboard.
 """
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 from django.db.models import Count, DecimalField, Q, Sum
 from django.db.models.functions import Coalesce
 from django.http import JsonResponse
 from django.shortcuts import render
+from django.utils import timezone
 from django.utils.translation import gettext as _
 
 from horilla.decorators import login_required, permission_required
@@ -17,15 +18,19 @@ from horilla.decorators import login_required, permission_required
 
 def _parse_period(request):
     """Parse from_date and to_date from GET params. Defaults to current month."""
-    today = date.today()
+    today = timezone.now().date()
     from_str = request.GET.get("from_date")
     to_str = request.GET.get("to_date")
     try:
-        from_date = date.fromisoformat(from_str) if from_str else today.replace(day=1)
+        from_date = (
+            timezone.datetime.fromisoformat(from_str).date()
+            if from_str
+            else today.replace(day=1)
+        )
     except (ValueError, TypeError):
         from_date = today.replace(day=1)
     try:
-        to_date = date.fromisoformat(to_str) if to_str else today
+        to_date = timezone.datetime.fromisoformat(to_str).date() if to_str else today
     except (ValueError, TypeError):
         to_date = today
     return from_date, to_date
@@ -79,10 +84,12 @@ def asset_kpi_data(request):
     )["total"]
 
     # Expiring soon (next 30 days) — forward-looking, independent of picker
-    today = date.today()
+    today = timezone.now().date()
+    expiring_soon_from_date = today
+    expiring_soon_to_date = today + timedelta(days=30)
     expiring_soon = Asset.objects.filter(
-        expiry_date__gte=today,
-        expiry_date__lte=today + timedelta(days=30),
+        expiry_date__gte=expiring_soon_from_date,
+        expiry_date__lte=expiring_soon_to_date,
     ).count()
 
     # Return requests pending — current state
@@ -106,6 +113,12 @@ def asset_kpi_data(request):
             # was computed from, instead of showing every asset.
             "period_from_date": from_date.isoformat(),
             "period_to_date": to_date.isoformat(),
+            # Echoed back so the "Expiring Soon" card's click-through uses
+            # the exact same forward-looking window expiring_soon was
+            # counted from -- this is independent of the picker range above,
+            # so period_from_date/period_to_date would be the wrong bounds.
+            "expiring_soon_from_date": expiring_soon_from_date.isoformat(),
+            "expiring_soon_to_date": expiring_soon_to_date.isoformat(),
         }
     )
 
@@ -140,6 +153,7 @@ def asset_status_distribution(request):
 def asset_by_category(request):
     """Asset count by category with in-use breakdown, for assets purchased in the picker range."""
     categories = []
+    from_date, to_date = _parse_period(request)
 
     try:
         data = (
@@ -168,19 +182,34 @@ def asset_by_category(request):
     except Exception:
         pass
 
-    return JsonResponse({"categories": categories})
+    # Echoed back so this chart's click-through can filter to the exact
+    # same purchase-date range the counts above were computed from --
+    # without it, "category=<id>" alone shows every asset in that
+    # category ever purchased, not just the "4" this bar actually counted.
+    return JsonResponse(
+        {
+            "categories": categories,
+            "period_from_date": from_date.isoformat(),
+            "period_to_date": to_date.isoformat(),
+        }
+    )
 
 
 @login_required
 def asset_request_status(request):
-    """Asset request status breakdown, filtered to requests raised in the picker range."""
+    """Asset request status breakdown, for the current overall request pool.
+
+    Like asset_department_distribution / asset_age_distribution below, this is
+    a snapshot of where every request currently stands, not "requests raised
+    this period" activity. Scoping it to created_at within the picker range
+    (which defaults to the current month) hid every request from earlier
+    months, so e.g. long-pending "Requested" rows disappeared from the chart
+    even though the KPI tile's "Pending Requests" count (unscoped) still
+    included them -- the two numbers disagreed on-screen.
+    """
     from asset.models import AssetRequest
 
-    from_date, to_date = _parse_period(request)
-    requests_qs = AssetRequest.objects.filter(
-        created_at__date__gte=from_date,
-        created_at__date__lte=to_date,
-    )
+    requests_qs = AssetRequest.objects.all()
     statuses = [
         {
             "status": "Requested",
@@ -206,6 +235,7 @@ def asset_request_status(request):
 def asset_value_by_category(request):
     """Total asset value by category, for assets purchased in the picker range."""
     categories = []
+    from_date, to_date = _parse_period(request)
 
     try:
         data = (
@@ -234,16 +264,29 @@ def asset_value_by_category(request):
     except Exception:
         pass
 
-    return JsonResponse({"categories": categories})
+    return JsonResponse(
+        {
+            "categories": categories,
+            "period_from_date": from_date.isoformat(),
+            "period_to_date": to_date.isoformat(),
+        }
+    )
 
 
 @login_required
 def asset_expiring_soon(request):
-    """Assets with expiry date within the selected period."""
+    """Assets expiring in the next 30 days -- forward-looking, independent of picker.
+
+    Same reasoning as the KPI tile's expiring_soon count above: expiry dates
+    are inherently ahead of today, so the picker's [month-start, today]
+    default (built for backward-looking "purchased this period" widgets)
+    could show already-expired assets as "expiring soon" or hide genuinely
+    upcoming expiries, depending on what range happened to be selected.
+    """
     from asset.models import Asset
 
-    from_date, to_date = _parse_period(request)
-    today = date.today()
+    today = timezone.now().date()
+    from_date, to_date = today, today + timedelta(days=30)
     assets = []
 
     try:
@@ -326,18 +369,23 @@ def asset_recent_allocations(request):
 
 @login_required
 def asset_department_distribution(request):
-    """Assets distributed by department (via assigned employees), assigned in the picker range."""
+    """Assets currently held, distributed by department (via assigned employees).
+
+    This is a snapshot of who holds what right now, not "assigned this
+    period" activity -- unlike the Total Value/By Category charts (which
+    intentionally track purchases in the picker range), filtering this by
+    assigned_date hid every currently-held asset whose assignment just
+    happened to be recorded outside the current month, understating each
+    department's real current holdings.
+    """
     from asset.models import AssetAssignment
 
-    from_date, to_date = _parse_period(request)
     departments = []
 
     try:
         data = (
             AssetAssignment.objects.filter(
                 return_status__isnull=True,
-                assigned_date__gte=from_date,
-                assigned_date__lte=to_date,
             )
             .values(
                 "assigned_to_employee_id__employee_work_info__department_id",
@@ -368,8 +416,19 @@ def asset_department_distribution(request):
 
 @login_required
 def asset_age_distribution(request):
-    """Asset age distribution by purchase year (assets purchased within the selected period)."""
-    today = date.today()
+    """Age distribution of the entire current asset fleet.
+
+    Same fix as asset_department_distribution: this is a snapshot of how
+    old the assets we currently own are, not "assets purchased this
+    period" activity. Scoping it to _assets_in_period made it collapse to
+    a single "< 1 year" bucket every month by construction -- anything
+    bought in the current period is by definition under a month old, so
+    the fleet's real age spread (most assets purchased years ago) never
+    showed up at all.
+    """
+    from asset.models import Asset
+
+    today = timezone.now().date()
     brackets = []
     try:
         bracket_map = {
@@ -379,7 +438,7 @@ def asset_age_distribution(request):
             "3–5 years": 0,
             "5+ years": 0,
         }
-        for a in _assets_in_period(request).filter(asset_purchase_date__isnull=False):
+        for a in Asset.objects.filter(asset_purchase_date__isnull=False):
             age_years = (today - a.asset_purchase_date).days / 365.25
             if age_years < 1:
                 bracket_map["< 1 year"] += 1

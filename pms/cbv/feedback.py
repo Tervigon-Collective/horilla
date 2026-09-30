@@ -11,6 +11,7 @@ from django.shortcuts import render
 from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from attendance.cbv.tab_shell import AttendanceTabContentShell
 from base.decorators import manager_can_enter
@@ -438,19 +439,11 @@ class _FeedbackTabNavBase(HorillaNavView):
     tab.
     """
 
+    template_name = "generic/inline_nav.html"
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.actions = [
-            {
-                "action": _("Add Anonymous"),
-                "attrs": f"""
-                    data-toggle = "oh-modal-toggle"
-                    data-target = "#genericModal"
-                    hx-target="#genericModalBody"
-                    hx-get ="{reverse('add-anonymous-feedback')}"
-                    style="cursor: pointer;"
-                """,
-            },
             {
                 "action": _("Archive"),
                 "attrs": """
@@ -506,6 +499,11 @@ class _FeedbackTabNavBase(HorillaNavView):
     filter_body_template = "cbv/360_feedback/feedback_filter.html"
     filter_instance = FeedbackFilter()
     filter_form_context_name = "feedback_filter_form"
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. FeedbackFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
 
 
 @method_decorator(login_required, name="dispatch")
@@ -554,6 +552,13 @@ class AnonymousFeedbackNav(_FeedbackTabNavBase):
         super().__init__(**kwargs)
         self.search_url = reverse("anonymous-feedback-tab")
         self.search_swap_target = "#anonymousFeedbackListContainer"
+        self.create_attrs = f"""
+            data-toggle="oh-modal-toggle"
+            data-target="#genericModal"
+            hx-target="#genericModalBody"
+            hx-get="{reverse('add-anonymous-feedback')}"
+            style="cursor: pointer;"
+        """
 
 
 class SelfFeedbackTabShell(AttendanceTabContentShell):
@@ -637,11 +642,7 @@ class AddAnonymousFeedbackForm(HorillaFormView):
                     notify.send(
                         HorillaUser.objects.filter(username="Horilla Bot").first(),
                         recipient=feedback.employee_id.employee_user_id,
-                        verb="You received an anonymous feedback!",
-                        verb_ar="لقد تلقيت تقييمًا مجهولًا!",
-                        verb_de="Sie haben anonymes Feedback erhalten!",
-                        verb_es="¡Has recibido un comentario anónimo!",
-                        verb_fr="Vous avez reçu un feedback anonyme!",
+                        verb=gettext_noop("You received anonymous feedback!"),
                         redirect=reverse("feedback-view"),
                         icon="bag-check",
                     )

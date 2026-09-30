@@ -10,10 +10,12 @@ from datetime import timedelta
 from urllib.parse import parse_qs
 
 from django.contrib import messages
+from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from base.methods import (
     closest_numbers,
@@ -22,7 +24,6 @@ from base.methods import (
     get_key_instances,
     paginator_qry,
 )
-from base.views import paginator_qry
 from employee.filters import DisciplinaryActionFilter, PolicyFilter
 from employee.forms import DisciplinaryActionForm, PolicyForm
 from employee.models import (
@@ -38,14 +39,24 @@ from horilla_auth.models import HorillaUser
 from notifications.signals import notify
 
 
+def _visible_policies(request, policies):
+    """
+    Restrict policies to the ones marked visible to all, or specifically
+    targeted at the requesting employee via employees/department/job position.
+    """
+    if request.user.has_perm("employee.view_policy"):
+        return policies
+    employee = Employee.objects.filter(employee_user_id=request.user).first()
+    targeted = Q(filtered_employees=employee) if employee else Q(pk__in=[])
+    return policies.filter(Q(is_visible_to_all=True) | targeted).distinct()
+
+
 @login_required
 def view_policies(request):
     """
     Method is used render template to view all the policy records
     """
-    policies = Policy.objects.all()
-    if not request.user.has_perm("employee.view_policy"):
-        policies = policies.filter(is_visible_to_all=True)
+    policies = _visible_policies(request, Policy.objects.all())
     return render(
         request,
         "policies/view_policies.html",
@@ -62,6 +73,7 @@ def policies_discipline_view(request):
 
 
 @login_required
+@hx_request_required
 def policies_discipline_disciplinary_tab(request):
     """
     HTMX tab body for disciplinary actions under policies & discipline.
@@ -70,6 +82,7 @@ def policies_discipline_disciplinary_tab(request):
 
 
 @login_required
+@hx_request_required
 def policies_discipline_policies_tab(request):
     """
     HTMX tab body for policies under policies & discipline.
@@ -78,6 +91,7 @@ def policies_discipline_policies_tab(request):
 
 
 @login_required
+@hx_request_required
 def policies_discipline_action_type_tab(request):
     """
     HTMX tab body for disciplinary action types under policies & discipline.
@@ -113,9 +127,7 @@ def search_policies(request):
     """
     This method is used to search in policies
     """
-    policies = PolicyFilter(request.GET).qs
-    if not request.user.has_perm("employee.view_policy"):
-        policies = policies.filter(is_visible_to_all=True)
+    policies = _visible_policies(request, PolicyFilter(request.GET).qs)
     return render(
         request,
         "policies/records.html",
@@ -132,8 +144,15 @@ def view_policy(request):
     """
     This method is used to view the policy
     """
-    instance_id = request.GET["instance_id"]
-    policy = Policy.objects.filter(id=instance_id).first()
+    instance_id = request.GET.get("instance_id")
+    policy = (
+        _visible_policies(request, Policy.objects.filter(id=instance_id)).first()
+        if instance_id
+        else None
+    )
+    if not policy:
+        messages.error(request, _("Policy not found."))
+        return HorillaRedirect(request)
     return render(
         request,
         "policies/view_policy.html",
@@ -159,10 +178,8 @@ def delete_policies(request):
     except ValueError:
         messages.error(request, _("Policies Not Found"))
     if request.META.get("HTTP_HX_REQUEST"):
-        policies_qs = Policy.objects.all()
-        if not request.user.has_perm("employee.view_policy"):
-            policies_qs = policies_qs.filter(is_visible_to_all=True)
-        return render(
+        policies_qs = _visible_policies(request, Policy.objects.all())
+        response = render(
             request,
             "policies/records.html",
             {
@@ -170,6 +187,18 @@ def delete_policies(request):
                 "pd": request.GET.urlencode(),
             },
         )
+        # `hx-on::after-request="...reloadMessagesButton...click()..."` on the
+        # delete link (records.html) is the usual way this app surfaces a
+        # message after an htmx swap, but for this element it never actually
+        # fires -- the toast only ever showed up on the next full page load.
+        # A plain inline <script> in the swapped response, like every other
+        # htmx-driven view in this app that reliably shows its message,
+        # sidesteps that and runs immediately.
+        response.content += (
+            b"<script>var b=document.getElementById('reloadMessagesButton');"
+            b"if(b)b.click();</script>"
+        )
+        return response
     return redirect(view_policies)
 
 
@@ -277,22 +306,6 @@ def get_action_type_delete(action_id):
     return action.action_type
 
 
-def get_action_type(action_id):
-    """
-    This function is used to get the action type by the selection of title in the form.
-    """
-    action = Actiontype.objects.get(title=action_id["action"])
-    return action.action_type
-
-
-def get_action_type_delete(action_id):
-    """
-    This function is used to get the action type by the selection of title in the form.
-    """
-    action = Actiontype.objects.get(title=action_id)
-    return action.action_type
-
-
 @login_required
 @hx_request_required
 @permission_required("employee.add_disciplinaryaction")
@@ -322,11 +335,7 @@ def create_actions(request):
             notify.send(
                 request.user.employee_get,
                 recipient=employees,
-                verb="Disciplinary action is taken on you.",
-                verb_ar="تم اتخاذ إجراء disziplinarisch ضدك.",
-                verb_de="Disziplinarische Maßnahmen wurden gegen Sie ergriffen.",
-                verb_es="Se ha tomado acción disciplinaria en tu contra.",
-                verb_fr="Des mesures disciplinaires ont été prises à votre encontre.",
+                verb=gettext_noop("Disciplinary action is taken on you."),
                 redirect="/employee/disciplinary-actions/",
                 icon="chatbox-ellipses",
             )
@@ -366,11 +375,7 @@ def update_actions(request, action_id):
             notify.send(
                 request.user.employee_get,
                 recipient=employees,
-                verb="Disciplinary action is taken on you.",
-                verb_ar="تم اتخاذ إجراء disziplinarisch ضدك.",
-                verb_de="Disziplinarische Maßnahmen wurden gegen Sie ergriffen.",
-                verb_es="Se ha tomado acción disciplinaria en tu contra.",
-                verb_fr="Des mesures disciplinaires ont été prises à votre encontre.",
+                verb=gettext_noop("Disciplinary action is taken on you."),
                 redirect="/employee/disciplinary-actions/",
                 icon="chatbox-ellipses",
             )
@@ -381,8 +386,11 @@ def update_actions(request, action_id):
 @hx_request_required
 @permission_required("employee.change_disciplinaryaction")
 def remove_employee_disciplinary_action(request, action_id, emp_id):
-    dis_action = DisciplinaryAction.objects.get(id=action_id)
-    employee = Employee.objects.get(id=emp_id)
+    dis_action = DisciplinaryAction.objects.filter(id=action_id).first()
+    employee = Employee.objects.filter(id=emp_id).first()
+    if not dis_action or not employee:
+        messages.error(request, _("Record not found."))
+        return HorillaRedirect(request)
 
     action_type = get_action_type_delete(dis_action.action)
 
@@ -422,7 +430,10 @@ def delete_actions(request, action_id):
     request_copy.pop("instances_ids", None)
     previous_data = request_copy.urlencode()
 
-    dis = DisciplinaryAction.objects.get(id=action_id)
+    dis = DisciplinaryAction.objects.filter(id=action_id).first()
+    if not dis:
+        messages.error(request, _("Disciplinary action not found."))
+        return HorillaRedirect(request)
 
     action_type = get_action_type_delete(dis.action)
 

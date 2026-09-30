@@ -105,7 +105,6 @@ class AssetHistoryNavView(HorillaNavView):
                     data-target="#assetHistoryExport"
                     hx-get="{reverse('asset-history-export-form')}"
                     hx-target="#assetHistoryExportForm"
-                    hx-vals='js:{{"has_selection": (JSON.parse(document.getElementById("selectedInstances")?.getAttribute("data-ids")||"[]").length>0)}}'
                     style="cursor: pointer;"
                     """,
                 },
@@ -116,6 +115,11 @@ class AssetHistoryNavView(HorillaNavView):
     filter_form_context_name = "form"
     filter_instance = AssetHistoryFilter()
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. AssetHistoryFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
 
     group_by_fields = [
         ("asset_id__asset_name", _("Asset")),
@@ -150,7 +154,6 @@ class AssetHistoryExportFormView(TemplateView):
         context["export_filter"] = AssetHistoryFilter(
             queryset=AssetAssignment.objects.all()
         )
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context
 
 
@@ -202,6 +205,8 @@ class AssetHistoryDetailView(HorillaDetailedView):
     def get_context_data(self, **kwargs: Any) -> dict:
         context = super().get_context_data(**kwargs)
         instance = self.get_object()
+        if not instance:
+            return context
         if instance.assign_images.all():
             self.body.append(
                 (

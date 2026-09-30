@@ -1,6 +1,7 @@
 {% load static i18n generic_template_filters %}
 
 <div class="flex items-center justify-center gap-1" onclick="event.stopPropagation()">
+    {% include "cbv/candidates/option.html" %}
     {% if perms.recruitment.change_candidate %}
         <a
             class="oh-btn oh-btn--light-bkg oh-btn--sq-sm"

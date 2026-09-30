@@ -16,8 +16,10 @@ from itertools import chain
 import pandas as pd
 from django.conf import settings
 from django.db.models import Q
+from django.contrib import messages
 from django.http import HttpResponse, JsonResponse
-from django.shortcuts import render
+from django.shortcuts import redirect, render
+from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from xlsxwriter.utility import xl_range
 
@@ -31,6 +33,7 @@ from base.methods import (
     paginator_qry,
 )
 from base.models import (
+    Company,
     Department,
     EmployeeShift,
     Holidays,
@@ -39,8 +42,8 @@ from base.models import (
     WorkType,
 )
 from employee.filters import EmployeeFilter
-from employee.models import Employee
 from employee.cbv.accessibility import can_access_employee_record
+from employee.models import Employee, EmployeeTag
 from horilla.decorators import hx_request_required, login_required, manager_can_enter
 
 # ---------------------------------------------------------------------------
@@ -690,14 +693,46 @@ def attendance_monthly_summary(request):
     from_date_default = today.replace(day=1)
     to_date_default = today.replace(day=calendar.monthrange(today.year, today.month)[1])
 
+    # Employee/Department/Job Position/Shift/Work Type render as AJAX-
+    # searched Select2 comboboxes now (see monthly_summary.html) rather
+    # than pre-rendering every instance as an <option> tag -- Employee in
+    # particular doesn't scale as a full dump. Only the currently-selected
+    # instances need a real <option> here (select2's own preload
+    # requirement), same pattern as HorillaFilterSet._apply_ajax_fields.
     context = {
         "from_date": request.GET.get("from_date", from_date_default.isoformat()),
         "to_date": request.GET.get("to_date", to_date_default.isoformat()),
-        "employees": Employee.objects.filter(is_active=True),
-        "departments": Department.objects.all(),
-        "job_positions": JobPosition.objects.all(),
-        "shifts": EmployeeShift.objects.all(),
-        "work_types": WorkType.objects.all(),
+        "selected_employees": Employee.objects.filter(
+            pk__in=request.GET.getlist("employee_id")
+        ),
+        "selected_departments": Department.objects.filter(
+            pk__in=request.GET.getlist("department_id")
+        ),
+        "selected_job_positions": JobPosition.objects.filter(
+            pk__in=request.GET.getlist("job_position_id")
+        ),
+        "selected_shifts": EmployeeShift.objects.filter(
+            pk__in=request.GET.getlist("shift_id")
+        ),
+        "selected_work_types": WorkType.objects.filter(
+            pk__in=request.GET.getlist("work_type_id")
+        ),
+        # Advanced section -- less commonly filtered on than Work Info's own
+        # fields, but already fully supported server-side for free: the
+        # table/export views build EmployeeFilter(request.GET), which
+        # already declares company_id/reporting_manager_id/tags/is_active
+        # and applies whichever of them are present in the querystring via
+        # its own .qs, no new backend filtering logic needed here.
+        "selected_companies": Company.objects.filter(
+            pk__in=request.GET.getlist("employee_work_info__company_id")
+        ),
+        "selected_reporting_managers": Employee.objects.filter(
+            pk__in=request.GET.getlist("employee_work_info__reporting_manager_id")
+        ),
+        "selected_tags": EmployeeTag.objects.filter(
+            pk__in=request.GET.getlist("employee_work_info__tags")
+        ),
+        "is_active": request.GET.get("is_active", ""),
         "pd": request.GET.urlencode(),
     }
     return render(request, "attendance/monthly_summary/monthly_summary.html", context)
@@ -2280,7 +2315,7 @@ def attendance_monthly_summary_bulk_override(request):
     from attendance.models import AttendanceConflictResolution
 
     if request.method != "POST":
-        return HttpResponse(status=405)
+        return render(request, "405.html", status=405)
 
     emp_ids = request.POST.getlist("employee_ids")
     from_date = _parse_date(request.POST.get("from_date"), None)
@@ -2348,7 +2383,7 @@ def attendance_monthly_summary_undo_bulk(request):
     from attendance.models import AttendanceConflictResolution
 
     if request.method != "POST":
-        return HttpResponse(status=405)
+        return render(request, "405.html", status=405)
 
     pks = request.POST.getlist("pks")
     if not pks:
@@ -2391,10 +2426,12 @@ def attendance_monthly_summary_daily_hours_edit(request):
     try:
         emp = Employee.objects.get(pk=emp_id)
     except Employee.DoesNotExist:
-        return HttpResponse("—")
+        messages.error(request, "Employee not found.")
+        return redirect(reverse("view-my-attendance"))
 
     if date is None:
-        return HttpResponse("—")
+        messages.error(request, "Invalid date.")
+        return redirect(reverse("view-my-attendance"))
 
     is_panel = bool(request.POST.get("panel") or request.GET.get("panel"))
     _tmpl = (

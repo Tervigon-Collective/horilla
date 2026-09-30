@@ -13,6 +13,7 @@ from django.shortcuts import render
 from django.urls import resolve, reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from base.models import CompanyLeaves, Holidays
 from horilla.http.response import HorillaRedirect
@@ -170,6 +171,19 @@ class MyLeaveRequestListView(MainParentListView):
     List view of the page
     """
 
+    # Mirrors MyLeaveRequestNavView.nested_group_by_fields below -- List
+    # and Nav are separate classes/templates (see employee/cbv/employees.py's
+    # EmployeesList/EmployeeNav for the same split), so the inline
+    # "add/change field" dropdowns in the "Grouped by" breadcrumb
+    # (nested_group_by_table.html, rendered by the List view) need this
+    # here too. Same three fields as the existing group_by_fields --
+    # self-scoped page, no employee/org-structure fields to add.
+    nested_group_by_fields = [
+        ("leave_type_id", _("Leave Type")),
+        ("status", _("Status")),
+        ("requested_days", _("Requested Days")),
+    ]
+
     def get_queryset(self):
         """
         to filter data
@@ -216,8 +230,29 @@ class MyLeaveRequestNavView(HorillaNavView):
 
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel (horilla_nav.html's .oh-filter-modern
+    # styles) -- same treatment as Attendance/Late Arrival/Check-in Log/
+    # Monthly Summary this session. Safe alongside UserLeaveRequestFilter
+    # staying a plain FilterSet (not HorillaFilterSet): modern_filter only
+    # toggles the panel's own markup/CSS, and every custom_filter_fields/
+    # ajax_fields lookup elsewhere already defaults to [] / {} via getattr
+    # for a FilterSet that doesn't declare them -- no AJAX combobox is
+    # needed here anyway, every field's option list is already small
+    # (Leave Type is scoped to leave types the current user has ever
+    # requested).
+    modern_filter = True
 
     group_by_fields = [
+        ("leave_type_id", _("Leave Type")),
+        ("status", _("Status")),
+        ("requested_days", _("Requested Days")),
+    ]
+    # Takes precedence over group_by_fields above in the filter panel's own
+    # "Group By" section (horilla_nav.html: `{% if nested_group_by_fields %}`
+    # renders the new multi-level picker and suppresses the old single-select
+    # one) -- group_by_fields is left in place regardless, same as every
+    # other page in this session/codebase that has both.
+    nested_group_by_fields = [
         ("leave_type_id", _("Leave Type")),
         ("status", _("Status")),
         ("requested_days", _("Requested Days")),
@@ -255,6 +290,21 @@ class MyLeaveRequestDetailView(HorillaDetailedView):
         (_("View attachment"), "attachment_action", True),
     ]
     action_method = "detail_leave_actions"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        if not self.instance:
+            return context
+        body = list(self.body)
+        if self.instance.multiple_approvals:
+            insert_index = 6
+            body.insert(
+                insert_index,
+                (_("Multiple Approvals"), "multiple_approval_action", True),
+            )
+            self.cols["multiple_approval_action"] = 12
+        context["body"] = body
+        return context
 
 
 @method_decorator(login_required, name="dispatch")
@@ -392,7 +442,7 @@ class MyLeaveRequestForm(HorillaFormView):
                 else:
                     form.add_error(
                         None,
-                        _("You dont have enough leave days to make the request"),
+                        _("You don't have enough leave days to make the request"),
                     )
             else:
                 if int(form.data["employee_id"]) == int(emp_id):
@@ -415,11 +465,12 @@ class MyLeaveRequestForm(HorillaFormView):
                                 notify.send(
                                     self.request.user.employee_get,
                                     recipient=leave_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
-                                    verb=f"New leave request created for {leave_request.employee_id}.",
-                                    verb_ar=f"تم إنشاء طلب إجازة جديد لـ {leave_request.employee_id}.",
-                                    verb_de=f"Neuer Urlaubsantrag für {leave_request.employee_id} erstellt.",
-                                    verb_es=f"Nueva solicitud de permiso creada para {leave_request.employee_id}.",
-                                    verb_fr=f"Nouvelle demande de congé créée pour {leave_request.employee_id}.",
+                                    verb=gettext_noop(
+                                        "New leave request created for %(employee)s."
+                                    ),
+                                    verb_params={
+                                        "employee": str(leave_request.employee_id)
+                                    },
                                     icon="people-circle",
                                     redirect=reverse("request-view")
                                     + f"?id={leave_request.id}",
@@ -567,26 +618,22 @@ class MyLeaveRequestSingleForm(HorillaFormView):
                         notify.send(
                             self.request.user.employee_get,
                             recipient=leave_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
-                            verb="You have a new leave request to validate.",
-                            verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
-                            verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
-                            verb_es="Tiene una nueva solicitud de permiso que debe validar.",
-                            verb_fr="Vous avez une nouvelle demande de congé à valider.",
+                            verb=gettext_noop(
+                                "You have a new leave request to validate."
+                            ),
                             icon="people-circle",
                             redirect=reverse("request-view")
                             + f"?id={leave_request.id}",
                         )
-                        return HorillaRedirect(self.request)
-                    if len(
-                        LeaveRequest.objects.filter(employee_id=employee)
-                    ) == 1 or self.request.META.get("HTTP_REFERER").endswith(
-                        "employee-profile/"
-                    ):
-                        return HorillaRedirect(self.request)
+                    if self.request.META.get("HTTP_HX_REQUEST"):
+                        return self.HttpResponse(
+                            targets_to_reload=["#userRequestReload"]
+                        )
+                    return HorillaRedirect(self.request)
                 else:
                     form.add_error(
                         None,
-                        _("You dont have enough leave days to make the request"),
+                        _("You don't have enough leave days to make the request"),
                     )
                     return self.form_invalid(form)
             else:

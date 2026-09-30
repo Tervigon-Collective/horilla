@@ -559,6 +559,9 @@ class LeaveOneAssignForm(HorillaModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         reload_queryset(self.fields)
+        self.fields["employee_id"].widget.attrs[
+            "id"
+        ] = "id_leave_type_assign_employee_id"
         if self.instance and self.instance.pk:
             assigned_employee_ids = AvailableLeave.objects.filter(
                 leave_type_id=self.instance.pk
@@ -870,11 +873,49 @@ class LeaveAllocationBulkForm(BaseModelForm):
 
     def clean(self):
         """
-        self.instance.employee_id = Employee.objects.filter(id__in=employee_ids).first()
+        Validate that at least one employee was picked.
+
+        employee_id is a multi-select posted as repeated values, so the
+        ModelForm's own single-value validation for the field is dropped
+        (self.errors.pop) and the list is checked here instead.
         """
         cleaned_data = super().clean()
         employee_ids = self.data.getlist("employee_id")
         self.errors.pop("employee_id", None)
+        if not employee_ids:
+            raise ValidationError({"employee_id": _("Employee not chosen")})
+        return cleaned_data
+
+    def _post_clean(self):
+        """Skip ModelForm instance construction entirely.
+
+        ``LeaveAllocationRequest.employee_id`` is a ForeignKey, but on this
+        form it is a multi-select, and it is listed in ``Meta.fields``. So
+        Django's ``_post_clean`` reached::
+
+            construct_instance(...)
+              -> f.save_form_data(instance, cleaned_data["employee_id"])
+                -> setattr(instance, "employee_id", <QuerySet>)
+                  -> ValueError: Cannot assign "<QuerySet [...]>"
+
+        and every *valid* submission raised, returning a 500. An empty
+        selection was fine, because the field then errored and was dropped
+        from ``cleaned_data`` before ``construct_instance`` looked for it --
+        which is why the failure only showed on the path that was supposed to
+        work. ``clean()`` popping the error cannot help: ``_post_clean`` runs
+        after ``clean()``.
+
+        Nothing is lost by skipping it. ``save()`` below builds one
+        ``LeaveAllocationRequest`` per selected employee and never touches
+        ``self.instance``, so the instance this would construct is discarded
+        unread; each real object is validated when it is saved.
+
+        Narrowing ``Meta.fields`` would be the other way out, but the declared
+        multi-select stays in ``self.fields`` either way, so model validation
+        would then trip over an unset FK and report a spurious "required" error
+        instead -- trading a 500 for a form that cannot be submitted.
+        """
+        return
 
     def save(self, commit=True):
         employee_ids = self.data.getlist("employee_id")

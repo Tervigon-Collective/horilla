@@ -1,6 +1,6 @@
 from django.contrib import messages
 from django.http import HttpResponse
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
@@ -38,11 +38,11 @@ class CredentialListView(HorillaListView):
     columns = [
         (_("Phone Number"), "meta_phone_number"),
         (_("Phone Number ID"), "meta_phone_number_id"),
-        (_("Bussiness ID"), "meta_business_id"),
+        (_("Business ID"), "meta_business_id"),
         (_("Webhook Token"), "get_webhook_token"),
         (_("Token"), "token_render"),
     ]
-    # sortby_mapping = [("Bussiness ID", "meta_business_id")]
+    # sortby_mapping = [("Business ID", "meta_business_id")]
     row_attrs = """ id = "credential{get_instance}" """
     option_method = "get_publish_button"
     header_attrs = {
@@ -144,27 +144,37 @@ class CredentialForm(HorillaFormView):
     def form_valid(self, form: WhatsappForm) -> HttpResponse:
         if form.is_valid():
             if self.form.instance.pk:
-                messages.success(self.request, _("Crediential updated successfully"))
+                messages.success(self.request, _("Credential updated successfully"))
             else:
-                messages.success(self.request, _("Crediential created successfully"))
+                messages.success(self.request, _("Credential created successfully"))
             form.save()
             return self.HttpResponse()
         return super().form_valid(form)
 
 
 @func_login_required
-@permission_required("whatsapp.delete_whatsappcredientials")
-@check_integration_enabled(app_name="whatsapp")
 def delete_credentials(request):
     """
     delete for Whatsapp credential settings view
     """
+    # This endpoint is a delete action with no content of its own to show; a
+    # genuine top-level browser navigation/reload should land on the real
+    # WhatsApp credentials page instead of a bare permission/error page.
+    if request.headers.get("Sec-Fetch-Mode") == "navigate":
+        return redirect(reverse("whatsapp-credential-view"))
+    return _delete_credentials(request)
 
-    id = request.GET["id"]
+
+@permission_required("whatsapp.delete_whatsappcredientials")
+@check_integration_enabled(app_name="whatsapp")
+def _delete_credentials(request):
+    id = request.GET.get("id")
     crediential = WhatsappCredientials.objects.filter(id=id).first()
+    if not crediential:
+        return HttpResponse()
     count = WhatsappCredientials.objects.count()
     crediential.delete()
-    messages.success(request, _("Crediential deleted."))
+    messages.success(request, _("Credential deleted."))
     if count == 1:
         return HttpResponse("<script>$('.reload-record').click();</script>")
     return HttpResponse("<script>$('#reloadMessagesButton').click();</script>")

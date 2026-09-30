@@ -2316,6 +2316,14 @@ class Payslip(HorillaModel):
         ordering = [
             "-end_date",
         ]
+        # Meta.ordering sorts every unqualified Payslip query by -end_date,
+        # and the UniqueConstraint below leads on employee_id so it cannot
+        # serve that sort. Payroll registers also filter by status within a
+        # period.
+        indexes = [
+            models.Index(fields=["-end_date"], name="payslip_end_date_idx"),
+            models.Index(fields=["status", "end_date"], name="payslip_status_date_idx"),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["employee_id", "start_date", "end_date"],
@@ -2459,7 +2467,7 @@ class LoanAccount(HorillaModel):
 
         installment_date = installment_start_date
         installment_schedule = {}
-        for _ in range(total_installments):
+        for _unused in range(total_installments):
             installment_schedule[str(installment_date)] = installment_amount
             installment_date = get_next_month_same_date(installment_date)
 
@@ -2988,6 +2996,42 @@ class EncashmentGeneralSettings(models.Model):
     default_mileage_rate = models.FloatField(
         default=0,
         verbose_name=_("Default mileage rate (₹/km)"),
+    )
+    leave_encashment_enabled = models.BooleanField(
+        default=True,
+        verbose_name=_("Enable Leave Encashment"),
+        help_text=_(
+            "When disabled, employees won't see the Leave Encashments "
+            "section under Reimbursements & Encashments."
+        ),
+    )
+    is_applicable_to_all = models.BooleanField(
+        default=True,
+        verbose_name=_("Apply to all employees"),
+        help_text=_(
+            "When enabled, every employee can use Leave Encashment. Disable "
+            "it to restrict it to the employees/department/job position "
+            "selected below."
+        ),
+    )
+    employees = models.ManyToManyField(
+        Employee,
+        related_name="encashment_settings_employees",
+        blank=True,
+        help_text=_(
+            "Used only when 'Apply to all employees' is disabled -- "
+            "restricts Leave Encashment to these employees plus anyone in "
+            "the selected department(s) or job position(s)."
+        ),
+    )
+    department = models.ManyToManyField(Department, blank=True)
+    job_position = models.ManyToManyField(
+        JobPosition, blank=True, verbose_name=_("Job Position")
+    )
+    filtered_employees = models.ManyToManyField(
+        Employee,
+        related_name="encashment_settings_filtered_employees",
+        editable=False,
     )
     objects = models.Manager()
 

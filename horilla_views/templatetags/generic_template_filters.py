@@ -16,7 +16,6 @@ from django.conf import settings
 from django.contrib.auth.context_processors import PermWrapper
 from django.db.models import Model, QuerySet
 from django.db.models.utils import AltersData
-from django.template.defaultfilters import register
 from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
@@ -80,6 +79,14 @@ def cell_tooltip(value) -> str:
     text = str(value)
     if re.search(r"<\s*(select|input|textarea|button|form)\b", text, re.IGNORECASE):
         return ""
+    # strip_tags removes tag markup but not the text content of <style>/<script>
+    # blocks, so drop those elements entirely before stripping the rest.
+    text = re.sub(
+        r"<\s*(style|script)\b[^>]*>.*?<\s*/\s*\1\s*>",
+        "",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
     return re.sub(r"\s+", " ", strip_tags(text)).strip()
 
 

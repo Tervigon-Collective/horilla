@@ -10,7 +10,6 @@ from datetime import date, datetime
 from urllib.parse import parse_qs
 
 import pandas as pd
-from django.conf import settings
 from django.contrib import messages
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
@@ -21,6 +20,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from asset.filters import (
     AssetAllocationFilter,
@@ -49,6 +49,7 @@ from asset.models import (
     AssetAssignment,
     AssetCategory,
     AssetDocuments,
+    AssetGeneralSetting,
     AssetLot,
     AssetRequest,
     ReturnImages,
@@ -59,6 +60,7 @@ from base.methods import (
     filtersubordinates,
     get_key_instances,
     get_pagination,
+    get_session_company,
     has_export_access,
     paginator_qry,
     sortby,
@@ -301,6 +303,7 @@ def asset_item_bulk_edit(request, asset_id):
 
 
 @login_required
+@hx_request_required
 def get_asset_items_hx(request):
     """
     Returns the "Asset Item" field of the asset allocation form, populated
@@ -783,7 +786,7 @@ def asset_request_approve(request, req_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=allocation.assigned_to_employee_id.employee_user_id,
-                    verb=_("Your asset request has been approved!"),
+                    verb=gettext_noop("Your asset request has been approved!"),
                     redirect=reverse("asset-request-allocation-view")
                     + f"?asset_request_date={asset_request.asset_request_date}&"
                     f"asset_request_status={asset_request.asset_request_status}",
@@ -869,11 +872,7 @@ def asset_request_reject(request, req_id):
     notify.send(
         request.user.employee_get,
         recipient=asset_request.requested_employee_id.employee_user_id,
-        verb="Your asset request rejected!.",
-        verb_ar="تم رفض طلب الأصول الخاص بك!",
-        verb_de="Ihr Antragsantrag wurde abgelehnt!",
-        verb_es="¡Se ha rechazado su solicitud de activo!",
-        verb_fr="Votre demande d'actif a été rejetée !",
+        verb=gettext_noop("Your asset request rejected!"),
         redirect=reverse("asset-request-allocation-view")
         + f"?asset_request_date={asset_request.asset_request_date}\
         &asset_request_status={asset_request.asset_request_status}",
@@ -945,16 +944,13 @@ def asset_allocate_return_request(request, asset_id):
     notify.send(
         request.user.employee_get,
         recipient=permed_users,
-        verb=f"Return request for {asset_assign.asset_id} initiated from\
-            {asset_assign.assigned_to_employee_id}",
-        verb_ar=f"تم بدء طلب الإرجاع للمورد {asset_assign.asset_id}\
-            من الموظف {asset_assign.assigned_to_employee_id}",
-        verb_de=f"Rückgabewunsch für {asset_assign.asset_id} vom Mitarbeiter\
-            {asset_assign.assigned_to_employee_id} initiiert",
-        verb_es=f"Solicitud de devolución para {asset_assign.asset_id}\
-            iniciada por el empleado {asset_assign.assigned_to_employee_id}",
-        verb_fr=f"Demande de retour pour {asset_assign.asset_id}\
-            initiée par l'employé {asset_assign.assigned_to_employee_id}",
+        verb=gettext_noop(
+            "Return request for %(asset_id)s initiated from %(assigned_to_employee_id)s"
+        ),
+        verb_params={
+            "asset_id": str(asset_assign.asset_id),
+            "assigned_to_employee_id": str(asset_assign.assigned_to_employee_id),
+        },
         redirect=reverse("asset-request-allocation-view")
         + f"?assigned_to_employee_id={asset_assign.assigned_to_employee_id}&\
         asset_id={asset_assign.asset_id}&assigned_date={asset_assign.assigned_date}",
@@ -1195,7 +1191,6 @@ def asset_request_allocation_view(request):
 
 
 @login_required
-@hx_request_required
 def asset_request_alloaction_view_search_filter(request):
     """
     This view handles the search and filter functionality for the asset request allocation list.
@@ -1204,6 +1199,18 @@ def asset_request_alloaction_view_search_filter(request):
     Returns:
         Rendered HTTP response with the filtered and paginated asset request allocation list.
     """
+    # This endpoint returns only the list/filter fragment; direct browser opens
+    # (address bar navigation/reload) should land on the full request &
+    # allocation page that loads this fragment via HTMX, instead of showing
+    # the raw, unstyled fragment. Sec-Fetch-Mode is set by the browser itself
+    # for a real top-level navigation and can't be spoofed by an htmx fetch()
+    # call, unlike the HX-Request header alone.
+    if request.headers.get("Sec-Fetch-Mode") == "navigate":
+        redirect_url = reverse("asset-request-allocation-view")
+        query_string = request.GET.urlencode()
+        if query_string:
+            redirect_url = f"{redirect_url}?{query_string}"
+        return redirect(redirect_url)
     context = filter_pagination_asset_request_allocation(request)
     template = "request_allocation/asset_request_allocation_list.html"
     if (
@@ -1274,7 +1281,9 @@ def asset_request_individual_view(request, asset_request_id):
     dashboard = not request.META.get("HTTP_HX_CURRENT_URL", "").endswith(
         "asset-request-allocation-view/"
     )
-    asset_request = AssetRequest.objects.get(id=asset_request_id)
+    asset_request = AssetRequest.objects.filter(id=asset_request_id).first()
+    if not asset_request:
+        return HttpResponse()
     context = {
         "asset_request": asset_request,
         "dashboard": dashboard,
@@ -1312,7 +1321,9 @@ def asset_allocation_individual_view(request, asset_allocation_id):
     Returns:
         HttpResponse: The rendered 'individual_allocation.html' template with the context data.
     """
-    asset_allocation = AssetAssignment.objects.get(id=asset_allocation_id)
+    asset_allocation = AssetAssignment.objects.filter(id=asset_allocation_id).first()
+    if not asset_allocation:
+        return HttpResponse()
     context = {"asset_allocation": asset_allocation}
     allocation_ids_json = request.GET.get("allocations_ids")
     if allocation_ids_json:
@@ -1389,7 +1400,7 @@ def spreadsheetml_asset_import(dataframe):
     for index, row in dataframe.iterrows():
         asset_name = convert_nan(row["Asset name"])
         asset_description = convert_nan(row["Description"])
-        asset_tracking_id = convert_nan(row["Tracking id"])
+        asset_tracking_id = convert_nan(row["Serial No."])
         purchase_date = convert_nan(row["Purchase date"])
         purchase_cost = convert_nan(row["Purchase cost"])
         category_name = convert_nan(row["Category"])
@@ -1464,7 +1475,7 @@ def asset_excel(_request):
         columns = [
             "Asset name",
             "Description",
-            "Tracking id",
+            "Serial No.",
             "Purchase date",
             "Purchase cost",
             "Category",
@@ -1488,7 +1499,7 @@ def asset_export_excel(request):
     """asset export view"""
     if not has_export_access(request, Asset):
         return HorillaRedirect(
-            request, message=_("You dont have access to export this data")
+            request, message=_("You don't have access to export this data")
         )
 
     asset_export_filter = AssetExportFilter(request.GET, queryset=Asset.objects.all())
@@ -1576,7 +1587,7 @@ def asset_export_excel(request):
             columns={
                 "asset_name": "Asset name",
                 "asset_description": "Description",
-                "asset_tracking_id": "Tracking id",
+                "asset_tracking_id": "Serial No.",
                 "asset_purchase_date": "Purchase date",
                 "asset_purchase_cost": "Purchase cost",
                 "asset_category_id": "Category",
@@ -2057,7 +2068,9 @@ def profile_asset_tab(request, emp_id):
     Returns: return profile-asset-tab template
 
     """
-    employee = Employee.objects.get(id=emp_id)
+    employee = Employee.objects.filter(id=emp_id).first()
+    if not employee:
+        return HttpResponse()
     assets = employee.allocated_employee.all()
     assets_ids = json.dumps([instance.id for instance in assets])
     context = {
@@ -2081,7 +2094,9 @@ def asset_request_tab(request, emp_id):
     Returns: return asset-request-tab template
 
     """
-    employee = Employee.objects.get(id=emp_id)
+    employee = Employee.objects.filter(id=emp_id).first()
+    if not employee:
+        return HttpResponse()
     assets_requests = employee.requested_employee.all()
     requests_ids = json.dumps([instance.id for instance in assets_requests])
     context = {
@@ -2090,3 +2105,42 @@ def asset_request_tab(request, emp_id):
         "requests_ids": requests_ids,
     }
     return render(request, "tabs/asset_request_tab.html", context=context)
+
+
+@login_required
+def asset_rule_settings_view(request):
+    """
+    "Asset Rule" settings page, gathering company-scoped asset settings.
+    """
+    company = get_session_company(request)
+    setting, _created = AssetGeneralSetting.objects.get_or_create(company_id=company)
+    return render(
+        request,
+        "asset/settings/asset_rule.html",
+        {"asset_general_setting": setting},
+    )
+
+
+@login_required
+@hx_request_required
+@permission_required("asset.change_assetgeneralsetting")
+def enable_disable_asset_fine(request):
+    """
+    Enables or disables the asset fine feature for the active company.
+    """
+    if request.method == "POST":
+        is_checked = request.POST.get("isChecked")
+        setting_id = request.POST.get("setting_Id")
+        enable = bool(is_checked)
+
+        updated = AssetGeneralSetting.objects.filter(id=setting_id).update(
+            enable_asset_fine=enable
+        )
+
+        if updated:
+            message = _("Asset fine has been successfully {}.").format(
+                _("enabled") if enable else _("disabled")
+            )
+            messages.success(request, message)
+
+    return HttpResponse("")

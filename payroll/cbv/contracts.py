@@ -203,7 +203,6 @@ class ContractsNav(HorillaNavView):
                         data-target="#hxContractExport"
                         hx-get="{reverse_lazy('contracts-export')}"
                         hx-target="#hxContractExportForm"
-                        hx-vals='js:{{"has_selection": (JSON.parse(document.getElementById("selectedInstances")?.getAttribute("data-ids")||"[]").length>0)}}'
                         style="cursor: pointer;"
                         """,
                 }
@@ -226,6 +225,11 @@ class ContractsNav(HorillaNavView):
     filter_instance = ContractFilter()
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. ContractFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
 
     group_by_fields = [
         ("employee_id", _("Employee")),
@@ -266,7 +270,6 @@ class ContractsExportView(TemplateView):
         export_filter = ContractFilter(queryset=conracts)
         context["export_column"] = export_column
         context["export_filter"] = export_filter
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context
 
 
@@ -282,6 +285,8 @@ class ContractsDetailView(HorillaDetailedView):
         Return context data with the title set to the contract's name.
         """
         context = super().get_context_data(**kwargs)
+        if not self.instance:
+            return context
         contract_name = context["contract"].contract_name
         context["title"] = contract_name
         return context

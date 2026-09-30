@@ -4,15 +4,17 @@ scheduler.py
 This module is used to register scheduled tasks
 """
 
-import sys
 from datetime import date, timedelta
 
-from horilla.db import SafeBackgroundScheduler
 from django.urls import reverse
+from django.utils.translation import gettext_noop
 
+from horilla.db import scheduled_job
+from horilla.scheduling import register_job
 from notifications.signals import notify
 
 
+@scheduled_job
 def notify_expiring_assets():
     """
     Finds all Expiring Assets and send a notification on the notify_before date.
@@ -42,17 +44,20 @@ def notify_expiring_assets():
                 notify.send(
                     bot,
                     recipient=recipient,
-                    verb=f"The Asset '{asset.asset_name}' expires in {notify_days} days",
-                    verb_ar=f"تنتهي صلاحية الأصل '{asset.asset_name}' خلال {notify_days} من الأيام",
-                    verb_de=f"Das Asset {asset.asset_name} läuft in {notify_days} Tagen ab.",
-                    verb_es=f"El activo {asset.asset_name} caduca en {notify_days} días.",
-                    verb_fr=f"L'actif {asset.asset_name} expire dans {notify_days} jours.",
+                    verb=gettext_noop(
+                        "The Asset '%(asset_name)s' expires in %(notify_before)s days"
+                    ),
+                    verb_params={
+                        "asset_name": str(asset.asset_name),
+                        "notify_before": str(notify_days),
+                    },
                     redirect=reverse("asset-category-view"),
                     label="System",
                     icon="information",
                 )
 
 
+@scheduled_job
 def mark_expired_assets():
     """
     Finds all assets past their expiry date and sets their status to Not-Available.
@@ -69,6 +74,7 @@ def mark_expired_assets():
         asset.save()
 
 
+@scheduled_job
 def notify_expiring_documents():
     """
     Notify employees (and reporting managers) on the notify-before date,
@@ -112,22 +118,13 @@ def notify_expiring_documents():
                     notify.send(
                         bot,
                         recipient=recipient,
-                        verb=(
-                            f"The document '{document.title}' for "
-                            f"{employee.get_full_name()} expires in {notify_days} days"
+                        verb=gettext_noop(
+                            "The document ' %(title)s ' expires in %(notify_before)s days"
                         ),
-                        verb_ar=(
-                            f"تنتهي صلاحية المستند '{document.title}' خلال {notify_days} يوم"
-                        ),
-                        verb_de=(
-                            f"Das Dokument '{document.title}' läuft in {notify_days} Tagen ab."
-                        ),
-                        verb_es=(
-                            f"El documento '{document.title}' caduca en {notify_days} días"
-                        ),
-                        verb_fr=(
-                            f"Le document '{document.title}' expire dans {notify_days} jours"
-                        ),
+                        verb_params={
+                            "title": str(document.title),
+                            "notify_before": str(notify_days),
+                        },
                         redirect=redirect,
                         label="System",
                         icon="information",
@@ -139,12 +136,6 @@ def notify_expiring_documents():
             Document.objects.filter(pk=document.pk).update(is_active=False)
 
 
-if not any(
-    cmd in sys.argv
-    for cmd in ["makemigrations", "migrate", "compilemessages", "flush", "shell"]
-):
-    scheduler = SafeBackgroundScheduler()
-    scheduler.add_job(notify_expiring_assets, "interval", days=1)
-    scheduler.add_job(notify_expiring_documents, "interval", hours=4)
-    scheduler.add_job(mark_expired_assets, "interval", days=1)
-    scheduler.start()
+register_job(notify_expiring_assets, "interval", days=1)
+register_job(notify_expiring_documents, "interval", hours=4)
+register_job(mark_expired_assets, "interval", days=1)

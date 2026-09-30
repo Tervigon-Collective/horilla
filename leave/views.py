@@ -21,14 +21,17 @@ from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.encoding import force_str
+from django.utils.html import format_html
 from django.utils.translation import gettext as __
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
 from xhtml2pdf import pisa
 
 from base.filters import PenaltyFilter
 from base.forms import PenaltyAccountForm
 from base.methods import (
+    check_manager,
     choosesubordinates,
     closest_numbers,
     eval_validate,
@@ -38,7 +41,6 @@ from base.methods import (
     get_key_instances,
     get_pagination,
     is_holiday,
-    is_reportingmanager,
     sortby,
 )
 from base.models import CompanyLeaves, Holidays, PenaltyAccounts
@@ -57,7 +59,11 @@ from horilla.decorators import (
 )
 from horilla.group_by import group_by_queryset
 from horilla.http.response import HorillaRedirect
-from horilla.methods import get_horilla_model_class, remove_dynamic_url
+from horilla.methods import (
+    get_horilla_model_class,
+    handle_no_permission,
+    remove_dynamic_url,
+)
 from leave.decorators import *
 from leave.filters import *
 from leave.forms import *
@@ -108,6 +114,9 @@ def generate_error_report(error_list, error_data, file_name):
     ]
     for key in keys_to_remove:
         del error_data[key]
+    data_frame = pd.DataFrame(error_data, columns=error_data.keys())
+    response = HttpResponse(content_type="application/ms-excel")
+    response["Content-Disposition"] = f'attachment; filename="{file_name}"'
     writer = pd.ExcelWriter(response, engine="xlsxwriter")
     try:
         styled_data_frame = data_frame.style.map(
@@ -499,11 +508,9 @@ def leave_request_creation(request, type_id=None, emp_id=None):
                         notify.send(
                             request.user.employee_get,
                             recipient=managers[0],
-                            verb="You have a new leave request to validate.",
-                            verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
-                            verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
-                            verb_es="Tiene una nueva solicitud de permiso que debe validar.",
-                            verb_fr="Vous avez une nouvelle demande de congé à valider.",
+                            verb=gettext_noop(
+                                "You have a new leave request to validate."
+                            ),
                             icon="people-circle",
                             redirect=f"/leave/request-view?id={leave_request.id}",
                         )
@@ -517,11 +524,10 @@ def leave_request_creation(request, type_id=None, emp_id=None):
                     notify.send(
                         request.user.employee_get,
                         recipient=leave_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
-                        verb=f"New leave request created for {leave_request.employee_id}.",
-                        verb_ar=f"تم إنشاء طلب إجازة جديد لـ {leave_request.employee_id}.",
-                        verb_de=f"Neuer Urlaubsantrag erstellt für {leave_request.employee_id}.",
-                        verb_es=f"Nueva solicitud de permiso creada para {leave_request.employee_id}.",
-                        verb_fr=f"Nouvelle demande de congé créée pour {leave_request.employee_id}.",
+                        verb=gettext_noop(
+                            "New leave request created for %(employee)s."
+                        ),
+                        verb_params={"employee": str(leave_request.employee_id)},
                         icon="people-circle",
                         redirect=reverse("request-view") + f"?id={leave_request.id}",
                     )
@@ -740,8 +746,9 @@ def create_leave_report(request):
             "new_hire": False,
         }
 
-        if employee.employee_work_info:
-            hire_date = employee.employee_work_info.date_joining
+        work_info = getattr(employee, "employee_work_info", None)
+        if work_info:
+            hire_date = work_info.date_joining
             if hire_date and (date.today() - hire_date) <= timedelta(days=365):
                 emp_data["new_hire"] = True
 
@@ -933,11 +940,8 @@ def leave_request_update(request, id):
                     notify.send(
                         request.user.employee_get,
                         recipient=leave_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
-                        verb=f"Leave request updated for {leave_request.employee_id}.",
-                        verb_ar=f"تم تحديث طلب الإجازة لـ {leave_request.employee_id}.",
-                        verb_de=f"Urlaubsantrag aktualisiert für {leave_request.employee_id}.",
-                        verb_es=f"Solicitud de permiso actualizada para {leave_request.employee_id}.",
-                        verb_fr=f"Demande de congé mise à jour pour {leave_request.employee_id}.",
+                        verb=gettext_noop("Leave request updated for %(employee)s."),
+                        verb_params={"employee": str(leave_request.employee_id)},
                         icon="people-circle",
                         redirect=reverse("request-view") + f"?id={leave_request.id}",
                     )
@@ -954,6 +958,46 @@ def leave_request_update(request, id):
             "id": id,
         },
     )
+
+
+def _may_act_on_leave_request(request, leave_request, perm, owner_allowed=False):
+    """
+    Whether this user may act on this particular leave (or allocation) request.
+
+    ``manager_can_enter`` only asks whether the user manages *anyone* (or is
+    in *any* approval chain), so on its own it let every line manager act on
+    every employee's request by id. The API had the same hole, fixed in
+    GHSA-97wm-28fj-g4pj; this is the same rule for the web views: the
+    permission, the employee's reporting manager, or a manager a
+    multiple-approval condition nominated for this request.
+    """
+    if request.user.has_perm(perm):
+        return True
+    employee = request.user.employee_get
+    if owner_allowed and leave_request.employee_id == employee:
+        return True
+    if check_manager(employee, leave_request):
+        return True
+    multiple_approvals = getattr(leave_request, "multiple_approvals", None)
+    conditional = multiple_approvals() if multiple_approvals else None
+    return bool(conditional) and employee in conditional["managers"]
+
+
+def _leave_decision_denied(request):
+    """Denial in the shape the approve/reject callers read: the leave list
+    and the calendar take the outcome from HX-Trigger's horillaMessage."""
+    if not request.headers.get("HX-Request"):
+        return handle_no_permission(request)
+    response = HttpResponse("", status=200)
+    response["HX-Trigger"] = json.dumps(
+        {
+            "horillaMessage": {
+                "level": "error",
+                "text": str(_("You don't have permission.")),
+            }
+        }
+    )
+    return response
 
 
 @login_required
@@ -978,6 +1022,10 @@ def leave_request_delete(request, id):
         if not can_manage_leave_request(request, leave_request):
             messages.error(request, _("You don't have permission."))
             return HorillaRedirect(request)
+        if not _may_act_on_leave_request(
+            request, leave_request, "leave.delete_leaverequest", owner_allowed=True
+        ):
+            return handle_no_permission(request)
         messages.success(request, _("Leave request deleted successfully.."))
         leave_request.delete()
     except (LeaveRequest.DoesNotExist, OverflowError, ValueError):
@@ -1013,7 +1061,7 @@ def leave_request_approve(request, id, emp_id=None):
     leave_request = LeaveRequest.find(id)
     if not leave_request:
         return HorillaRedirect(
-            request, message=_("No leave rquest found matching the query.")
+            request, message=_("No leave request found matching the query.")
         )
     from leave.cbv.accessibility import can_manage_leave_request
 
@@ -1022,6 +1070,10 @@ def leave_request_approve(request, id, emp_id=None):
         if emp_id is not None:
             return redirect(f"/employee/employee-view/{emp_id}/")
         return HorillaRedirect(request)
+    if not _may_act_on_leave_request(
+        request, leave_request, "leave.change_leaverequest"
+    ):
+        return _leave_decision_denied(request)
     employee_id = leave_request.employee_id
     if not request.user.is_superuser:
         if employee_id == request.user.employee_get:
@@ -1113,11 +1165,9 @@ def leave_request_approve(request, id, emp_id=None):
                                 notify.send(
                                     request.user.employee_get,
                                     recipient=managers[condition_approval.sequence],
-                                    verb="You have a new leave request to validate.",
-                                    verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
-                                    verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
-                                    verb_es="Tiene una nueva solicitud de permiso que debe validar.",
-                                    verb_fr="Vous avez une nouvelle demande de congé à valider.",
+                                    verb=gettext_noop(
+                                        "You have a new leave request to validate."
+                                    ),
                                     icon="people-circle",
                                     redirect=f"/leave/request-view?id={leave_request.id}",
                                 )
@@ -1328,11 +1378,15 @@ def leave_request_cancel(request, id, emp_id=None):
           Otherwise, it returns to the default leave request view template.
 
     """
+    leave_request = LeaveRequest.objects.filter(id=id).first()
+    if leave_request is None or not _may_act_on_leave_request(
+        request, leave_request, "leave.change_leaverequest"
+    ):
+        return _leave_decision_denied(request)
     form = RejectForm()
     if request.method == "POST":
         form = RejectForm(request.POST)
         if form.is_valid():
-            leave_request = LeaveRequest.objects.get(id=id)
             from leave.cbv.accessibility import can_manage_leave_request
 
             if not can_manage_leave_request(request, leave_request):
@@ -1376,11 +1430,7 @@ def leave_request_cancel(request, id, emp_id=None):
                     notify.send(
                         request.user.employee_get,
                         recipient=leave_request.employee_id.employee_user_id,
-                        verb="Your leave request has been rejected.",
-                        verb_ar="تم رفض طلب الإجازة الخاص بك",
-                        verb_de="Ihr Urlaubsantrag wurde abgelehnt",
-                        verb_es="Tu solicitud de permiso ha sido rechazada",
-                        verb_fr="Votre demande de congé a été rejetée",
+                        verb=gettext_noop("Your leave request has been rejected."),
                         icon="people-circle",
                         redirect=reverse("user-request-view")
                         + f"?id={leave_request.id}",
@@ -1426,7 +1476,9 @@ def user_leave_cancel(request, id):
     GET :  it returns to the default my leave request view template.
 
     """
-    leave_request = LeaveRequest.objects.get(id=id)
+    leave_request = LeaveRequest.objects.filter(id=id).first()
+    if not leave_request:
+        return HttpResponse()
     employee_id = leave_request.employee_id
     if employee_id.employee_user_id.id == request.user.id:
         current_date = date.today()
@@ -1474,7 +1526,9 @@ def one_request_view(request, id):
     Returns:
     GET : return one leave request view template
     """
-    leave_request = LeaveRequest.objects.get(id=id)
+    leave_request = LeaveRequest.objects.filter(id=id).first()
+    if not leave_request:
+        return HttpResponse()
     from leave.cbv.accessibility import can_access_leave_request
 
     if not can_access_leave_request(request, leave_request):
@@ -1618,11 +1672,7 @@ def leave_assign_one(request, obj_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=employee.employee_user_id,
-                    verb="New leave type is assigned to you",
-                    verb_ar="تم تعيين نوع إجازة جديد لك",
-                    verb_de="Ihnen wurde ein neuer Urlaubstyp zugewiesen",
-                    verb_es="Se le ha asignado un nuevo tipo de permiso",
-                    verb_fr="Un nouveau type de congé vous a été attribué",
+                    verb=gettext_noop("New leave type is assigned to you"),
                     icon="people-circle",
                     redirect=reverse("user-request-view"),
                 )
@@ -1852,11 +1902,7 @@ def leave_assign(request):
                             notify.send(
                                 request.user.employee_get,
                                 recipient=user_id,
-                                verb="New leave type is assigned to you",
-                                verb_ar="تم تعيين نوع إجازة جديد لك",
-                                verb_de="Dir wurde ein neuer Urlaubstyp zugewiesen",
-                                verb_es="Se te ha asignado un nuevo tipo de permiso",
-                                verb_fr="Un nouveau type de congé vous a été attribué",
+                                verb=gettext_noop("New leave type is assigned to you"),
                                 icon="people-circle",
                                 redirect=reverse("user-request-view"),
                             )
@@ -1893,7 +1939,9 @@ def available_leave_update(request, id):
     GET : return available leave update form template
     POST : return leave type assigned  view
     """
-    leave_assign = AvailableLeave.objects.get(id=id)
+    leave_assign = AvailableLeave.objects.filter(id=id).first()
+    if not leave_assign:
+        return HttpResponse()
     form = AvailableLeaveUpdateForm(instance=leave_assign)
     previous_data = request.GET.urlencode() or "field=leave_type_id"
     if request.method == "POST":
@@ -1905,11 +1953,8 @@ def available_leave_update(request, id):
                 notify.send(
                     request.user.employee_get,
                     recipient=available_leave.employee_id.employee_user_id,
-                    verb=f"Your {available_leave.leave_type_id} leave type updated.",
-                    verb_ar=f"تم تحديث نوع الإجازة {available_leave.leave_type_id} الخاص بك.",
-                    verb_de=f"Ihr Urlaubstyp {available_leave.leave_type_id} wurde aktualisiert.",
-                    verb_es=f"Se ha actualizado su tipo de permiso {available_leave.leave_type_id}.",
-                    verb_fr=f"Votre type de congé {available_leave.leave_type_id} a été mis à jour.",
+                    verb=gettext_noop("Your %(leave_type)s leave type updated."),
+                    verb_params={"leave_type": str(available_leave.leave_type_id)},
                     icon="people-circle",
                     redirect=reverse("user-request-view"),
                 )
@@ -1985,6 +2030,7 @@ def leave_assign_bulk_delete(request):
 
 
 @login_required
+@manager_can_enter("leave.add_availableleave")
 def assign_leave_type_excel(_request):
     """
     Generate an empty Excel template for asisgn leave type to employee with predefined columns.
@@ -2511,11 +2557,9 @@ def user_leave_request(request, id):
                         notify.send(
                             request.user.employee_get,
                             recipient=managers[0],
-                            verb="You have a new leave request to validate.",
-                            verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
-                            verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
-                            verb_es="Tiene una nueva solicitud de permiso que debe validar.",
-                            verb_fr="Vous avez une nouvelle demande de congé à valider.",
+                            verb=gettext_noop(
+                                "You have a new leave request to validate."
+                            ),
                             icon="people-circle",
                             redirect=f"/leave/request-view?id={leave_request.id}",
                         )
@@ -2528,11 +2572,7 @@ def user_leave_request(request, id):
                     notify.send(
                         request.user.employee_get,
                         recipient=leave_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
-                        verb="You have a new leave request to validate.",
-                        verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
-                        verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
-                        verb_es="Tiene una nueva solicitud de permiso que debe validar.",
-                        verb_fr="Vous avez une nouvelle demande de congé à valider.",
+                        verb=gettext_noop("You have a new leave request to validate."),
                         icon="people-circle",
                         redirect=reverse("request-view") + f"?id={leave_request.id}",
                     )
@@ -2673,7 +2713,7 @@ def user_request_update(request, id):
                     else:
                         form.add_error(
                             None,
-                            _("You dont have enough leave days to make the request.."),
+                            _("You don't have enough leave days to make the request.."),
                         )
             return render(
                 request,
@@ -2932,6 +2972,24 @@ def user_request_filter(request):
         return redirect("/")
 
 
+def can_view_leave_request(request, leave_request):
+    """Whether the requester may see this leave request.
+
+    `@login_required` alone means a view resolving a request by client-supplied
+    id serves any employee's leave to any other. Leave records carry the reason
+    for absence, so cross-employee reads can expose medical information --
+    special-category data under GDPR Art. 9. Reported as GHSA-mpw3-7c6v-vfjp.
+
+    The rule: the owner, anyone holding the model permission, or a manager of
+    *this* employee (see _may_act_on_leave_request). It first used
+    is_reportingmanager(), which is true for anyone who manages anybody, so
+    every line manager could still read every employee's request.
+    """
+    return _may_act_on_leave_request(
+        request, leave_request, "leave.view_leaverequest", owner_allowed=True
+    )
+
+
 @login_required
 @hx_request_required
 def user_request_one(request, id):
@@ -2944,7 +3002,12 @@ def user_request_one(request, id):
     Returns:
     GET : return one user leave request view template
     """
-    leave_request = LeaveRequest.objects.get(id=id)
+    leave_request = LeaveRequest.objects.filter(id=id).first()
+    if not leave_request:
+        return HttpResponse()
+    if not can_view_leave_request(request, leave_request):
+        messages.warning(request, _("You don't have permission"))
+        return render(request, "decorator_404.html")
     try:
         requests_ids_json = request.GET.get("instances_ids")
         if requests_ids_json:
@@ -3360,8 +3423,19 @@ def leave_over_period(request):
         return JsonResponse({"no_permission": True})
 
     from_date, period_end = _dashboard_period(request)
-    start_of_week = period_end - timedelta(days=period_end.weekday())
-    week_dates = [start_of_week + timedelta(days=i) for i in range(7)]
+    if request.GET.get("period") == "month":
+        # Full calendar month -- used by the main analytics dashboard, which
+        # wants the whole month's trend rather than just the current week.
+        start_of_month = period_end.replace(day=1)
+        next_month = start_of_month.replace(day=28) + timedelta(days=4)
+        end_of_month = next_month.replace(day=1) - timedelta(days=1)
+        period_dates = [
+            start_of_month + timedelta(days=i)
+            for i in range((end_of_month - start_of_month).days + 1)
+        ]
+    else:
+        start_of_week = period_end - timedelta(days=period_end.weekday())
+        period_dates = [start_of_week + timedelta(days=i) for i in range(7)]
 
     leave_dates = []
     for leave in LeaveRequest.objects.filter(status="approved"):
@@ -3369,19 +3443,19 @@ def leave_over_period(request):
             if from_date <= leave_date <= period_end:
                 leave_dates.append(leave_date)
 
-    leave_in_week = [
-        sum(1 for leave_date in leave_dates if leave_date == week_date)
-        for week_date in week_dates
+    leave_in_period = [
+        sum(1 for leave_date in leave_dates if leave_date == period_date)
+        for period_date in period_dates
     ]
 
     dataset = (
         {
             "label": _("Leave Trends"),
-            "data": leave_in_week,
+            "data": leave_in_period,
         },
     )
 
-    labels = [week_date.strftime("%d-%m-%Y") for week_date in week_dates]
+    labels = [period_date.strftime("%d-%m-%Y") for period_date in period_dates]
 
     response = {
         "labels": labels,
@@ -3434,11 +3508,9 @@ def leave_request_create(request):
                             notify.send(
                                 request.user.employee_get,
                                 recipient=managers[0],
-                                verb="You have a new leave request to validate.",
-                                verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
-                                verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
-                                verb_es="Tiene una nueva solicitud de permiso que debe validar.",
-                                verb_fr="Vous avez une nouvelle demande de congé à valider.",
+                                verb=gettext_noop(
+                                    "You have a new leave request to validate."
+                                ),
                                 icon="people-circle",
                                 redirect=f"/leave/request-view?id={leave_request.id}",
                             )
@@ -3448,11 +3520,10 @@ def leave_request_create(request):
                         notify.send(
                             request.user.employee_get,
                             recipient=leave_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
-                            verb=f"New leave request created for {leave_request.employee_id}.",
-                            verb_ar=f"تم إنشاء طلب إجازة جديد لـ {leave_request.employee_id}.",
-                            verb_de=f"Neuer Urlaubsantrag für {leave_request.employee_id} erstellt.",
-                            verb_es=f"Nueva solicitud de permiso creada para {leave_request.employee_id}.",
-                            verb_fr=f"Nouvelle demande de congé créée pour {leave_request.employee_id}.",
+                            verb=gettext_noop(
+                                "New leave request created for %(employee)s."
+                            ),
+                            verb_params={"employee": str(leave_request.employee_id)},
                             icon="people-circle",
                             redirect=reverse("request-view")
                             + f"?id={leave_request.id}",
@@ -3502,10 +3573,27 @@ def employee_leave_details(request):
         for i in balance:
             balance_count = i.available_days
         if date:
-            try:
-                balance_count += balance.first().forcasted_leaves()[date[:7]]
-            except:
-                pass
+            # forcasted_leaves takes the date being requested and returns the
+            # days that will have been granted by then. This previously called
+            # a no-argument overload that returned a {"YYYY-MM": days} dict and
+            # subscripted it with date[:7]; that definition was shadowed by
+            # this one further down leave/models.py, so the call raised
+            # TypeError and the bare except dropped the forecast from the
+            # reported balance entirely.
+            #
+            # `date` is unvalidated POST input and forcasted_leaves parses it
+            # with strptime, so a malformed value raises ValueError. Caught
+            # narrowly rather than with the previous bare except, which also
+            # hid the TypeError above.
+            first_balance = balance.first()
+            if first_balance:
+                try:
+                    balance_count += first_balance.forcasted_leaves(date)
+                except (ValueError, TypeError):
+                    logger.warning(
+                        "employee_leave_details: ignoring unparseable date %r",
+                        date,
+                    )
     return JsonResponse({"leave_count": balance_count, "employee": employee})
 
 
@@ -3582,10 +3670,13 @@ def leave_allocation_request_single_view(request, req_id):
     if request.GET.get("my_request") == "True":
         my_request = True
     requests_ids_json = request.GET.get("instances_ids")
+    previous_id = next_id = None
     if requests_ids_json:
         requests_ids = json.loads(requests_ids_json)
         previous_id, next_id = closest_numbers(requests_ids, req_id)
     leave_allocation_request = LeaveAllocationRequest.find(req_id)
+    if not leave_allocation_request:
+        return HttpResponse()
     context = {
         "leave_allocation_request": leave_allocation_request,
         "my_request": my_request,
@@ -3631,11 +3722,10 @@ def leave_allocation_request_create(request):
                 notify.send(
                     request.user.employee_get,
                     recipient=leave_allocation_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
-                    verb=f"New leave allocation request created for {leave_allocation_request.employee_id}.",
-                    verb_ar=f"تم إنشاء طلب تخصيص إجازة جديد لـ {leave_allocation_request.employee_id}.",
-                    verb_de=f"Neue Anfrage zur Urlaubszuweisung erstellt für {leave_allocation_request.employee_id}.",
-                    verb_es=f"Nueva solicitud de asignación de permisos creada para {leave_allocation_request.employee_id}.",
-                    verb_fr=f"Nouvelle demande d'allocation de congé créée pour {leave_allocation_request.employee_id}.",
+                    verb=gettext_noop(
+                        "New leave allocation request created for %(employee)s."
+                    ),
+                    verb_params={"employee": str(leave_allocation_request.employee_id)},
                     icon="people-cicle",
                     redirect=reverse("leave-allocation-request-view")
                     + f"?id={leave_allocation_request.id}",
@@ -3771,11 +3861,12 @@ def leave_allocation_request_update(request, req_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=leave_allocation_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
-                        verb=f"Leave allocation request updated for {leave_allocation_request.employee_id}.",
-                        verb_ar=f"تم تحديث طلب تخصيص الإجازة لـ {leave_allocation_request.employee_id}.",
-                        verb_de=f"Urlaubszuteilungsanforderung aktualisiert für {leave_allocation_request.employee_id}.",
-                        verb_es=f"Solicitud de asignación de licencia actualizada para {leave_allocation_request.employee_id}.",
-                        verb_fr=f"Demande d'allocation de congé mise à jour pour {leave_allocation_request.employee_id}.",
+                        verb=gettext_noop(
+                            "Leave allocation request updated for %(employee)s."
+                        ),
+                        verb_params={
+                            "employee": str(leave_allocation_request.employee_id)
+                        },
                         icon="people-cicle",
                         redirect=reverse("leave-allocation-request-view")
                         + f"?id={leave_allocation_request.id}",
@@ -3831,11 +3922,7 @@ def leave_allocation_request_approve(request, req_id):
             notify.send(
                 request.user.employee_get,
                 recipient=leave_allocation_request.employee_id.employee_user_id,
-                verb="Your leave allocation request has been approved",
-                verb_ar="تمت الموافقة على طلب تخصيص إجازتك",
-                verb_de="Ihr Antrag auf Urlaubszuweisung wurde genehmigt",
-                verb_es="Se ha aprobado su solicitud de asignación de vacaciones",
-                verb_fr="Votre demande d'allocation de congé a été approuvée",
+                verb=gettext_noop("Your leave allocation request has been approved"),
                 icon="people-circle",
                 redirect=reverse("leave-allocation-request-view")
                 + f"?id={leave_allocation_request.id}",
@@ -3891,11 +3978,9 @@ def leave_allocation_request_reject(request, req_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=leave_allocation_request.employee_id.employee_user_id,
-                        verb="Your leave allocation request has been rejected",
-                        verb_ar="تم رفض طلب تخصيص إجازتك",
-                        verb_de="Ihr Antrag auf Urlaubszuweisung wurde abgelehnt",
-                        verb_es="Se ha rechazado su solicitud de asignación de vacaciones",
-                        verb_fr="Votre demande d'allocation de congé a été rejetée",
+                        verb=gettext_noop(
+                            "Your leave allocation request has been rejected"
+                        ),
                         icon="people-circle",
                         redirect=reverse("leave-allocation-request-view")
                         + f"?id={leave_allocation_request.id}",
@@ -4205,7 +4290,7 @@ def employee_available_leave_count(request):
         if request.GET.getlist("employee_id")
         else None
     )
-    referer = request.headers.get("Referer")
+    referer = request.headers.get("Referer") or ""
 
     if not employee_id and "user-request-view" in referer:
         employee_id = request.user.employee_get
@@ -4330,7 +4415,9 @@ def cut_available_leave(request, instance_id):
     This method is used to create the penalties
     """
     previous_data = request.GET.urlencode()
-    instance = LeaveRequest.objects.get(id=instance_id)
+    instance = LeaveRequest.objects.filter(id=instance_id).first()
+    if not instance:
+        return HttpResponse()
     form = PenaltyAccountForm(employee=instance.employee_id)
     available = AvailableLeave.objects.filter(employee_id=instance.employee_id)
     if request.method == "POST":
@@ -4370,6 +4457,11 @@ def create_leaverequest_comment(request, leave_id):
     leave = LeaveRequest.objects.filter(id=leave_id).first()
     if not leave:
         return HorillaRedirect(request, message=_("Leave request not found."))
+    # Same visibility rule as reading: commenting on a request you cannot see
+    # both writes to another employee's record and confirms the id exists.
+    if not can_view_leave_request(request, leave):
+        messages.warning(request, _("You don't have permission"))
+        return render(request, "decorator_404.html")
 
     emp = request.user.employee_get
     form = LeaverequestcommentForm(
@@ -4409,11 +4501,10 @@ def create_leaverequest_comment(request, leave_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb=f"{leave.employee_id}'s leave request has received a comment.",
-                            verb_ar=f"تلقت طلب إجازة {leave.employee_id} تعليقًا.",
-                            verb_de=f"{leave.employee_id}s Urlaubsantrag hat einen Kommentar erhalten.",
-                            verb_es=f"La solicitud de permiso de {leave.employee_id} ha recibido un comentario.",
-                            verb_fr=f"La demande de congé de {leave.employee_id} a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "%(employee)s's leave request has received a comment."
+                            ),
+                            verb_params={"employee": str(leave.employee_id)},
                             redirect=reverse("request-view") + f"?id={leave.id}",
                             icon="chatbox-ellipses",
                         )
@@ -4425,11 +4516,9 @@ def create_leaverequest_comment(request, leave_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb="Your leave request has received a comment.",
-                            verb_ar="تلقى طلب إجازتك تعليقًا.",
-                            verb_de="Ihr Urlaubsantrag hat einen Kommentar erhalten.",
-                            verb_es="Tu solicitud de permiso ha recibido un comentario.",
-                            verb_fr="Votre demande de congé a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "Your leave request has received a comment."
+                            ),
                             redirect=reverse("user-request-view") + f"?id={leave.id}",
                             icon="chatbox-ellipses",
                         )
@@ -4441,11 +4530,10 @@ def create_leaverequest_comment(request, leave_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb=f"{leave.employee_id}'s leave request has received a comment.",
-                            verb_ar=f"تلقت طلب إجازة {leave.employee_id} تعليقًا.",
-                            verb_de=f"{leave.employee_id}s Urlaubsantrag hat einen Kommentar erhalten.",
-                            verb_es=f"La solicitud de permiso de {leave.employee_id} ha recibido un comentario.",
-                            verb_fr=f"La demande de congé de {leave.employee_id} a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "%(employee)s's leave request has received a comment."
+                            ),
+                            verb_params={"employee": str(leave.employee_id)},
                             redirect=reverse("request-view") + f"?id={leave.id}",
                             icon="chatbox-ellipses",
                         )
@@ -4454,11 +4542,7 @@ def create_leaverequest_comment(request, leave_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=rec,
-                        verb="Your leave request has received a comment.",
-                        verb_ar="تلقى طلب إجازتك تعليقًا.",
-                        verb_de="Ihr Urlaubsantrag hat einen Kommentar erhalten.",
-                        verb_es="Tu solicitud de permiso ha recibido un comentario.",
-                        verb_fr="Votre demande de congé a reçu un commentaire.",
+                        verb=gettext_noop("Your leave request has received a comment."),
                         redirect=reverse("user-request-view") + f"?id={leave.id}",
                         icon="chatbox-ellipses",
                     )
@@ -4495,11 +4579,12 @@ def view_leaverequest_comment(request, leave_id):
     from leave.cbv.accessibility import can_access_leave_request
 
     leave_request = LeaveRequest.find(leave_id)
-    # is_reportingmanager() only asks "manages anyone", which let any manager
-    # read every employee's leave comments. Scope it to this request's owner.
+    if not leave_request:
+        return HttpResponse()
     if not (
-        request.user.employee_get == leave_request.employee_id
-        or request.user.has_perm("leave.view_leaverequestcomment")
+        _may_act_on_leave_request(
+            request, leave_request, "leave.view_leaverequestcomment", owner_allowed=True
+        )
         or can_access_leave_request(request, leave_request)
     ):
         messages.warning(request, _("You don't have permission"))
@@ -4584,11 +4669,10 @@ def create_allocationrequest_comment(request, leave_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb=f"{leave.employee_id}'s leave allocation request has received a comment.",
-                            verb_ar=f"تلقت طلب تخصيص الإجازة لـ {leave.employee_id} تعليقًا.",
-                            verb_de=f"{leave.employee_id}s Anfrage zur Urlaubszuweisung hat einen Kommentar erhalten.",
-                            verb_es=f"La solicitud de asignación de permisos de {leave.employee_id} ha recibido un comentario.",
-                            verb_fr=f"La demande d'allocation de congé de {leave.employee_id} a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "%(employee)s's leave allocation request has received a comment."
+                            ),
+                            verb_params={"employee": str(leave.employee_id)},
                             redirect=reverse("leave-allocation-request-view")
                             + f"?id={leave.id}",
                             icon="chatbox-ellipses",
@@ -4601,11 +4685,9 @@ def create_allocationrequest_comment(request, leave_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb="Your leave allocation request has received a comment.",
-                            verb_ar="تلقى طلب تخصيص الإجازة الخاص بك تعليقًا.",
-                            verb_de="Ihr Antrag auf Urlaubszuweisung hat einen Kommentar erhalten.",
-                            verb_es="Tu solicitud de asignación de permisos ha recibido un comentario.",
-                            verb_fr="Votre demande d'allocation de congé a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "Your leave allocation request has received a comment."
+                            ),
                             redirect=reverse("leave-allocation-request-view")
                             + f"?id={leave.id}",
                             icon="chatbox-ellipses",
@@ -4618,11 +4700,10 @@ def create_allocationrequest_comment(request, leave_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb=f"{leave.employee_id}'s leave allocation request has received a comment.",
-                            verb_ar=f"تلقت طلب تخصيص الإجازة لـ {leave.employee_id} تعليقًا.",
-                            verb_de=f"{leave.employee_id}s Anfrage zur Urlaubszuweisung hat einen Kommentar erhalten.",
-                            verb_es=f"La solicitud de asignación de permisos de {leave.employee_id} ha recibido un comentario.",
-                            verb_fr=f"La demande d'allocation de congé de {leave.employee_id} a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "%(employee)s's leave allocation request has received a comment."
+                            ),
+                            verb_params={"employee": str(leave.employee_id)},
                             redirect=reverse("leave-allocation-request-view")
                             + f"?id={leave.id}",
                             icon="chatbox-ellipses",
@@ -4632,11 +4713,9 @@ def create_allocationrequest_comment(request, leave_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=rec,
-                        verb="Your leave allocation request has received a comment.",
-                        verb_ar="تلقى طلب تخصيص الإجازة الخاص بك تعليقًا.",
-                        verb_de="Ihr Antrag auf Urlaubszuweisung hat einen Kommentar erhalten.",
-                        verb_es="Tu solicitud de asignación de permisos ha recibido un comentario.",
-                        verb_fr="Votre demande d'allocation de congé a reçu un commentaire.",
+                        verb=gettext_noop(
+                            "Your leave allocation request has received a comment."
+                        ),
                         redirect=reverse("leave-allocation-request-view")
                         + f"?id={leave.id}",
                         icon="chatbox-ellipses",
@@ -4666,10 +4745,15 @@ def view_allocationrequest_comment(request, leave_id):
     from leave.cbv.accessibility import can_access_leave_request
 
     leave_alloc_request = LeaveAllocationRequest.find(leave_id)
-    # Scope to this request's owner instead of "manages anyone".
+    if not leave_alloc_request:
+        return HttpResponse()
     if not (
-        request.user.employee_get == leave_alloc_request.employee_id
-        or request.user.has_perm("leave.view_leaveallocationrequestcomment")
+        _may_act_on_leave_request(
+            request,
+            leave_alloc_request,
+            "leave.view_leaveallocationrequestcomment",
+            owner_allowed=True,
+        )
         or can_access_leave_request(request, leave_alloc_request)
     ):
         messages.warning(request, _("You don't have permission"))
@@ -4713,14 +4797,16 @@ def delete_allocationrequest_comment(request, comment_id):
     """
     script = ""
     comment = LeaveallocationrequestComment.find(comment_id)
+    if not comment:
+        return HttpResponse(script)
     request_id = comment.request_id.id
     if (
         request.user.employee_get == comment.employee_id
-        or request.user.has_perm("leave.delete_leaveallocationrequestcomment")
+        or _may_act_on_leave_request(
+            request, comment.request_id, "leave.delete_leaveallocationrequestcomment"
+        )
         or can_manage_employee_action(
-            request,
-            comment.request_id.employee_id,
-            "leave.delete_leaveallocationrequestcomment",
+            request, comment.request_id.employee_id, "leave.delete_leaveallocationrequestcomment"
         )
     ):
         comment.delete()
@@ -4749,18 +4835,25 @@ def delete_allocation_comment_file(request):
         )
     if (
         request.user.employee_get == comment.employee_id
-        or request.user.has_perm("leave.delete_leaverequestfile")
+        or _may_act_on_leave_request(
+            request, comment.request_id, "leave.delete_leaverequestfile"
+        )
         or can_manage_employee_action(
             request, comment.request_id.employee_id, "leave.delete_leaverequestfile"
         )
     ):
-        LeaverequestFile.objects.filter(id__in=ids).delete()
+        # Only this comment's own files: ids come from the query string, and
+        # filtering LeaverequestFile by them alone deleted any attachment.
+        comment.files.filter(id__in=ids).delete()
         messages.success(request, _("File deleted successfully"))
     else:
         messages.warning(request, _("You don't have permission"))
-        script = f"""
-                <span hx-get='/leave/allocation-request-view-comment/{leave_id}/' hx-target='#commentContainer' hx-trigger='load'></span>
-                """
+        # Same unescaped-interpolation issue as delete_leave_comment_file.
+        script = format_html(
+            "<span hx-get='/leave/allocation-request-view-comment/{}/' "
+            "hx-target='#commentContainer' hx-trigger='load'></span>",
+            leave_id,
+        )
     return HttpResponse(script)
 
 
@@ -4777,19 +4870,19 @@ def view_clashes(request, leave_request_id):
         clashed_due_to_department = LeaveRequest.objects.none()
         clashed_due_to_job_position = LeaveRequest.objects.none()
     else:
+        record_department = record.employee_id.get_department()
+        record_job_position = record.employee_id.get_job_position()
+        record_company = record.employee_id.get_company()
+
         overlapping_requests = (
             LeaveRequest.objects.filter(
                 (
-                    Q(
-                        employee_id__employee_work_info__department_id=record.employee_id.employee_work_info.department_id
-                    )
+                    Q(employee_id__employee_work_info__department_id=record_department)
                     | Q(
-                        employee_id__employee_work_info__job_position_id=record.employee_id.employee_work_info.job_position_id
+                        employee_id__employee_work_info__job_position_id=record_job_position
                     )
                 )
-                & Q(
-                    employee_id__employee_work_info__company_id=record.employee_id.employee_work_info.company_id
-                ),
+                & Q(employee_id__employee_work_info__company_id=record_company),
                 start_date__lte=record.end_date,
                 end_date__gte=record.start_date,
             )
@@ -4798,11 +4891,11 @@ def view_clashes(request, leave_request_id):
         )
 
         clashed_due_to_department = overlapping_requests.filter(
-            employee_id__employee_work_info__department_id=record.employee_id.employee_work_info.department_id
+            employee_id__employee_work_info__department_id=record_department
         )
 
         clashed_due_to_job_position = overlapping_requests.filter(
-            employee_id__employee_work_info__job_position_id=record.employee_id.employee_work_info.job_position_id
+            employee_id__employee_work_info__job_position_id=record_job_position
         )
 
     leave_request_filter = LeaveRequestFilter(request.GET, overlapping_requests).qs
@@ -4826,6 +4919,38 @@ def view_clashes(request, leave_request_id):
     )
 
 
+def _get_or_create_compensatory_leave_type(selected_company):
+    """
+    Return the single Compensatory Leave Type row, creating one only if
+    none exists at all under the current company scope.
+
+    LeaveType.objects.get_or_create(is_compensatory_leave=True,
+    company_id_id=selected_company, ...) used to be called directly here --
+    but that extra company_id_id lookup ignores an already-existing
+    *shared* (company_id=None) compensatory leave type, which
+    HorillaCompanyManager's own scoping would otherwise find under any
+    company. The result: visiting this settings page under a specific
+    company minted a brand new per-company duplicate every time, even
+    though a perfectly usable shared one already existed -- exactly the
+    "2 Compensatory Leave Type rows" bug. Checking for any existing row
+    first (letting the manager's normal scoping run) reuses it instead.
+    """
+    existing = LeaveType.objects.filter(is_compensatory_leave=True).first()
+    if existing:
+        return existing, False
+    if selected_company != "all":
+        return LeaveType.objects.get_or_create(
+            is_compensatory_leave=True,
+            company_id_id=selected_company,
+            defaults={"name": "Compensatory Leave Type", "payment": "paid"},
+        )
+    return LeaveType.objects.get_or_create(
+        is_compensatory_leave=True,
+        company_id=None,
+        defaults={"name": "Compensatory Leave Type", "payment": "paid"},
+    )
+
+
 @login_required
 @permission_required("leave.view_leavegeneralsetting")
 def compensatory_leave_settings_view(request):
@@ -4837,21 +4962,12 @@ def compensatory_leave_settings_view(request):
             .first()
             .compensatory_leave
         )
-        leave_type, create = LeaveType.objects.get_or_create(
-            is_compensatory_leave=True,
-            company_id_id=selected_company,
-            defaults={"name": "Compensatory Leave Type", "payment": "paid"},
-        )
     else:
         enabled_compensatory = (
             LeaveGeneralSetting.objects.exists()
             and LeaveGeneralSetting.objects.first().compensatory_leave
         )
-        leave_type, create = LeaveType.objects.get_or_create(
-            is_compensatory_leave=True,
-            company_id=None,
-            defaults={"name": "Compensatory Leave Type", "payment": "paid"},
-        )
+    leave_type, create = _get_or_create_compensatory_leave_type(selected_company)
     request.session["ordered_ids_leavetype"] = []
     context = {"enabled_compensatory": enabled_compensatory, "leave_type": leave_type}
     return render(request, "compensatory_settings.html", context)
@@ -4905,11 +5021,6 @@ def leave_rules_settings_view(request):
             .first()
             .compensatory_leave
         )
-        leave_type, _create = LeaveType.objects.get_or_create(
-            is_compensatory_leave=True,
-            company_id_id=selected_company,
-            defaults={"name": "Compensatory Leave Type", "payment": "paid"},
-        )
         enabled_restriction = EmployeePastLeaveRestrict.objects.filter(
             company_id_id=selected_company
         ).first()
@@ -4922,11 +5033,6 @@ def leave_rules_settings_view(request):
             LeaveGeneralSetting.objects.exists()
             and LeaveGeneralSetting.objects.first().compensatory_leave
         )
-        leave_type, _create = LeaveType.objects.get_or_create(
-            is_compensatory_leave=True,
-            company_id=None,
-            defaults={"name": "Compensatory Leave Type", "payment": "paid"},
-        )
         enabled_restriction = EmployeePastLeaveRestrict.objects.filter(
             company_id__isnull=True
         ).first()
@@ -4934,6 +5040,7 @@ def leave_rules_settings_view(request):
             enabled_restriction = EmployeePastLeaveRestrict.objects.create(
                 enabled=True, company_id=None
             )
+    leave_type, _create = _get_or_create_compensatory_leave_type(selected_company)
     request.session["ordered_ids_leavetype"] = []
     context = {
         "enabled_compensatory": enabled_compensatory,
@@ -4965,9 +5072,13 @@ def delete_leaverequest_comment(request, comment_id):
     """
     script = ""
     comment = LeaverequestComment.find(comment_id)
+    if not comment:
+        return HttpResponse(script)
     if (
         request.user.employee_get == comment.employee_id
-        or request.user.has_perm("leave.delete_leaverequestcomment")
+        or _may_act_on_leave_request(
+            request, comment.request_id, "leave.delete_leaverequestcomment"
+        )
         or can_manage_employee_action(
             request, comment.request_id.employee_id, "leave.delete_leaverequestcomment"
         )
@@ -4992,22 +5103,37 @@ def delete_leave_comment_file(request):
     leave_id = request.GET.get("leave_id")
     if not leave_id:
         return HorillaRedirect(request, message=_("No leave found matching the query."))
-    comment_id = request.GET["comment_id"]
+    comment_id = request.GET.get("comment_id")
     comment = LeaverequestComment.find(comment_id)
+    if not comment:
+        return HorillaRedirect(
+            request, message=_("No comment found matching the query.")
+        )
     if (
         request.user.employee_get == comment.employee_id
-        or request.user.has_perm("leave.delete_leaverequestfile")
+        or _may_act_on_leave_request(
+            request, comment.request_id, "leave.delete_leaverequestfile"
+        )
         or can_manage_employee_action(
             request, comment.request_id.employee_id, "leave.delete_leaverequestfile"
         )
     ):
-        LeaverequestFile.objects.filter(id__in=ids).delete()
+        # Only this comment's own files: ids come from the query string, and
+        # filtering LeaverequestFile by them alone deleted any attachment.
+        comment.files.filter(id__in=ids).delete()
         messages.success(request, _("File deleted successfully"))
     else:
         messages.warning(request, _("You don't have permission"))
-        script = f"""
-            <span hx-get="/leave/leave-request-view-comment/{leave_id}/?&amp;target=leaveRequest" hx-target="#commentContainer" hx-trigger="load"></span>
-        """
+        # leave_id comes straight from the query string and is interpolated
+        # into hand-built HTML, where Django's template autoescaping does not
+        # apply. format_html escapes the value; this branch is reachable by
+        # any authenticated user, since the view is @login_required only.
+        script = format_html(
+            '<span hx-get="/leave/leave-request-view-comment/{}/'
+            '?&amp;target=leaveRequest" hx-target="#commentContainer" '
+            'hx-trigger="load"></span>',
+            leave_id,
+        )
     return HttpResponse(script)
 
 
@@ -5082,6 +5208,11 @@ if apps.is_installed("attendance"):
         comments = CompensatoryLeaverequestComment.objects.all()
         if not request.user.has_perm("leave.delete_compensatoryleaverequestcomment"):
             comments = comments.filter(employee_id__employee_user_id=request.user)
+        # Only files attached to comments this user may delete: it deleted any
+        # LeaverequestFile by id before, for any logged-in user.
+        LeaverequestFile.objects.filter(
+            id__in=ids, compensatoryleaverequestcomment__in=comments
+        ).delete()
         if request.GET.get("compensatory"):
             comments = comments.filter(request_id=leave_id).order_by("-created_at")
             template = "leave/compensatory_leave/compensatory_leave_comment.html"
@@ -5115,6 +5246,8 @@ if apps.is_installed("attendance"):
             if not request.user.has_perm("leave.delete_leaverequestcomment"):
                 comment = comment.filter(employee_id__employee_user_id=request.user)
             redirect_url = "leave-request-view-comment"
+        if not comment.exists():
+            return HttpResponse()
         leave_id = comment.first().request_id.id
         comment.delete()
         messages.success(request, _("Comment deleted successfully!"))
@@ -5317,8 +5450,15 @@ if apps.is_installed("attendance"):
         and reload the list view of compensatory leave requests.
         """
         try:
-            comp_leave_req = CompensatoryLeaveRequest.objects.get(id=comp_id).delete()
-            messages.success(request, _("Compensatory leave request deleted."))
+            comp_leave_req = CompensatoryLeaveRequest.objects.get(id=comp_id)
+            if comp_leave_req.status == "approved":
+                messages.info(
+                    request,
+                    _("An approved compensatory leave request cannot be deleted."),
+                )
+            else:
+                comp_leave_req.delete()
+                messages.success(request, _("Compensatory leave request deleted."))
 
         except:
             messages.error(request, _("Sorry, something went wrong!"))
@@ -5347,11 +5487,9 @@ if apps.is_installed("attendance"):
                     notify.send(
                         request.user.employee_get,
                         recipient=comp_leave_req.employee_id.employee_user_id,
-                        verb="Your compensatory leave request has been approved",
-                        verb_ar="تمت الموافقة على طلب إجازة الاعتذار الخاص بك",
-                        verb_de="Ihr Antrag auf Freizeitausgleich wurde genehmigt",
-                        verb_es="Su solicitud de permiso compensatorio ha sido aprobada",
-                        verb_fr="Votre demande de congé compensatoire a été approuvée",
+                        verb=gettext_noop(
+                            "Your compensatory leave request has been approved"
+                        ),
                         redirect=reverse("view-compensatory-leave")
                         + f"?id={comp_leave_req.id}",
                     )
@@ -5384,7 +5522,9 @@ if apps.is_installed("attendance"):
         GET : It returns to the default compensatory leave request view template.
 
         """
-        comp_leave_req = CompensatoryLeaveRequest.objects.get(id=comp_id)
+        comp_leave_req = CompensatoryLeaveRequest.objects.filter(id=comp_id).first()
+        if not comp_leave_req:
+            return HttpResponse()
         if comp_leave_req.status == "requested" or comp_leave_req.status == "approved":
             form = CompensatoryLeaveRequestRejectForm()
             if request.method == "POST":
@@ -5399,11 +5539,9 @@ if apps.is_installed("attendance"):
                         notify.send(
                             request.user.employee_get,
                             recipient=comp_leave_req.employee_id.employee_user_id,
-                            verb="Your compensatory leave request has been rejected",
-                            verb_ar="تم رفض طلبك للإجازة التعويضية",
-                            verb_de="Ihr Antrag auf Freizeitausgleich wurde abgelehnt",
-                            verb_es="Se ha rechazado su solicitud de permiso compensatorio",
-                            verb_fr="Votre demande de congé compensatoire a été rejetée",
+                            verb=gettext_noop(
+                                "Your compensatory leave request has been rejected"
+                            ),
                             redirect=reverse("view-compensatory-leave")
                             + f"?id={comp_leave_req.id}",
                         )
@@ -5432,10 +5570,15 @@ if apps.is_installed("attendance"):
         return compensatory leave request single view
         """
         requests_ids_json = request.GET.get("instances_ids")
+        previous_id = next_id = None
         if requests_ids_json:
             requests_ids = json.loads(requests_ids_json)
             previous_id, next_id = closest_numbers(requests_ids, comp_leave_id)
-        comp_leave_req = CompensatoryLeaveRequest.objects.get(id=comp_leave_id)
+        comp_leave_req = CompensatoryLeaveRequest.objects.filter(
+            id=comp_leave_id
+        ).first()
+        if not comp_leave_req:
+            return HttpResponse()
         context = {
             "comp_leave_req": comp_leave_req,
             "my_request": eval_validate(request.GET.get("my_request")),
@@ -5536,11 +5679,10 @@ if apps.is_installed("attendance"):
                             notify.send(
                                 request.user.employee_get,
                                 recipient=rec,
-                                verb=f"{comp_leave.employee_id}'s Compensatory leave request has received a comment.",
-                                verb_ar=f"تلقى طلب إجازة الاعتذار لـ {comp_leave.employee_id} تعليقًا.",
-                                verb_de=f"Der Antrag auf Freizeitausgleich von {comp_leave.employee_id} hat einen Kommentar erhalten.",
-                                verb_es=f"La solicitud de permiso compensatorio de {comp_leave.employee_id} ha recibido un comentario.",
-                                verb_fr=f"La demande de congé compensatoire de {comp_leave.employee_id} a reçu un commentaire.",
+                                verb=gettext_noop(
+                                    "%(employee)s's Compensatory leave request has received a comment."
+                                ),
+                                verb_params={"employee": str(comp_leave.employee_id)},
                                 redirect=reverse("view-compensatory-leave")
                                 + f"?id={comp_leave.id}",
                                 icon="chatbox-ellipses",
@@ -5553,11 +5695,9 @@ if apps.is_installed("attendance"):
                             notify.send(
                                 request.user.employee_get,
                                 recipient=rec,
-                                verb="Your compensatory leave request has received a comment.",
-                                verb_ar="تلقى طلب إجازة العوض الخاص بك تعليقًا.",
-                                verb_de="Ihr Antrag auf Freizeitausgleich hat einen Kommentar erhalten.",
-                                verb_es="Su solicitud de permiso compensatorio ha recibido un comentario.",
-                                verb_fr="Votre demande de congé compensatoire a reçu un commentaire.",
+                                verb=gettext_noop(
+                                    "Your compensatory leave request has received a comment."
+                                ),
                                 redirect=reverse("view-compensatory-leave")
                                 + f"?id={comp_leave.id}",
                                 icon="chatbox-ellipses",
@@ -5570,11 +5710,10 @@ if apps.is_installed("attendance"):
                             notify.send(
                                 request.user.employee_get,
                                 recipient=rec,
-                                verb=f"{comp_leave.employee_id}'s compensatory leave request has received a comment.",
-                                verb_ar=f"تلقى طلب إجازة التعويض لـ {comp_leave.employee_id} تعليقًا.",
-                                verb_de=f"Der Antrag auf Freizeitausgleich von {comp_leave.employee_id} hat einen Kommentar erhalten.",
-                                verb_es=f"El pedido de permiso compensatorio de {comp_leave.employee_id} ha recibido un comentario.",
-                                verb_fr=f"La demande de congé compensatoire de {comp_leave.employee_id} a reçu un commentaire.",
+                                verb=gettext_noop(
+                                    "%(employee)s's compensatory leave request has received a comment."
+                                ),
+                                verb_params={"employee": str(comp_leave.employee_id)},
                                 redirect=reverse("view-compensatory-leave")
                                 + f"?id={comp_leave.id}",
                                 icon="chatbox-ellipses",
@@ -5584,11 +5723,9 @@ if apps.is_installed("attendance"):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb="Your compensatory leave request has received a comment.",
-                            verb_ar="تلقى طلب إجازة العوض الخاص بك تعليقًا.",
-                            verb_de="Ihr Antrag auf Freizeitausgleich hat einen Kommentar erhalten.",
-                            verb_es="Su solicitud de permiso compensatorio ha recibido un comentario.",
-                            verb_fr="Votre demande de congé compensatoire a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "Your compensatory leave request has received a comment."
+                            ),
                             redirect=reverse("view-compensatory-leave")
                             + f"?id={comp_leave.id}",
                             icon="chatbox-ellipses",
@@ -5961,5 +6098,27 @@ def leave_type_accrual_delete(request, leave_type_id, rule_id):
         {
             "leave_type": leave_type,
             "accrual_form": LeaveAccrualRuleForm(),
+        },
+    )
+
+
+@login_required
+@hx_request_required
+@permission_required("leave.view_availableleave")
+def leave_balance_ledger(request, pk):
+    """
+    Renders the leave balance ledger sidebar for one AvailableLeave: a
+    chronological running-balance table combining every reset/carryforward
+    change (from its own history) with every approved leave request taken
+    against it.
+    """
+    instance = get_object_or_404(AvailableLeave, pk=pk)
+    return render(
+        request,
+        "cbv/assigned_leave/leave_ledger_sidebar.html",
+        {
+            "instance": instance,
+            "ledger": instance.build_ledger(),
+            "forecast": instance.forecast_next_reset(),
         },
     )

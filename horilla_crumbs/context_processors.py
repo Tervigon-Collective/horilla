@@ -96,8 +96,14 @@ def _resolve_menu_section(path, menus):
     return None
 
 
+def sync_session_ids(request, key, queryset):
+    ids = list(queryset.order_by("id").values_list("id", flat=True))
+    if request.session.get(key) != ids:
+        request.session[key] = ids
+
+
 BREADCRUMB_URL_NAMES = {
-    "monthly-summary": _("Monthly Summary"),
+    "monthly-summary": "Monthly Summary",
     "ess": "Employee",
     "offboarding": "Offboarding",
     "helpdesk": "Helpdesk",
@@ -112,6 +118,8 @@ BREADCRUMB_URL_NAMES = {
     "performance-settings-view": "Configuration",
     "user-group-view": "Roles and Permissions",
     "employee-permission-assign": "Roles and Permissions",
+    "standard": "Standard Reports",
+    "explorer": "Explorer",
 }
 
 sidebar_urls = [
@@ -295,6 +303,7 @@ remove_urls = [
     "get-job-positions",
     "task-view",
     "dashboard",
+    "login",
 ]
 
 user_breadcrumbs = {}
@@ -393,28 +402,9 @@ def breadcrumbs_legacy(request):
             if referer_path.rstrip("/") == dashboard_path.rstrip("/"):
                 section_override = {"name": _trans("Dashboard"), "url": dashboard_path}
 
-        if apps.is_installed("recruitment"):
-            from recruitment.models import Candidate
-
-            candidates = None
-            if len(parts) > 1 and "recruitment" in parts:
-                candidates = Candidate.objects.filter(is_active=True)
-        else:
-            candidates = None
-
-        employees = None
-        if (
-            len(parts) > 1
-            and "employee-filter-view" not in parts
-            and "employee-view" not in parts
-            and "view-penalties" not in parts
-            and not (parts[0] == "employee" and parts[-1].isdigit())
-        ):
-            employees = Employee.objects.all()
-
         if len(parts) > 1:
 
-            if "recruitment" in parts:
+            if "recruitment" in parts and apps.is_installed("recruitment"):
                 if "search-candidate" in parts:
                     pass
                 elif "candidate-view" in parts:
@@ -422,10 +412,13 @@ def breadcrumbs_legacy(request):
                 elif "get-mail-log-rec" in parts:
                     pass
                 else:
-                    # Store the candidates in the session
-                    request.session["filtered_candidates"] = [
-                        candidate.id for candidate in candidates
-                    ]
+                    from recruitment.models import Candidate
+
+                    sync_session_ids(
+                        request,
+                        "filtered_candidates",
+                        Candidate.objects.filter(is_active=True),
+                    )
 
             if "employee-filter-view" in parts:
                 pass
@@ -436,10 +429,7 @@ def breadcrumbs_legacy(request):
             elif parts[0] == "employee" and parts[-1].isdigit():
                 pass
             else:
-                # Store the employees in the session
-                request.session["filtered_employees"] = [
-                    employee.id for employee in employees
-                ] if employees is not None else []
+                sync_session_ids(request, "filtered_employees", Employee.objects.all())
 
         if len(parts) == 0:
             request.session["breadcrumbs"].clear()
@@ -791,9 +781,7 @@ def _attendance_redirect(request):
 
 
 urlpatterns.append(path("recruitment/", _section_redirect("recruitment-dashboard")))
-urlpatterns.append(
-    path("onboarding/", _section_redirect("onboarding-modern-dashboard"))
-)
+urlpatterns.append(path("onboarding/", _section_redirect("onboarding-dashboard")))
 urlpatterns.append(path("employee/", _section_redirect("ess-dashboard")))
 urlpatterns.append(path("attendance/", _attendance_redirect))
 urlpatterns.append(path("leave/", _leave_redirect))

@@ -33,6 +33,7 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.translation import gettext as __
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods, require_POST
 
 from base.backends import ConfiguredEmailBackend
@@ -41,17 +42,13 @@ from base.methods import (
     generate_pdf,
     get_key_instances,
     get_pagination,
+    sanitize_mail_template_body,
     sortby,
 )
 from base.models import HorillaMailTemplate, JobPosition
 from employee.models import Employee, EmployeeBankDetails, EmployeeWorkInformation
 from horilla import settings
-from horilla.decorators import (
-    hx_request_required,
-    logger,
-    login_required,
-    permission_required,
-)
+from horilla.decorators import hx_request_required, login_required, permission_required
 from horilla.group_by import group_by_queryset as general_group_by
 from horilla.http.response import HorillaRedirect
 from horilla_auth.models import HorillaUser
@@ -135,11 +132,7 @@ def stage_save(form, recruitment, request, rec_id):
     notify.send(
         request.user.employee_get,
         recipient=users,
-        verb="You are chosen as onboarding stage manager",
-        verb_ar="لقد تم اختيارك كمدير مرحلة التدريب.",
-        verb_de="Sie wurden als Onboarding-Stage-Manager ausgewählt.",
-        verb_es="Ha sido seleccionado/a como responsable de etapa de incorporación.",
-        verb_fr="Vous avez été choisi(e) en tant que responsable de l'étape d'intégration.",
+        verb=gettext_noop("You are chosen as onboarding stage manager"),
         icon="people-circle",
         redirect=reverse("onboarding-view"),
     )
@@ -181,11 +174,7 @@ def stage_update(request, stage_id, recruitment_id):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb="You are chosen as onboarding stage manager",
-                verb_ar="لقد تم اختيارك كمدير مرحلة التدريب.",
-                verb_de="Sie wurden als Onboarding-Stage-Manager ausgewählt.",
-                verb_es="Ha sido seleccionado/a como responsable de etapa de incorporación.",
-                verb_fr="Vous avez été choisi(e) en tant que responsable de l'étape d'intégration.",
+                verb=gettext_noop("You are chosen as onboarding stage manager"),
                 icon="people-circle",
                 redirect=reverse("onboarding-view"),
             )
@@ -292,7 +281,9 @@ def task_creation(request):
     POST : return onboarding view
     """
     stage_id = request.GET.get("stage_id")
-    stage = OnboardingStage.objects.get(id=stage_id)
+    stage = OnboardingStage.objects.filter(id=stage_id).first()
+    if not stage:
+        return HttpResponse()
     form = OnboardingViewTaskForm(initial={"stage_id": stage})
 
     if request.method == "POST":
@@ -324,11 +315,7 @@ def task_creation(request):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb="You are chosen as an onboarding task manager",
-                verb_ar="لقد تم اختيارك كمدير مهام التدريب.",
-                verb_de="Sie wurden als Onboarding-Aufgabenmanager ausgewählt.",
-                verb_es="Ha sido seleccionado/a como responsable de tareas de incorporación.",
-                verb_fr="Vous avez été choisi(e) en tant que responsable des tâches d'intégration.",
+                verb=gettext_noop("You are chosen as an onboarding task manager"),
                 icon="people-circle",
                 redirect=reverse("onboarding-view"),
             )
@@ -376,11 +363,7 @@ def task_update(
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb="You are chosen as an onboarding task manager",
-                verb_ar="لقد تم اختيارك كمدير مهام التدريب.",
-                verb_de="Sie wurden als Onboarding-Aufgabenmanager ausgewählt.",
-                verb_es="Ha sido seleccionado/a como responsable de tareas de incorporación.",
-                verb_fr="Vous avez été choisi(e) en tant que responsable des tâches d'intégration.",
+                verb=gettext_noop("You are chosen as an onboarding task manager"),
                 icon="people-circle",
                 redirect=reverse("onboarding-view"),
             )
@@ -792,13 +775,9 @@ def candidate_filter(request):
 
 
 import logging
-import os
-import secrets
 from email.mime.image import MIMEImage
 
-from django.contrib import messages
 from django.core.mail import EmailMultiAlternatives
-from django.template.loader import render_to_string
 
 logger = logging.getLogger(__name__)
 
@@ -849,7 +828,7 @@ def email_send(request):
 
         # Generate PDFs
         for html in bodys:
-            template_bdy = template.Template(html)
+            template_bdy = template.Template(sanitize_mail_template_body(html))
             context = template.Context(
                 {"instance": candidate, "self": request.user.employee_get}
             )
@@ -1133,7 +1112,6 @@ def kanban_view(request):
             "filter_dict": filter_dict,
             "stage_form": stage_form,
             "status": status,
-            "choices": choices,
             "pd": previous_data,
             "card": True,
         },
@@ -1155,32 +1133,29 @@ def user_creation(request, token):
     GET : return user creation form template
     POST : return user_save function
     """
+    onboarding_portal = OnboardingPortal.objects.filter(token=token).first()
+    if not onboarding_portal or onboarding_portal.used is True:
+        return render(request, "404.html")
+    if onboarding_portal.count == 3:
+        return redirect("employee-bank-details", token)
+    candidate = onboarding_portal.candidate_id
+    user = HorillaUser.objects.filter(username=candidate.email).first()
+    form = UserCreationForm(instance=user)
     try:
-        onboarding_portal = OnboardingPortal.objects.get(token=token)
-        if not onboarding_portal or onboarding_portal.used is True:
-            return render(request, "404.html")
-        if onboarding_portal.count == 3:
-            return redirect("employee-bank-details", token)
-        candidate = onboarding_portal.candidate_id
-        user = HorillaUser.objects.filter(username=candidate.email).first()
-        form = UserCreationForm(instance=user)
-        try:
-            if request.method == "POST":
-                form = UserCreationForm(request.POST, instance=user)
-                if form.is_valid():
-                    return user_save(form, onboarding_portal, request, token)
-        except Exception:
-            messages.error(request, _("User with email-id already exists.."))
-        return render(
-            request,
-            "onboarding/user_creation.html",
-            {
-                "form": form,
-                "company": onboarding_portal.candidate_id.recruitment_id.company_id,
-            },
-        )
-    except Exception as error:
-        return HttpResponse(error)
+        if request.method == "POST":
+            form = UserCreationForm(request.POST, instance=user)
+            if form.is_valid():
+                return user_save(form, onboarding_portal, request, token)
+    except Exception:
+        messages.error(request, _("User with email-id already exists.."))
+    return render(
+        request,
+        "onboarding/user_creation.html",
+        {
+            "form": form,
+            "company": onboarding_portal.candidate_id.recruitment_id.company_id,
+        },
+    )
 
 
 def user_save(form, onboarding_portal, request, token):
@@ -1317,6 +1292,12 @@ def employee_creation(request, token):
                 return redirect("user-creation", token)
             if not getattr(user, "pk", None):
                 user.save()
+            # This user was constructed directly from the portal's account-creation
+            # form, never through authenticate(), so it has no `.backend` attribute.
+            # login() requires one whenever more than one AUTHENTICATION_BACKENDS is
+            # configured (always true here -- see horilla/settings/base.py) and
+            # otherwise raises ValueError, hard-crashing the final onboarding step.
+            user.backend = "base.auth_backends.CompanyScopedBackend"
             login(request, user)
             employee_personal_info = form.save(commit=False)
             employee_personal_info.employee_user_id = user
@@ -1485,12 +1466,14 @@ def candidate_task_update(request, taskId):
     notify.send(
         request.user.employee_get,
         recipient=users,
-        verb=f"The task {candidate_task.onboarding_task_id} of\
-            {candidate_task.candidate_id} was updated to {candidate_task.status}.",
-        verb_ar=f"تم تحديث المهمة {candidate_task.onboarding_task_id} للمرشح {candidate_task.candidate_id} إلى {candidate_task.status}.",
-        verb_de=f"Die Aufgabe {candidate_task.onboarding_task_id} des Kandidaten {candidate_task.candidate_id} wurde auf {candidate_task.status} aktualisiert.",
-        verb_es=f"La tarea {candidate_task.onboarding_task_id} del candidato {candidate_task.candidate_id} se ha actualizado a {candidate_task.status}.",
-        verb_fr=f"La tâche {candidate_task.onboarding_task_id} du candidat {candidate_task.candidate_id} a été mise à jour à {candidate_task.status}.",
+        verb=gettext_noop(
+            "The task %(onboarding_task_id)s of %(candidate_id)s was updated to %(status)s."
+        ),
+        verb_params={
+            "onboarding_task_id": str(candidate_task.onboarding_task_id),
+            "candidate_id": str(candidate_task.candidate_id),
+            "status": str(candidate_task.status),
+        },
         icon="people-circle",
         redirect=reverse("onboarding-view"),
     )
@@ -1641,12 +1624,13 @@ def candidate_stage_update(request, candidate_id, recruitment_id):
         notify.send(
             request.user.employee_get,
             recipient=users,
-            verb=f"The stage of {candidate_stage.candidate_id} \
-                was updated to {candidate_stage.onboarding_stage_id}.",
-            verb_ar=f"تم تحديث مرحلة المرشح {candidate_stage.candidate_id} إلى {candidate_stage.onboarding_stage_id}.",
-            verb_de=f"Die Phase des Kandidaten {candidate_stage.candidate_id} wurde auf {candidate_stage.onboarding_stage_id} aktualisiert.",
-            verb_es=f"La etapa del candidato {candidate_stage.candidate_id} se ha actualizado a {candidate_stage.onboarding_stage_id}.",
-            verb_fr=f"L'étape du candidat {candidate_stage.candidate_id} a été mise à jour à {candidate_stage.onboarding_stage_id}.",
+            verb=gettext_noop(
+                "The stage of %(candidate_id)s was updated to %(onboarding_stage_id)s."
+            ),
+            verb_params={
+                "candidate_id": str(candidate_stage.candidate_id),
+                "onboarding_stage_id": str(candidate_stage.onboarding_stage_id),
+            },
             icon="people-circle",
             redirect=reverse("onboarding-view"),
         )
@@ -1953,7 +1937,9 @@ def onboarding_send_mail(request, candidate_id):
     """
     This method is used to send mail to the candidate from onboarding view
     """
-    candidate = Candidate.objects.get(id=candidate_id)
+    candidate = Candidate.objects.filter(id=candidate_id).first()
+    if not candidate:
+        return HttpResponse()
     candidate_mail = candidate.email
     response = render(
         request, "onboarding/send_mail_form.html", {"candidate": candidate}

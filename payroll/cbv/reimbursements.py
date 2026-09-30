@@ -8,6 +8,7 @@ from django.utils.translation import gettext_lazy as _
 
 from attendance.cbv.tab_shell import AttendanceTabContentShell
 from base.methods import filter_own_records
+from horilla.methods import handle_no_permission
 from horilla_views.cbv_methods import login_required
 from horilla_views.generic.cbv.views import (
     HorillaDetailedView,
@@ -17,6 +18,7 @@ from horilla_views.generic.cbv.views import (
     HorillaTabView,
     TemplateView,
 )
+from payroll.decorators import is_leave_encashment_enabled, leave_encashment_visible_to
 from payroll.filters import ReimbursementFilter
 from payroll.forms.component_forms import ReimbursementForm
 from payroll.models.models import Reimbursement
@@ -46,14 +48,18 @@ class ReimbursementsAndEncashmentsTabView(HorillaTabView):
                 "url": f"{reverse('reimbursement-tab-shell')}",
             },
             {
-                "title": _("Leave Encashments"),
-                "url": f"{reverse('leave-encash-tab-shell')}",
-            },
-            {
                 "title": _("Bonus Encashments"),
                 "url": f"{reverse('bonus-encash-tab-shell')}",
             },
         ]
+        if self.request and leave_encashment_visible_to(self.request):
+            self.tabs.insert(
+                1,
+                {
+                    "title": _("Leave Encashments"),
+                    "url": f"{reverse('leave-encash-tab-shell')}",
+                },
+            )
 
     def get_context_data(self, **kwargs):
         from payroll.filters import ReimbursementFilter
@@ -159,10 +165,11 @@ class ReimbursementsAndEncashmentsListView(HorillaListView):
 
     columns = [
         (_("Employee"), "employee_id", "employee_id__get_avatar"),
-        (_("Date"), "created_at"),
+        (_("Allowance On"), "allowance_on"),
         (_("Title"), "title"),
         (_("Amount"), "amount"),
         (_("Status"), "get_status_display"),
+        (_("Created On"), "get_created_at_date"),
         (_("Description"), "description"),
         (_("Comment"), "comment_col"),
     ]
@@ -185,7 +192,8 @@ class ReimbursementsAndEncashmentsListView(HorillaListView):
         ("title", _("Title")),
         ("amount", _("Amount")),
         ("status", _("Status")),
-        ("created_at", _("Date")),
+        ("allowance_on", _("Allowance On")),
+        ("created_at", _("Created On")),
         (
             "employee_id__employee_work_info__reporting_manager_id",
             _("Reporting Manager"),
@@ -202,9 +210,10 @@ class ReimbursementsListView(ReimbursementsAndEncashmentsListView):
 
     sortby_mapping = [
         (_("Employee"), "employee_id__get_full_name", "employee_id__get_avatar"),
-        (_("Date"), "created_at"),
+        (_("Allowance On"), "allowance_on"),
         (_("Amount"), "amount"),
         (_("Status"), "get_status_display"),
+        (_("Created On"), "get_created_at_date"),
     ]
 
     row_attrs = """
@@ -228,6 +237,7 @@ class ReimbursementsListView(ReimbursementsAndEncashmentsListView):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(is_leave_encashment_enabled(), name="dispatch")
 class LeaveEncashmentsListView(ReimbursementsAndEncashmentsListView):
 
     def __init__(self, **kwargs: Any) -> None:
@@ -236,10 +246,11 @@ class LeaveEncashmentsListView(ReimbursementsAndEncashmentsListView):
 
     sortby_mapping = [
         (_("Employee"), "employee_id__get_full_name", "employee_id__get_avatar"),
-        (_("Date"), "created_at"),
+        (_("Allowance On"), "allowance_on"),
         (_("Amount"), "amount"),
         (_("Available days to encash"), "ad_to_encash"),
         (_("Carryforward to encash"), "cfd_to_encash"),
+        (_("Created On"), "get_created_at_date"),
     ]
 
     columns = [
@@ -278,10 +289,11 @@ class BonusEncashmentsListView(ReimbursementsAndEncashmentsListView):
 
     sortby_mapping = [
         (_("Employee"), "employee_id__get_full_name", "employee_id__get_avatar"),
-        (_("Date"), "created_at"),
+        (_("Allowance On"), "allowance_on"),
         (_("Amount"), "amount"),
         (_("Status"), "get_status_display"),
         (_("Bonus to encash"), "bonus_to_encash"),
+        (_("Created On"), "get_created_at_date"),
     ]
 
     columns = [
@@ -320,6 +332,11 @@ class _ReimbursementTabNavBase(HorillaNavView):
     filter_instance = ReimbursementFilter()
     filter_form_context_name = "form"
     filter_body_template = "cbv/reimbursements/filter.html"
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. ReimbursementFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
 
     # Set by each subclass so its own Create button always creates a record
     # of that tab's own type, instead of showing a Type dropdown to pick from.
@@ -354,6 +371,7 @@ class ReimbursementNav(_ReimbursementTabNavBase):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(is_leave_encashment_enabled(), name="dispatch")
 class LeaveEncashNav(_ReimbursementTabNavBase):
     """
     Independent Nav for the Leave Encashments tab.
@@ -389,6 +407,7 @@ class ReimbursementTabShell(AttendanceTabContentShell):
     tabs_root_id = "reimbursmentContainer"
 
 
+@method_decorator(is_leave_encashment_enabled(), name="dispatch")
 class LeaveEncashTabShell(AttendanceTabContentShell):
     nav_url_name = "leave-encash-nav"
     container_id = "leaveEncashListContainer"
@@ -406,7 +425,8 @@ class BonusEncashTabShell(AttendanceTabContentShell):
         ("title", _("Title")),
         ("amount", _("Amount")),
         ("status", _("Status")),
-        ("created_at", _("Date")),
+        ("allowance_on", _("Allowance On")),
+        ("created_at", _("Created On")),
         (
             "employee_id__employee_work_info__reporting_manager_id",
             _("Reporting Manager"),
@@ -425,10 +445,11 @@ class ReimbursementsDetailView(HorillaDetailedView):
     """
 
     body = [
-        (_("Date"), "created_at"),
+        (_("Allowance On"), "allowance_on"),
         (_("Amount"), "amount"),
         (_("Status"), "get_status_display"),
         (_("Attachments"), "attachments_col"),
+        (_("Created On"), "get_created_at_date"),
         (_("Description"), "description"),
     ]
     cols = {
@@ -447,6 +468,7 @@ class ReimbursementsDetailView(HorillaDetailedView):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(is_leave_encashment_enabled(), name="dispatch")
 class LeaveEncashmentsDetailedView(ReimbursementsDetailView):
 
     position = 3
@@ -476,6 +498,23 @@ class ReimbursementsFormView(HorillaFormView):
     model = Reimbursement
     form_class = ReimbursementForm
     template_name = "cbv/reimbursements/forms.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        # Shared by all 3 tabs (?type=... on create, instance.type on edit)
+        # -- only the leave_encashment path needs gating here. Eligibility
+        # (as opposed to the plain enabled/disabled check) only applies to a
+        # self-service employee creating their own request -- an admin/
+        # manager with add/view_reimbursement can still create one for
+        # anyone regardless of that employee's own eligibility.
+        instance = Reimbursement.objects.filter(pk=kwargs.get("pk")).first()
+        record_type = request.GET.get("type") or (instance.type if instance else None)
+        if record_type == "leave_encashment" and not leave_encashment_visible_to(
+            request
+        ):
+            return handle_no_permission(
+                request, message=_("Sorry, Leave Encashment is not enabled.")
+            )
+        return super().dispatch(request, *args, **kwargs)
 
     # Maps Reimbursement.type -> the singular, tab-matching label to show
     # on the form (Reimbursement.get_type_display() exists too, but its

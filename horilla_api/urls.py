@@ -33,9 +33,7 @@ schema_view = get_schema_view(
     ),
     public=settings.DEBUG,
     permission_classes=(
-        permissions.AllowAny
-        if settings.DEBUG
-        else (permissions.IsAuthenticated,)
+        (permissions.AllowAny,) if settings.DEBUG else (permissions.IsAdminUser,)
     ),
     generator_class=OrderedTagSchemaGenerator,
 )
@@ -69,4 +67,6 @@ urlpatterns = [
     path("pms/", include("horilla_api.api_urls.pms.urls")),
     path("ward/check-ward/", WardCheckStubAPIView.as_view()),
     path("ward/check-ward", WardCheckStubAPIView.as_view()),
+    # Screen-shaped aggregates for the mobile client; see api_views/mobile.
+    path("mobile/", include("horilla_api.api_urls.mobile.urls")),
 ]

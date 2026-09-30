@@ -4,8 +4,10 @@ Tests for enterprise reporting foundation — registry, engine, metric formulas.
 
 from datetime import date
 
-from django.test import RequestFactory, SimpleTestCase
+from django.test import RequestFactory, SimpleTestCase, TestCase
+from django.utils.datastructures import MultiValueDict
 
+from horilla.testkit.factories import make_company, make_employee
 from report.engine import ReportFilters, month_bounds, month_offset, parse_period
 from report.export import export_csv, export_xlsx
 from report.pivot_limits import MAX_PIVOT_ROWS, capped_list
@@ -230,12 +232,26 @@ class RegistryTests(SimpleTestCase):
             SUGGESTED_REPORT_SLUGS,
         )
 
-        self.assertEqual(MAX_DASHBOARD_REPORT_PINS, 6)
+        # The cap's value is a product decision and moves -- it went 6 -> 10
+        # in the report design pass. Asserting the literal here only restated
+        # the constant and failed on a deliberate change, so what is checked
+        # is the relationship that has to hold whatever the number is.
+        self.assertGreater(
+            MAX_DASHBOARD_REPORT_PINS,
+            0,
+            "a cap of zero would silently disable dashboard pinning",
+        )
         self.assertTrue(
-            set(DASHBOARD_PIN_PRIORITY_SLUGS).issubset(set(SUGGESTED_REPORT_SLUGS))
+            set(DASHBOARD_PIN_PRIORITY_SLUGS).issubset(set(SUGGESTED_REPORT_SLUGS)),
+            "every priority pin must be a report the Suggested pack offers, "
+            "or auto-pinning would put a report on the dashboard that the "
+            "catalogue never suggests",
         )
         self.assertLessEqual(
-            len(DASHBOARD_PIN_PRIORITY_SLUGS), MAX_DASHBOARD_REPORT_PINS
+            len(DASHBOARD_PIN_PRIORITY_SLUGS),
+            MAX_DASHBOARD_REPORT_PINS,
+            "the priority list must fit inside the cap, or the last entries "
+            "could never be pinned",
         )
 
     def test_run_report_attaches_metadata(self):
@@ -408,6 +424,153 @@ class ExportTests(SimpleTestCase):
         self.assertTrue(data.auto_filter.ref)
         self.assertTrue(data.freeze_panes)
 
+    def test_zero_padded_identifiers_keep_their_padding(self):
+        """Badge ids / phone numbers must not be coerced to int.
+
+        int("00042") == 42 silently destroyed the identifier; a zero-padded
+        digit run is data, not a quantity.
+        """
+        from report.export import _coerce_cell
+
+        for text in ("00042", "0501234567", "007", "00"):
+            self.assertEqual(_coerce_cell(text), text, msg=text)
+        # A bare zero and ordinary integers are still real numbers.
+        self.assertEqual(_coerce_cell("0"), 0)
+        self.assertEqual(_coerce_cell("42"), 42)
+        self.assertEqual(_coerce_cell("-42"), -42)
+
+    def test_percent_strings_above_100_are_not_divided_twice(self):
+        """ "150%" must display as 150.0%, not 1.5%.
+
+        _coerce_cell already turns "150%" into 1.5; the data sheet's >1
+        rescale then has to leave it alone or the value is divided twice.
+        """
+        import io as _io
+
+        import openpyxl
+
+        from report.export import export_xlsx
+
+        payload = {
+            "title": "Rates",
+            "period": {"from_date": "2026-01-01", "to_date": "2026-01-31"},
+            "kpis": [],
+            "table": {
+                "columns": [
+                    {"key": "src", "label": "Source"},
+                    {"key": "rate", "label": "Accept Rate %"},
+                ],
+                "rows": [
+                    {"src": "Referral", "rate": "150%"},
+                    {"src": "Portal", "rate": "89.5%"},
+                    # Bare integer under a percent header: must still format
+                    # as a percentage rather than a plain number.
+                    {"src": "Agency", "rate": "75"},
+                ],
+            },
+        }
+        wb = openpyxl.load_workbook(
+            _io.BytesIO(export_xlsx(payload, "r.xlsx", meta={}).content)
+        )
+        ws = wb["Data"]
+        by_source = {}
+        for row in ws.iter_rows():
+            cells = [c for c in row]
+            if len(cells) >= 2 and cells[0].value in ("Referral", "Portal", "Agency"):
+                by_source[cells[0].value] = cells[1]
+
+        self.assertAlmostEqual(by_source["Referral"].value, 1.5, places=4)
+        self.assertAlmostEqual(by_source["Portal"].value, 0.895, places=4)
+        self.assertAlmostEqual(by_source["Agency"].value, 0.75, places=4)
+        for cell in by_source.values():
+            self.assertEqual(cell.number_format, "0.0%")
+
+
+class AttendanceDecimalTests(SimpleTestCase):
+    """The pivot sums the *_Decimal columns, so they must be real hours."""
+
+    def _helpers(self):
+        # The converters are closures inside the module-level guard, so reach
+        # them the way the view does -- via the registered pivot view module.
+        from report.views import attendance_report  # noqa: F401
+
+        return attendance_report
+
+    def test_duration_to_decimal_hours(self):
+        from datetime import time as _time
+
+        # Re-derive the same arithmetic the view applies; a "HH.MM" string
+        # would make 1:45 + 1:45 total 2.90 instead of 3.50.
+        def convert(value):
+            if isinstance(value, str):
+                hours, minutes = map(int, value.split(":")[:2])
+            elif isinstance(value, _time):
+                hours, minutes = value.hour, value.minute
+            else:
+                return 0.0
+            return round(hours + minutes / 60, 2)
+
+        self.assertEqual(convert("1:45"), 1.75)
+        self.assertEqual(convert("0:30"), 0.5)
+        self.assertEqual(convert("8:00"), 8.0)
+        self.assertEqual(convert("1:45") + convert("1:45"), 3.5)
+        self.assertEqual(convert(None), 0.0)
+
+    def test_view_module_returns_numeric_decimals(self):
+        """Guard the real converters, not just the arithmetic above."""
+        import inspect
+
+        from report.views import attendance_report
+
+        source = inspect.getsource(attendance_report)
+        # The base-60-as-base-100 formatting must be gone from both helpers.
+        self.assertNotIn('f"{hours:02}.{minutes:02}"', source)
+        self.assertNotIn('f"{t.hour:02}.{t.minute:02}"', source)
+
+
+class SubscriptionFormTests(TestCase):
+    """Recipients come from an employee multi-select, posted as raw ids."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.company = make_company("Formcorp")
+        cls.employee_a = make_employee(
+            company=cls.company, email="a@b.com", first_name="A"
+        )
+        cls.employee_b = make_employee(
+            company=cls.company, email="c@d.com", first_name="B"
+        )
+
+    def _data(self, employee_ids):
+        return MultiValueDict(
+            {
+                "report_slug": ["workforce-composition"],
+                "name": ["Weekly"],
+                "frequency": ["weekly"],
+                "format": ["xlsx"],
+                "recipients_employees": [str(pk) for pk in employee_ids],
+            }
+        )
+
+    def test_recipients_required(self):
+        from report.forms import ReportSubscriptionForm
+
+        form = ReportSubscriptionForm(data=self._data([]))
+        self.assertFalse(form.is_valid())
+        self.assertIn("recipients_employees", form.errors)
+
+    def test_recipients_accepts_selected_employees(self):
+        from report.forms import ReportSubscriptionForm
+
+        form = ReportSubscriptionForm(
+            data=self._data([self.employee_a.pk, self.employee_b.pk])
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        selected_ids = set(
+            form.cleaned_data["recipients_employees"].values_list("pk", flat=True)
+        )
+        self.assertEqual(selected_ids, {self.employee_a.pk, self.employee_b.pk})
+
 
 class PdfExportTests(SimpleTestCase):
     def test_narrative_blurb(self):
@@ -569,7 +732,8 @@ class SubscriptionDeliveryTests(SimpleTestCase):
         self.assertEqual(all_time.employment_status, "all")
 
     def test_subscription_is_due(self):
-        from datetime import timedelta
+        from datetime import datetime, timedelta
+        from datetime import timezone as dt_timezone
         from types import SimpleNamespace
 
         from django.utils import timezone
@@ -580,34 +744,70 @@ class SubscriptionDeliveryTests(SimpleTestCase):
         fresh = SimpleNamespace(last_run_at=None, frequency="weekly")
         self.assertTrue(subscription_is_due(fresh, now))
 
-        recent = SimpleNamespace(
-            last_run_at=now - timedelta(days=1), frequency="weekly"
+        too_soon = SimpleNamespace(
+            last_run_at=now - timedelta(hours=2), frequency="weekly"
         )
-        self.assertFalse(subscription_is_due(recent, now))
+        self.assertFalse(subscription_is_due(too_soon, now))
 
-        old = SimpleNamespace(last_run_at=now - timedelta(days=8), frequency="weekly")
-        self.assertTrue(subscription_is_due(old, now))
+        wrong_weekday = SimpleNamespace(
+            last_run_at=now - timedelta(days=8), frequency="weekly"
+        )
+        self.assertFalse(subscription_is_due(wrong_weekday, now))
+
+        right_weekday = SimpleNamespace(
+            last_run_at=now - timedelta(days=7), frequency="weekly"
+        )
+        self.assertTrue(subscription_is_due(right_weekday, now))
 
         daily_ok = SimpleNamespace(
             last_run_at=now - timedelta(hours=24), frequency="daily"
         )
         self.assertTrue(subscription_is_due(daily_ok, now))
 
-    def test_scheduler_skips_migrate_argv(self):
-        import sys
+        feb_28 = datetime(2027, 2, 28, 10, 0, tzinfo=dt_timezone.utc)
+        clamped_from_31 = SimpleNamespace(
+            last_run_at=datetime(2027, 1, 31, 9, 0, tzinfo=dt_timezone.utc),
+            frequency="monthly",
+        )
+        self.assertTrue(subscription_is_due(clamped_from_31, feb_28))
 
-        from report import scheduler as sched
+    def test_compute_schedule_anchor(self):
+        from datetime import datetime
+        from datetime import timezone as dt_timezone
+        from types import SimpleNamespace
 
-        original = list(sys.argv)
-        try:
-            sys.argv = ["manage.py", "migrate"]
-            self.assertFalse(sched._should_start_scheduler())
-            sys.argv = ["manage.py", "test", "report.tests"]
-            self.assertFalse(sched._should_start_scheduler())
-            sys.argv = ["manage.py", "runserver"]
-            self.assertTrue(sched._should_start_scheduler())
-        finally:
-            sys.argv = original
+        from report.delivery import compute_schedule_anchor, subscription_is_due
+
+        now = datetime(2027, 3, 15, 9, 0, tzinfo=dt_timezone.utc)  # a Monday
+        anchor = compute_schedule_anchor("weekly", now, weekday=now.weekday())
+        self.assertEqual(anchor.date().isoformat(), "2027-03-08")
+        self.assertTrue(
+            subscription_is_due(
+                SimpleNamespace(last_run_at=anchor, frequency="weekly"), now
+            )
+        )
+
+        before_target = compute_schedule_anchor("monthly", now, day_of_month=31)
+        self.assertEqual(before_target.date().isoformat(), "2027-02-28")
+
+        after_target = compute_schedule_anchor("monthly", now, day_of_month=5)
+        self.assertEqual(after_target.date().isoformat(), "2027-03-05")
+
+    def test_subscription_job_is_registered_not_started(self):
+        # Replaces an argv-guard test: the module used to start its own
+        # BackgroundScheduler at import and skip it for migrate/test argv.
+        # Nothing starts at import now, so there is no argv to guard -- the job
+        # is registered and run_scheduler owns execution.
+        import report.scheduler  # noqa: F401
+        from horilla.scheduling import get_registered_jobs
+
+        job = next(
+            (j for j in get_registered_jobs() if j.job_id == "report_subscriptions"),
+            None,
+        )
+        self.assertIsNotNone(job, "report_subscriptions job was not registered")
+        self.assertEqual(job.trigger, "interval")
+        self.assertEqual(job.kwargs, {"hours": 1})
 
 
 class PeriodCompareTests(SimpleTestCase):
@@ -842,14 +1042,41 @@ class CalendarExpectedDaysTests(SimpleTestCase):
             "report.metrics._calendar._holiday_dates",
             return_value={date(2026, 1, 7)},
         ), patch(
-            "report.metrics._calendar._is_company_leave",
-            return_value=False,
+            # Company-leave rules are now fetched once per call rather than
+            # queried per day; patch that seam, not the old per-day helper.
+            "report.metrics._calendar._company_leave_rules",
+            return_value=set(),
         ):
             # Mon–Fri minus Wed holiday → 4
             self.assertEqual(
                 count_expected_working_days(date(2026, 1, 5), date(2026, 1, 9)),
                 4,
             )
+
+    def test_company_leave_rule_matching_matches_legacy_arithmetic(self):
+        """The prefetched rule check must agree with base.methods.
+
+        _matches_company_leave replaced a per-day query; it recomputes the
+        same 0-based, month-start-offset week number, so a drift here would
+        silently change every absenteeism figure.
+        """
+        from report.metrics._calendar import _matches_company_leave
+
+        # 2026-01-05 is a Monday in the second week block of January 2026.
+        monday = date(2026, 1, 5)
+        first = monday.replace(day=1)
+        week_no = (monday.day + first.weekday() - 1) // 7
+
+        # A week-independent Monday rule matches any Monday.
+        self.assertTrue(_matches_company_leave(monday, {(None, 0)}))
+        # A rule pinned to this week/weekday matches.
+        self.assertTrue(_matches_company_leave(monday, {(week_no, 0)}))
+        # A different weekday does not.
+        self.assertFalse(_matches_company_leave(monday, {(None, 2)}))
+        # A different week block does not.
+        self.assertFalse(_matches_company_leave(monday, {(week_no + 1, 0)}))
+        # No rules at all is never a company leave.
+        self.assertFalse(_matches_company_leave(monday, set()))
 
 
 class NamedOtPrivacyTests(SimpleTestCase):

@@ -344,15 +344,6 @@ class CompanyMiddleware:
     def __call__(self, request):
         # ✅ make request globally accessible (safe)
         _thread_locals.request = request
-        # _handle() sets the current_company_id ContextVar. A ContextVar is not
-        # per-request -- it lives on the thread/context -- so without restoring
-        # it here the company selected by one request stays visible to the next
-        # piece of work on that thread. HorillaCompanyManager.get_queryset()
-        # reads it and silently filters every query to that company, which in
-        # tests makes a freshly created fixture invisible to the very next test
-        # (Employee.objects.get(pk=...) raising DoesNotExist, holidays not
-        # matching is_holiday(), ...).
-        previous_company = get_selected_company()
         try:
             return self._handle(request)
         finally:
@@ -360,7 +351,12 @@ class CompanyMiddleware:
             # left here outlives its own lifecycle. HorillaModel.save() reads it
             # to stamp created_by/modified_by, which then point at a stale user.
             _thread_locals.request = None
-            set_selected_company(previous_company)
+            # Same lifetime problem for the company ContextVar _handle() sets:
+            # HorillaCompanyManager.get_queryset() reads it on every query, so a
+            # value left behind scopes whatever runs next on this thread to the
+            # previous request's company. Anonymous requests happen to reset it
+            # (see _handle), but nothing guarantees one runs in between.
+            set_selected_company(None)
 
     def _handle(self, request):
         if not request.user.is_authenticated:

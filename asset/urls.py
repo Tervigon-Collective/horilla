@@ -2,7 +2,6 @@
 URL configuration for asset-related views.
 """
 
-from django import views
 from django.urls import path
 
 from asset import dashboard as asset_dashboard
@@ -558,5 +557,15 @@ urlpatterns = [
         "asset-reassign/<int:pk>/",
         request_and_allocation.AssetReassignFormView.as_view(),
         name="asset-reassign",
+    ),
+    path(
+        "asset-rule-view/",
+        views.asset_rule_settings_view,
+        name="asset-rule-view",
+    ),
+    path(
+        "enable-disable-asset-fine/",
+        views.enable_disable_asset_fine,
+        name="enable-disable-asset-fine",
     ),
 ]

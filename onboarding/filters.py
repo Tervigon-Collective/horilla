@@ -5,6 +5,7 @@ Used to register filter for onboarding models
 
 import django_filters
 from django import forms
+from django.utils.translation import gettext_lazy as _
 from django_filters import filters
 
 from base.filters import FilterSet
@@ -87,7 +88,7 @@ class RecruitmentFilter(rec_filter):
         return queryset.distinct()
 
 
-class PipelineCandidateFilter(FilterSet):
+class PipelineCandidateFilter(HorillaFilterSet):
     """
     FilterSet class for Candidate model
     """
@@ -179,6 +180,78 @@ class PipelineCandidateFilter(FilterSet):
             | queryset.filter(candidate_id__recruitment_id__title__icontains=value)
         )
         return queryset.distinct()
+
+    def _build_custom_filter_fields(self):
+        """
+        Registry backing the Advanced section's "+ Add filter" builder
+        (see HorillaFilterSet._build_custom_filter_fields's docstring for
+        the two supported entry shapes) -- same "choose field, then
+        lookup, then value" pattern used by recruitment.filters.
+        CandidateFilter, which this class mirrors. Exposes the full
+        gte/lte/gt/lt/exact set for the date fields already declared
+        above (probation_end, schedule_date, start_date, end_date,
+        interview_date) instead of each one's fixed direction, plus
+        Onboarding End Date/Created At which had no fixed input at all.
+        """
+        fields = [
+            {
+                "key": "interview_date",
+                "field": "candidate_id__candidate_interview__interview_date",
+                "label": str(_("Interview Date")),
+                "type": "date_range",
+            },
+            {
+                "key": "probation_end",
+                "field": "candidate_id__probation_end",
+                "label": str(_("Probation End")),
+                "type": "date_range",
+            },
+            {
+                "key": "schedule_date",
+                "field": "candidate_id__schedule_date",
+                "label": str(_("Schedule Date")),
+                "type": "date_range",
+            },
+            {
+                "key": "start_date",
+                "field": "candidate_id__recruitment_id__start_date",
+                "label": str(_("Start Date")),
+                "type": "date_range",
+            },
+            {
+                "key": "end_date",
+                "field": "candidate_id__recruitment_id__end_date",
+                "label": str(_("End Date")),
+                "type": "date_range",
+            },
+            {
+                "key": "onboarding_end_date",
+                "field": "onboarding_end_date",
+                "label": str(_("Onboarding End Date")),
+                "type": "date_range",
+            },
+            {
+                "key": "created_at",
+                "field": "created_at",
+                "label": str(_("Created At")),
+                "type": "date_range",
+            },
+        ]
+        for entry in fields:
+            entry["lookups"] = [
+                [lk, str(label)]
+                for lk, label in self.CUSTOM_FILTER_LOOKUPS[entry["type"]]
+            ]
+        return fields
+
+    def filter_queryset(self, queryset):
+        """
+        HorillaFilterSet._apply_custom_filters isn't wired into the base
+        filter_queryset automatically -- this is the minimal "call it at
+        the end" hookup, same as CandidateFilter/PipelineEmployeeFilter.
+        """
+        queryset = super().filter_queryset(queryset)
+        return self._apply_custom_filters(queryset)
 
 
 class KanbanCandidateFilter(FilterSet):
@@ -335,6 +408,19 @@ class OnboardingStageFilter(HorillaFilterSet):
         label="Candidates",
     )
 
+    # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism)
+    # -- Stage Manager opts into an AJAX-searched combobox instead of
+    # pre-rendering its whole queryset as <option> tags.
+    ajax_fields = {
+        "employee_id": {
+            "key": "onboarding-stage-manager",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+    }
+
     class Meta:
         model = OnboardingStage
         fields = [
@@ -392,7 +478,7 @@ class OnboardingStageFilter(HorillaFilterSet):
         return queryset.distinct()
 
 
-class OnboardingCandidateFilter(FilterSet):
+class OnboardingCandidateFilter(HorillaFilterSet):
     """
     OnboardingStageFilter
     """
@@ -417,6 +503,19 @@ class OnboardingCandidateFilter(FilterSet):
         lookup_expr="lte",
         widget=forms.DateInput(attrs={"type": "date"}),
     )
+
+    # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism)
+    # -- Tasks opts into an AJAX-searched combobox instead of
+    # pre-rendering its whole queryset as <option> tags.
+    ajax_fields = {
+        "tasks": {
+            "key": "onboarding-candidate-tasks",
+            "queryset_fn": lambda request: OnboardingTask.objects.all(),
+            "display_fn": lambda obj: obj.task_title,
+            "search_fields": ["task_title"],
+            "placeholder": _("Select task..."),
+        },
+    }
 
     class Meta:
         model = CandidateStage

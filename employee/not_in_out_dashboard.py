@@ -206,7 +206,8 @@ def get_mail_preview(request):
     """
     body = request.POST.get("body")
     if not body:
-        return HttpResponse("No body provided", status=400)
+        messages.error(request, _("No body provided for mail preview."))
+        return HorillaRedirect(request)
 
     # Strip dangerous template constructs first.
     body = sanitize_mail_template_body(body)
@@ -288,7 +289,7 @@ def send_mail_to_employee(request):
         ]
         for html in bodys:
             # due to not having solid template we first need to pass the context
-            template_bdy = template.Template(html)
+            template_bdy = template.Template(sanitize_mail_template_body(html))
             context = template.Context(
                 {"instance": employee, "self": request.user.employee_get}
             )
@@ -301,7 +302,7 @@ def send_mail_to_employee(request):
                 )
             )
 
-        template_bdy = template.Template(bdy)
+        template_bdy = template.Template(sanitize_mail_template_body(bdy))
         context = template.Context(
             {"instance": employee, "self": request.user.employee_get}
         )

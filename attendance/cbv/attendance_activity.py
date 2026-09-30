@@ -111,7 +111,7 @@ class AttendanceActivityListView(HorillaListView):
         ("employee_id__employee_work_info__work_type_id", _("Work Type")),
         ("employee_id__employee_work_info__department_id", _("Department")),
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
-        ("employee_id__employee_work_info__employee_type_id", _("Employement Type")),
+        ("employee_id__employee_work_info__employee_type_id", _("Employment Type")),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
 
@@ -153,7 +153,6 @@ class AttendanceActivityNavView(HorillaNavView):
                     data-target = "#genericModal"
                     hx-target="#genericModalBody"
                     hx-get ="{reverse_lazy('attendance-bulk-export')}"
-                    hx-vals='js:{{"has_selection": (JSON.parse(document.getElementById("selectedInstances")?.getAttribute("data-ids")||"[]").length>0)}}'
                     style="cursor: pointer;"
                 """,
                 }
@@ -179,6 +178,10 @@ class AttendanceActivityNavView(HorillaNavView):
     filter_instance = AttendanceActivityFilter()
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel (horilla_nav.html's .oh-filter-modern
+    # styles) -- AttendanceActivityFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs, same as AttendancesNavView.
+    modern_filter = True
 
     group_by_fields = [
         ("employee_id", _("Employee")),
@@ -195,7 +198,7 @@ class AttendanceActivityNavView(HorillaNavView):
         ("employee_id__employee_work_info__work_type_id", _("Work Type")),
         ("employee_id__employee_work_info__department_id", _("Department")),
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
-        ("employee_id__employee_work_info__employee_type_id", _("Employement Type")),
+        ("employee_id__employee_work_info__employee_type_id", _("Employment Type")),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
     # Mirrors AttendanceActivityListView.nested_group_by_fields below --
@@ -220,7 +223,7 @@ class AttendanceActivityNavView(HorillaNavView):
         ("employee_id__employee_work_info__work_type_id", _("Work Type")),
         ("employee_id__employee_work_info__department_id", _("Department")),
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
-        ("employee_id__employee_work_info__employee_type_id", _("Employement Type")),
+        ("employee_id__employee_work_info__employee_type_id", _("Employment Type")),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
 
@@ -276,5 +279,4 @@ class AttendanceBulkExport(TemplateView):
         context = super().get_context_data(**kwargs)
         context["export_form"] = export_form
         context["export"] = export
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context

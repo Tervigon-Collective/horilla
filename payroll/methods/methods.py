@@ -10,7 +10,8 @@ from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from django.apps import apps
 from django.core.paginator import Paginator
-from django.db.models import Q
+from django.db import transaction
+from django.db.models import F, Q
 
 # from attendance.models import Attendance
 from base.methods import (
@@ -940,6 +941,7 @@ def calculate_employer_contribution(data):
     return data
 
 
+@transaction.atomic
 def save_payslip(**kwargs):
     """
     This method is used to save the generated payslip.

@@ -8,6 +8,7 @@ from typing import Any
 from django import forms
 from django.contrib import messages
 from django.http import HttpResponse
+from django.shortcuts import redirect
 from django.template.loader import render_to_string
 from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
@@ -95,6 +96,7 @@ class FilingStatusDetailView(HorillaDetailedView):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(hx_request_required, name="dispatch")
 @method_decorator(permission_required("payroll.add_taxbracket"), name="dispatch")
 class TaxBracketCreateForm(HorillaFormView):
     """
@@ -105,6 +107,16 @@ class TaxBracketCreateForm(HorillaFormView):
     form_class = TaxBracketForm
     new_display_title = _("Create Tax Bracket")
 
+    def dispatch(self, request, *args, **kwargs):
+        filing_status_id = kwargs.get("filing_status_id")
+        if (
+            filing_status_id
+            and not FilingStatus.objects.filter(id=filing_status_id).exists()
+        ):
+            messages.error(self.request, "Filing status not found.")
+            return redirect("filing-status-list")
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         if self.form.instance.pk:
@@ -113,7 +125,10 @@ class TaxBracketCreateForm(HorillaFormView):
             self.form_class.verbose_name = _("Update Tax Bracket")
         else:
             filing_status_id = self.kwargs.get("filing_status_id")
-            filling = FilingStatus.objects.get(id=filing_status_id)
+            filling = FilingStatus.objects.filter(id=filing_status_id).first()
+            if not filling:
+                context["form"] = self.form
+                return context
             self.form.fields["filing_status_id"].initial = filling
             context["is_create"] = True
 
@@ -168,6 +183,7 @@ class TaxBracketNavView(HorillaNavView):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(hx_request_required, name="dispatch")
 @method_decorator(permission_required("payroll.view_taxbracket"), name="dispatch")
 class FilingStatusPipeline(Pipeline):
     """
@@ -244,6 +260,7 @@ class FilingStatusPipeline(Pipeline):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(hx_request_required, name="dispatch")
 @method_decorator(permission_required("payroll.view_taxbracket"), name="dispatch")
 class TaxBracketListView(HorillaListView):
     """
@@ -290,6 +307,11 @@ class TaxBracketListView(HorillaListView):
         },
     ]
 
+    def dispatch(self, request, *args, **kwargs):
+        if not request.GET.get("filing_status_id"):
+            return HttpResponse()
+        return super().dispatch(request, *args, **kwargs)
+
     def get_queryset(self, queryset=None, filtered=False, *args, **kwargs):
         queryset = super().get_queryset(queryset, filtered, *args, **kwargs)
         queryset = queryset.filter(
@@ -300,6 +322,6 @@ class TaxBracketListView(HorillaListView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         filing_status_id = self.request.GET.get("filing_status_id")
-        filing_status = FilingStatus.objects.get(pk=filing_status_id)
+        filing_status = FilingStatus.objects.filter(pk=filing_status_id).first()
         context["filing_status"] = filing_status
         return context

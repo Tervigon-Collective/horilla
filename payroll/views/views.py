@@ -6,7 +6,7 @@ This module is used to define the method for the path in the urls
 
 import json
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from itertools import groupby
 from urllib.parse import parse_qs
 
@@ -21,6 +21,7 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
 
 from base.methods import (
@@ -222,6 +223,7 @@ def contract_status_update(request, contract_id):
                 for error in errors:
                     messages.error(request, error)
         return HttpResponse("<script>$('#reloadMessagesButton').click()</script>")
+    return HttpResponse()
 
 
 @login_required
@@ -232,7 +234,9 @@ def bulk_contract_status_update(request):
     ids = eval_validate(ids) if ids else []
     all_contracts = Contract.objects.all()
     contracts = all_contracts.filter(id__in=ids)
-
+    if not contracts.exists():
+        messages.info(request, _("No contracts selected."))
+        return redirect("contract-filter")
     for contract in contracts:
         save = True
         if status in ["active", "draft"]:
@@ -1298,7 +1302,6 @@ def payslip_export(request):
     heading_format = workbook.add_format(
         {
             "bold": True,
-            "font_size": 14,
             "align": "center",
             "valign": "vcenter",
             "bg_color": "#eb7968",
@@ -1836,11 +1839,10 @@ def create_payrollrequest_comment(request, payroll_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=rec,
-                        verb=f"{payroll.employee_id}'s reimbursement request has received a comment.",
-                        verb_ar=f"تلقى طلب استرداد نفقات {payroll.employee_id} تعليقًا.",
-                        verb_de=f"{payroll.employee_id}s Rückerstattungsantrag hat einen Kommentar erhalten.",
-                        verb_es=f"La solicitud de reembolso de gastos de {payroll.employee_id} ha recibido un comentario.",
-                        verb_fr=f"La demande de remboursement de frais de {payroll.employee_id} a reçu un commentaire.",
+                        verb=gettext_noop(
+                            "%(employee)s's reimbursement request has received a comment."
+                        ),
+                        verb_params={"employee": str(payroll.employee_id)},
                         redirect=reverse("view-reimbursement"),
                         icon="chatbox-ellipses",
                     )
@@ -1852,11 +1854,9 @@ def create_payrollrequest_comment(request, payroll_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=rec,
-                        verb="Your reimbursement request has received a comment.",
-                        verb_ar="تلقى طلب استرداد نفقاتك تعليقًا.",
-                        verb_de="Ihr Rückerstattungsantrag hat einen Kommentar erhalten.",
-                        verb_es="Tu solicitud de reembolso ha recibido un comentario.",
-                        verb_fr="Votre demande de remboursement a reçu un commentaire.",
+                        verb=gettext_noop(
+                            "Your reimbursement request has received a comment."
+                        ),
                         redirect=reverse("view-reimbursement"),
                         icon="chatbox-ellipses",
                     )
@@ -1868,11 +1868,10 @@ def create_payrollrequest_comment(request, payroll_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=rec,
-                        verb=f"{payroll.employee_id}'s reimbursement request has received a comment.",
-                        verb_ar=f"تلقى طلب استرداد نفقات {payroll.employee_id} تعليقًا.",
-                        verb_de=f"{payroll.employee_id}s Rückerstattungsantrag hat einen Kommentar erhalten.",
-                        verb_es=f"La solicitud de reembolso de gastos de {payroll.employee_id} ha recibido un comentario.",
-                        verb_fr=f"La demande de remboursement de frais de {payroll.employee_id} a reçu un commentaire.",
+                        verb=gettext_noop(
+                            "%(employee)s's reimbursement request has received a comment."
+                        ),
+                        verb_params={"employee": str(payroll.employee_id)},
                         redirect=reverse("view-reimbursement"),
                         icon="chatbox-ellipses",
                     )
@@ -1881,11 +1880,9 @@ def create_payrollrequest_comment(request, payroll_id):
                 notify.send(
                     request.user.employee_get,
                     recipient=rec,
-                    verb="Your reimbursement request has received a comment.",
-                    verb_ar="تلقى طلب استرداد نفقاتك تعليقًا.",
-                    verb_de="Ihr Rückerstattungsantrag hat einen Kommentar erhalten.",
-                    verb_es="Tu solicitud de reembolso ha recibido un comentario.",
-                    verb_fr="Votre demande de remboursement a reçu un commentaire.",
+                    verb=gettext_noop(
+                        "Your reimbursement request has received a comment."
+                    ),
                     redirect=reverse("view-reimbursement"),
                     icon="chatbox-ellipses",
                 )
@@ -2073,12 +2070,16 @@ def auto_payslip_settings_view(request):
 
 
 @login_required
-@hx_request_required
 @permission_required("payroll.change_payslipautogenerate")
 def create_or_update_auto_payslip(request, auto_id=None):
+    # This endpoint returns only the modal form fragment; a genuine
+    # top-level browser navigation/reload should land on the real Payroll
+    # Settings page instead of showing the raw, unstyled fragment.
+    if request.headers.get("Sec-Fetch-Mode") == "navigate":
+        return redirect(reverse("payroll-settings-view"))
     auto_payslip = None
     if auto_id:
-        auto_payslip = PayslipAutoGenerate.objects.get(id=auto_id)
+        auto_payslip = PayslipAutoGenerate.objects.filter(id=auto_id).first()
     form = PayslipAutoGenerateForm(instance=auto_payslip)
     if request.method == "POST":
         form = PayslipAutoGenerateForm(request.POST, instance=auto_payslip)
@@ -2130,13 +2131,13 @@ def activate_auto_payslip_generate(request):
         payslip_auto.auto_generate = True
         response = {
             "type": "success",
-            "message": _("Auto paslip generate activated successfully."),
+            "message": _("Auto payslip generate activated successfully."),
         }
     else:
         payslip_auto.auto_generate = False
         response = {
             "type": "success",
-            "message": _("Auto paslip generate deactivated successfully."),
+            "message": _("Auto payslip generate deactivated successfully."),
         }
     payslip_auto.save()
     return JsonResponse(response)

@@ -102,7 +102,7 @@ def delete_permission(function):
             return function(request, *args, **kwargs)
 
         return handle_no_permission(
-            request, message=_("You dont have permission for delete.")
+            request, message=_("You don't have permission for delete.")
         )
 
     return _function
@@ -140,7 +140,7 @@ def duplicate_permission(function):
             return function(request, *args, **kwargs)
 
         return handle_no_permission(
-            request, message=_("You dont have permission for duplicate action.")
+            request, message=_("You don't have permission for duplicate action.")
         )
 
     return _function
@@ -282,9 +282,36 @@ def login_required(view_func):
 def hx_request_required(view_func):
     @wraps(view_func)
     def wrapped_view(request, *args, **kwargs):
+        # Sec-Fetch-Mode is set by the browser itself for a genuine
+        # top-level navigation and can't be spoofed by an htmx fetch()
+        # call, unlike the HX-Request header alone -- some browser setups
+        # send HX-Request even on a real address-bar visit, which would
+        # otherwise slip through this check and render the raw fragment.
+        is_real_navigation = request.META.get("HTTP_SEC_FETCH_MODE") == "navigate"
         key = "HTTP_HX_REQUEST"
-        if key not in request.META.keys():
+        if is_real_navigation or key not in request.META.keys():
             return render(request, "405.html", status=405)
+        return view_func(request, *args, **kwargs)
+
+    return wrapped_view
+
+
+def database_init_required(view_func):
+    """Allow the wizard's user creation step only before setup, and only after the DB_INIT_PASSWORD was verified."""
+
+    @wraps(view_func)
+    def wrapped_view(request, *args, **kwargs):
+        from base.views import initialize_database_condition
+
+        if not initialize_database_condition():
+            messages.warning(request, _("The database is already initialized."))
+            return redirect("login")
+        if not request.session.get("db_init_verified"):
+            messages.warning(
+                request,
+                _("Verify the database initialization password to continue."),
+            )
+            return redirect("login")
         return view_func(request, *args, **kwargs)
 
     return wrapped_view

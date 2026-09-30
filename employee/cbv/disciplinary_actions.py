@@ -12,6 +12,7 @@ from django.shortcuts import render
 from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from base.methods import filtersubordinates
 from employee.filters import DisciplinaryActionFilter
@@ -121,6 +122,12 @@ class DisciplinaryActionsNav(HorillaNavView):
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
     template_name = "generic/inline_nav.html"
+    # Modern slide-over filter panel (generic/inline_nav.html's own
+    # {% if modern_filter %} branch, mirroring horilla_nav.html's
+    # .oh-filter-modern styles) -- same treatment as every other panel
+    # this session. DisciplinaryActionFilter.ajax_fields carries the
+    # AJAX-loaded comboboxes this needs.
+    modern_filter = True
 
 
 class DynamicActionTypeFormView(HorillaFormView):
@@ -187,11 +194,7 @@ class DisciplinaryActionsFormView(HorillaFormView):
                         notify.send(
                             self.request.user.employee_get,
                             recipient=employees,
-                            verb="Disciplinary action is taken on you.",
-                            verb_ar="تم اتخاذ إجراء disziplinarisch ضدك.",
-                            verb_de="Disziplinarische Maßnahmen wurden gegen Sie ergriffen.",
-                            verb_es="Se ha tomado acción disciplinaria en tu contra.",
-                            verb_fr="Des mesures disciplinaires ont été prises à votre encontre.",
+                            verb=gettext_noop("Disciplinary action is taken on you."),
                             redirect="/employee/disciplinary-actions/",
                             icon="chatbox-ellipses",
                         )
@@ -281,6 +284,13 @@ class DisciplinaryActionsDetailView(HorillaDetailedView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        instance = context["object"]
-        instance.ordered_ids = context["instance_ids"]
+        instance = context.get("object")
+        if instance is None:
+            # No matching row (e.g. a stale/invalid pk) -- the parent's own
+            # get_context_data already skips setting instance_ids for this
+            # case, and its get() renders empty_template / redirects with
+            # "No record found" once this returns, so there's nothing to
+            # attach ordered_ids to here.
+            return context
+        instance.ordered_ids = context.get("instance_ids", [])
         return context

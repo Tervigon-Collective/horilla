@@ -10,6 +10,7 @@ from django.http import HttpResponse
 from django.urls import reverse
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from attendance.cbv.tab_shell import AttendanceTabContentShell
 from attendance.filters import AttendanceFilters
@@ -18,7 +19,6 @@ from attendance.forms import (
     BulkAttendanceRequestForm,
     NewRequestForm,
 )
-from attendance.methods.utils import get_employee_last_name
 from attendance.models import Attendance
 from base.methods import (
     choosesubordinates,
@@ -133,6 +133,8 @@ class AttendancesRequestListView(HorillaListView):
         (_("At Work"), "attendance_worked_hour"),
         (_("Overtime"), "attendance_overtime"),
     ]
+    # attendance_validated's radio values are Python's str(True)/str(False) (capitalized),
+    # while is_bulk_request still uses NullBooleanSelect's lowercase "true"/"false"/"unknown".
     row_status_indications = [
         (
             "bulk-request--dot",
@@ -140,7 +142,7 @@ class AttendancesRequestListView(HorillaListView):
             """
             onclick="
                 $('#applyFilter').closest('form').find('[name=is_bulk_request]').val('true');
-                $('[name=attendance_validated]').val('unknown').change();
+                $('[name=attendance_validated]').val('').change();
                 $('#applyFilter').click();
             "
             """,
@@ -150,7 +152,7 @@ class AttendancesRequestListView(HorillaListView):
             _("Not Validated"),
             """
             onclick="
-                $('#applyFilter').closest('form').find('[name=attendance_validated]').val('false');
+                $('#applyFilter').closest('form').find('[name=attendance_validated]').val('False');
                 $('[name=is_bulk_request]').val('unknown').change();
                 $('#applyFilter').click();
             "
@@ -161,7 +163,7 @@ class AttendancesRequestListView(HorillaListView):
             _("Validated"),
             """
             onclick="
-                $('#applyFilter').closest('form').find('[name=attendance_validated]').val('true');
+                $('#applyFilter').closest('form').find('[name=attendance_validated]').val('True');
                 $('[name=is_bulk_request]').val('unknown').change();
                 $('#applyFilter').click();
 
@@ -171,9 +173,7 @@ class AttendancesRequestListView(HorillaListView):
     ]
 
     row_status_class = "validated-{attendance_validated}"
-    # Mirrors _AttendanceRequestTabNavBase.nested_group_by_fields -- needed
-    # here too since this (List) and Nav are separate classes; see the same
-    # split in employee/cbv/employees.py's EmployeesList/EmployeeNav.
+    # Mirrors _AttendanceRequestTabNavBase.nested_group_by_fields since List and Nav are separate classes.
     nested_group_by_fields = [
         ("employee_id", _("Employee")),
         ("attendance_date", _("Attendance Date")),
@@ -189,7 +189,7 @@ class AttendancesRequestListView(HorillaListView):
         ("minimum_hour", _("Min Hour")),
         ("employee_id__employee_work_info__department_id", _("Department")),
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
-        ("employee_id__employee_work_info__employee_type_id", _("Employement Type")),
+        ("employee_id__employee_work_info__employee_type_id", _("Employment Type")),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
 
@@ -205,7 +205,9 @@ class AttendanceRequestListTab(AttendancesRequestListView):
         self.view_id = "attendance-requests-container"
         self.search_url = reverse("attendance-request-list-tab")
 
-    template_name = "cbv/attendance_request/attendance_request_tab.html"
+    # Renders through the shared generic list table; per-field request highlighting
+    # now comes from this per-cell class hook instead of a forked template.
+    cell_class_method = "request_cell_classes"
 
     columns = [
         col for col in AttendancesRequestListView.columns if col[1] != "status_col"
@@ -336,10 +338,7 @@ def attendance_request_tabs_badge_counts(request):
 
 def _attendance_request_common_actions(request):
     """
-    Export - duplicated into every Attendance Requests tab's own Nav now
-    that each tab carries its own independent Search/Filter/Actions bar
-    instead of one bar shared above both (matches Employee Configuration,
-    where every settings tab loads its own Nav rather than sharing one).
+    Export action shared by each Attendance Requests tab's own independent Nav.
     """
     actions = []
     if has_export_access(request, Attendance):
@@ -351,7 +350,6 @@ def _attendance_request_common_actions(request):
                 data-target="#genericModal"
                 hx-target="#genericModalBody"
                 hx-get="{reverse('attendences-navbar-export')}"
-                hx-vals='js:{{"has_selection": (function(){{var t=document.querySelector(".oh-tabs__content--active");var l=(t||document).querySelector("[data-selected-instances-key]");var k=(l&&l.getAttribute("data-selected-instances-key"))||"selectedInstances";var el=document.getElementById(k);return JSON.parse((el&&el.getAttribute("data-ids"))||"[]").length>0;}})()}}'
                 style="cursor: pointer;"
             """,
             }
@@ -361,15 +359,15 @@ def _attendance_request_common_actions(request):
 
 class _AttendanceRequestTabNavBase(HorillaNavView):
     """
-    Shared Search/Filter/Create wiring for each Attendance Requests tab's
-    own, independent Nav - only search_url/search_swap_target/actions
-    differ per tab.
+    Shared Search/Filter/Create wiring for each Attendance Requests tab's own Nav.
     """
 
     nav_title = _("Attendances")
     filter_body_template = "cbv/attendances/attendances_filter_page.html"
     filter_instance = AttendanceFilters()
     filter_form_context_name = "form"
+    # Enables the modern slide-over filter panel styling for the shared attendances_filter_page.html.
+    modern_filter = True
 
     group_by_fields = [
         ("employee_id", _("Employee")),
@@ -386,16 +384,10 @@ class _AttendanceRequestTabNavBase(HorillaNavView):
         ("minimum_hour", _("Min Hour")),
         ("employee_id__employee_work_info__department_id", _("Department")),
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
-        ("employee_id__employee_work_info__employee_type_id", _("Employement Type")),
+        ("employee_id__employee_work_info__employee_type_id", _("Employment Type")),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
-    # Mirrors AttendancesRequestListView.nested_group_by_fields below --
-    # List and Nav are separate classes/templates (see
-    # employee/cbv/employees.py's EmployeesList/EmployeeNav for the same
-    # split), so the inline "add/change field" dropdowns in the "Grouped
-    # by" breadcrumb (nested_group_by_table.html, rendered by the List
-    # view) need this here too, not just the currently-active fields it
-    # already had access to via nested_fields_active.
+    # Mirrors AttendancesRequestListView.nested_group_by_fields since List and Nav are separate classes.
     nested_group_by_fields = group_by_fields
 
     def __init__(self, **kwargs: Any) -> None:
@@ -499,9 +491,7 @@ class AttendanceListTabDetailView(HorillaDetailedView):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        # detail_actions.html carries the same accessibility rule as the
-        # row's Edit action (AttendanceListTab.actions), restyled to the
-        # modal's labeled pill-button convention.
+        # detail_actions.html mirrors AttendanceListTab.actions' Edit accessibility rule.
         self.action_method = "detail_actions"
 
 
@@ -660,21 +650,16 @@ class UpdateAttendanceRequestFormView(HorillaFormView):
                 reporting_manager = (
                     attendance.employee_id.employee_work_info.reporting_manager_id.employee_user_id
                 )
-                user_last_name = get_employee_last_name(attendance)
                 notify.send(
                     self.request.user,
                     recipient=reporting_manager,
-                    verb=f"{employee.employee_first_name} {user_last_name}'s\
-                          attendance update request for {attendance.attendance_date} is created",
-                    verb_ar=f"تم إنشاء طلب تحديث الحضور لـ {employee.employee_first_name} \
-                        {user_last_name }في {attendance.attendance_date}",
-                    verb_de=f"Die Anfrage zur Aktualisierung der Anwesenheit von \
-                        {employee.employee_first_name} {user_last_name} \
-                            für den {attendance.attendance_date} wurde erstellt",
-                    verb_es=f"Se ha creado la solicitud de actualización de asistencia para {employee.employee_first_name}\
-                          {user_last_name} el {attendance.attendance_date}",
-                    verb_fr=f"La demande de mise à jour de présence de {employee.employee_first_name}\
-                          {user_last_name} pour le {attendance.attendance_date} a été créée",
+                    verb=gettext_noop(
+                        "%(employee_name)s's attendance update request for %(attendance_date)s is created"
+                    ),
+                    verb_params={
+                        "employee_name": str(employee.get_full_name()),
+                        "attendance_date": str(attendance.attendance_date),
+                    },
                     redirect=reverse("request-attendance-view")
                     + f"?id={attendance.id}",
                     icon="checkmark-circle-outline",
@@ -684,24 +669,24 @@ class UpdateAttendanceRequestFormView(HorillaFormView):
             if detail_view == "true":
                 return HttpResponse(
                     f"""<script>
-                                            var reqModal = $('#requestedattendanceTr{form.instance.pk}');
-                                            reqModal[0].click();
-                                            $('#genericModalEdit').removeClass('oh-modal--show');
-                                            $('.reload-record').click();
-                                            $('#reloadMessagesButton').click();
-                                        </script>
-                                    """
+                            var reqModal = $('#requestedattendanceTr{form.instance.pk}');
+                            reqModal[0].click();
+                            $('#genericModalEdit').removeClass('oh-modal--show');
+                            $('.reload-record').click();
+                            $('#reloadMessagesButton').click();
+                        </script>
+                    """
                 )
             elif all_attendance == "true":
                 return HttpResponse(
                     f"""<script>
-                                            var attendaceModal = $('#allattendanceTr{form.instance.pk}');
-                                            attendaceModal[0].click();
-                                            $('#genericModalEdit').removeClass('oh-modal--show');
-                                            $('.reload-record').click();
-                                            $('#reloadMessagesButton').click();
-                                        </script>
-                                    """
+                            var attendaceModal = $('#allattendanceTr{form.instance.pk}');
+                            attendaceModal[0].click();
+                            $('#genericModalEdit').removeClass('oh-modal--show');
+                            $('.reload-record').click();
+                            $('#reloadMessagesButton').click();
+                        </script>
+                    """
                 )
 
             return self.HttpResponse()

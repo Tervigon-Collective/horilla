@@ -2,7 +2,6 @@
 this page is handling the cbv methods of  attendances page
 """
 
-import datetime
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -135,7 +134,7 @@ class AttendancesListView(HorillaListView):
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
         (
             "employee_id__employee_work_info__employee_type_id",
-            _("Employement Type"),
+            _("Employment Type"),
         ),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
@@ -242,7 +241,6 @@ def _attendance_nav_common_actions(request, extra_action=None):
                 data-target = "#genericModal"
                 hx-target="#genericModalBody"
                 hx-get ="{reverse('attendences-navbar-export')}"
-                hx-vals='js:{{"has_selection": (function(){{var t=document.querySelector(".oh-tabs__content--active");var l=(t||document).querySelector("[data-selected-instances-key]");var k=(l&&l.getAttribute("data-selected-instances-key"))||"selectedInstances";var el=document.getElementById(k);return JSON.parse((el&&el.getAttribute("data-ids"))||"[]").length>0;}})()}}'
                 style="cursor: pointer;"
             """,
             }
@@ -298,6 +296,11 @@ class _AttendanceTabNavBase(HorillaNavView):
     filter_body_template = "cbv/attendances/attendances_filter_page.html"
     filter_instance = AttendanceFilters()
     filter_form_context_name = "form"
+    # Opts Attendance into the same modern slide-over filter panel built
+    # for Employee (horilla_nav.html's .oh-filter-modern styles) --
+    # AttendanceFilters.ajax_fields carries the AJAX-loaded comboboxes
+    # this needs.
+    modern_filter = True
 
     group_by_fields = [
         ("employee_id", _("Employee")),
@@ -314,7 +317,7 @@ class _AttendanceTabNavBase(HorillaNavView):
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
         (
             "employee_id__employee_work_info__employee_type_id",
-            _("Employement Type"),
+            _("Employment Type"),
         ),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
@@ -340,7 +343,7 @@ class _AttendanceTabNavBase(HorillaNavView):
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
         (
             "employee_id__employee_work_info__employee_type_id",
-            _("Employement Type"),
+            _("Employment Type"),
         ),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
@@ -454,7 +457,6 @@ class AttendancesExportNav(TemplateView):
         context = super().get_context_data(**kwargs)
         context["export_form"] = export_form
         context["export"] = export
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context
 
 
@@ -525,6 +527,7 @@ class OTAttendancesList(AttendancesListView):
             self.queryset = self.queryset.filter(
                 overtime_second__gt=0,
                 attendance_validated=True,
+                employee_id__is_active=True,
             )
             self.queryset = filtersubordinates(
                 self.request, self.queryset, "attendance.view_attendance"
@@ -722,7 +725,7 @@ class AttendanceUpdateFormView(HorillaFormView):
 
     def form_valid(self, form: AttendanceUpdateForm) -> HttpResponse:
         if form.is_valid():
-            message = _("Attandance Updated")
+            message = _("Attendance Updated")
             form.save()
             messages.success(self.request, message)
             return self.HttpResponse(

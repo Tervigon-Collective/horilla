@@ -71,7 +71,6 @@ from base.models import (
 )
 from base.widgets import CustomModelChoiceWidget
 from employee.filters import EmployeeFilter
-from employee.forms import MultipleFileField
 from employee.models import Employee, EmployeeTag
 from horilla import horilla_middlewares
 from horilla.horilla_middlewares import _thread_locals
@@ -3255,10 +3254,29 @@ class PassWordResetForm(forms.Form):
         if not email:
             return False
 
-        if not domain_override:
-            domain, site_name = password_reset_site_context(request)
-        else:
+        if domain_override:
             site_name = domain = domain_override
+        elif request is not None:
+            # get_current_site() resolves through django.contrib.sites, whose
+            # only row on a normal install is the one its own migration
+            # creates -- domain "example.com". Nothing in Horilla ever updates
+            # it, so every reset link pointed at example.com while the rest of
+            # the product was reachable on the real host. Leave-request mail
+            # never had the problem because it takes the host straight off the
+            # request (leave/threading.py), which is what this now does too.
+            #
+            # request.get_host() and not the X-Forwarded-Host reader in
+            # horilla_dbtemplate.utils.site: get_host() is validated against
+            # ALLOWED_HOSTS, and a reset link is exactly the wrong place to
+            # trust an unvalidated header -- that is how reset-link poisoning
+            # works. Deployments behind a proxy should set USE_X_FORWARDED_HOST,
+            # which get_host() already honours.
+            site_name = domain = request.get_host()
+        else:
+            # No request: management commands, shell, scheduled jobs.
+            current_site = get_current_site(request)
+            site_name = current_site.name
+            domain = current_site.domain
         if email:
             token = token_generator.make_token(user)
             context = {

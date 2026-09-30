@@ -102,7 +102,7 @@ class AssignedleaveList(HorillaListView):
         ),
         ("employee_id__employee_work_info__department_id", _("Department")),
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
-        ("employee_id__employee_work_info__employee_type_id", _("Employement Type")),
+        ("employee_id__employee_work_info__employee_type_id", _("Employment Type")),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
 
@@ -134,7 +134,7 @@ class AssignedleaveList(HorillaListView):
         per selected record instead of replacing it.
         """
         if not self.bulk_update_accessibility():
-            return HttpResponse("You dont have permission")
+            return HttpResponse("You don't have permission")
 
         instance_ids = eval_validate(request.POST.get("instance_ids", "[]"))
         form = DynamicBulkUpdateForm(
@@ -218,7 +218,6 @@ class AssignedLeaveNavView(HorillaNavView):
                         data-target = "#genericModal"
                         hx-target="#genericModalBody"
                         hx-get ="{reverse('assigned-leave-nav-export')}"
-                        hx-vals='js:{{"has_selection": (JSON.parse(document.getElementById("selectedInstances")?.getAttribute("data-ids")||"[]").length>0)}}'
                         style="cursor: pointer;"
                     """,
                 }
@@ -247,6 +246,12 @@ class AssignedLeaveNavView(HorillaNavView):
     filter_form_context_name = "form"
     filter_body_template = "cbv/assigned_leave/assigned_filter.html"
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel -- nav_fixed_filter.html just
+    # includes generic/horilla_nav.html, which already has the
+    # {% if modern_filter %} branch, so no template change is needed
+    # here. AssignedLeaveFilter.ajax_fields carries the AJAX-loaded
+    # comboboxes this needs.
+    modern_filter = True
 
     group_by_fields = [
         ("employee_id", _("Employee")),
@@ -261,7 +266,7 @@ class AssignedLeaveNavView(HorillaNavView):
         ),
         ("employee_id__employee_work_info__department_id", _("Department")),
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
-        ("employee_id__employee_work_info__employee_type_id", _("Employement Type")),
+        ("employee_id__employee_work_info__employee_type_id", _("Employment Type")),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
     # Mirrors AssignedleaveList.nested_group_by_fields below -- List and
@@ -284,7 +289,7 @@ class AssignedLeaveNavView(HorillaNavView):
         ),
         ("employee_id__employee_work_info__department_id", _("Department")),
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
-        ("employee_id__employee_work_info__employee_type_id", _("Employement Type")),
+        ("employee_id__employee_work_info__employee_type_id", _("Employment Type")),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
 
@@ -317,7 +322,6 @@ class AssignedLeaveExport(TemplateView):
         context = super().get_context_data(**kwargs)
         context["export_column"] = export_column
         context["export_filter"] = export_filter
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context
 
 

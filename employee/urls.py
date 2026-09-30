@@ -377,7 +377,7 @@ urlpatterns = [
         name="employee-note-delete",
     ),
     path(
-        "allowances-deductions-tab/<int:emp_id>/",
+        "allowances-deductions-tab/<int:pk>/",
         views.allowances_deductions_tab,
         name="allowances-deductions-tab",
     ),
@@ -784,6 +784,21 @@ urlpatterns = [
         views.encashment_condition_create,
         name="encashment-condition-create",
     ),
+    path(
+        "toggle-leave-encashment/",
+        views.toggle_leave_encashment,
+        name="toggle-leave-encashment",
+    ),
+    path(
+        "toggle-encashment-apply-to-all/",
+        views.toggle_encashment_apply_to_all,
+        name="toggle-encashment-apply-to-all",
+    ),
+    path(
+        "encashment-eligibility-settings/",
+        views.encashment_eligibility_settings,
+        name="encashment-eligibility-settings",
+    ),
     path("initial-prefix/", views.initial_prefix, name="initial-prefix"),
     path(
         "get-first-last-badge-id/",
@@ -792,6 +807,11 @@ urlpatterns = [
     ),
     path(
         "employee-get-mail-log/",
+        views.employee_get_mail_log,
+        name="employee-get-mail-log",
+    ),
+    path(
+        "employee-get-mail-log/<int:pk>/",
         views.employee_get_mail_log,
         name="employee-get-mail-log",
     ),

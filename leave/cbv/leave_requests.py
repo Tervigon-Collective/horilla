@@ -14,6 +14,7 @@ from django.shortcuts import get_object_or_404
 from django.urls import resolve, reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_noop
 
 from base.cbv.penalty import ViewPenaltyList
 from base.decorators import manager_can_enter
@@ -224,7 +225,7 @@ class LeaveRequestsListView(HorillaListView):
         ),
         ("employee_id__employee_work_info__department_id", _("Department")),
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
-        ("employee_id__employee_work_info__employee_type_id", _("Employement Type")),
+        ("employee_id__employee_work_info__employee_type_id", _("Employment Type")),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
 
@@ -265,7 +266,6 @@ class LeaveRequestsNavView(HorillaNavView):
                     data-target = "#genericModal"
                     hx-target="#genericModalBody"
                     hx-get ="{reverse('leave-requests-nav-export')}"
-                    hx-vals='js:{{"has_selection": (JSON.parse(document.getElementById("selectedInstances")?.getAttribute("data-ids")||"[]").length>0)}}'
                     style="cursor: pointer;"
                 """,
                 }
@@ -296,6 +296,11 @@ class LeaveRequestsNavView(HorillaNavView):
     filter_body_template = "cbv/leave_requests/filter.html"
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
+    # Modern slide-over filter panel (horilla_nav.html's .oh-filter-modern
+    # styles) -- same treatment as every other panel this session.
+    # LeaveRequestFilter.ajax_fields carries the AJAX-loaded comboboxes
+    # this needs.
+    modern_filter = True
 
     group_by_fields = [
         ("employee_id", _("Employee")),
@@ -310,7 +315,7 @@ class LeaveRequestsNavView(HorillaNavView):
         ),
         ("employee_id__employee_work_info__department_id", _("Department")),
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
-        ("employee_id__employee_work_info__employee_type_id", _("Employement Type")),
+        ("employee_id__employee_work_info__employee_type_id", _("Employment Type")),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
     # Mirrors LeaveRequestsListView.nested_group_by_fields below -- List
@@ -333,7 +338,7 @@ class LeaveRequestsNavView(HorillaNavView):
         ),
         ("employee_id__employee_work_info__department_id", _("Department")),
         ("employee_id__employee_work_info__job_position_id", _("Job Position")),
-        ("employee_id__employee_work_info__employee_type_id", _("Employement Type")),
+        ("employee_id__employee_work_info__employee_type_id", _("Employment Type")),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
 
@@ -364,7 +369,6 @@ class LeaveRequestsExportNav(TemplateView):
         context = super().get_context_data(**kwargs)
         context["export_form"] = export_form
         context["export_filter"] = export_filter
-        context["hide_export_filters"] = self.request.GET.get("has_selection") == "true"
         return context
 
 
@@ -406,6 +410,8 @@ class LeaveRequestsDetailView(HorillaDetailedView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        if not self.instance:
+            return context
         body = list(self.body)
 
         if self.instance.multiple_approvals:
@@ -438,6 +444,18 @@ class LeaveRequestFormView(HorillaFormView):
     form_class = LeaveRequestCreationForm
     template_name = "cbv/leave_requests/form/inherit.html"
     new_display_title = _("Leave Request")
+
+    def get_queryset(self):
+        # The base class loads any pk; manager_can_enter above only checks
+        # that the user manages *someone*. None makes it answer "not found".
+        from leave.views import _may_act_on_leave_request
+
+        instance = super().get_queryset()
+        if instance and not _may_act_on_leave_request(
+            self.request, instance, "leave.change_leaverequest", owner_allowed=True
+        ):
+            return None
+        return instance
 
     def get_initial(self) -> dict:
         initial = super().get_initial()
@@ -534,11 +552,10 @@ class LeaveRequestFormView(HorillaFormView):
                         notify.send(
                             self.request.user.employee_get,
                             recipient=leave_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
-                            verb=f"Leave request updated for {leave_request.employee_id}.",
-                            verb_ar=f"تم تحديث طلب الإجازة لـ {leave_request.employee_id}.",
-                            verb_de=f"Urlaubsantrag aktualisiert für {leave_request.employee_id}.",
-                            verb_es=f"Solicitud de permiso actualizada para {leave_request.employee_id}.",
-                            verb_fr=f"Demande de congé mise à jour pour {leave_request.employee_id}.",
+                            verb=gettext_noop(
+                                "Leave request updated for %(employee)s."
+                            ),
+                            verb_params={"employee": str(leave_request.employee_id)},
                             icon="people-circle",
                             redirect=reverse("request-view")
                             + f"?id={leave_request.id}",
@@ -568,11 +585,9 @@ class LeaveRequestFormView(HorillaFormView):
                             notify.send(
                                 self.request.user.employee_get,
                                 recipient=managers[0],
-                                verb="You have a new leave request to validate.",
-                                verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
-                                verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
-                                verb_es="Tiene una nueva solicitud de permiso que debe validar.",
-                                verb_fr="Vous avez une nouvelle demande de congé à valider.",
+                                verb=gettext_noop(
+                                    "You have a new leave request to validate."
+                                ),
                                 icon="people-circle",
                                 redirect=f"/leave/request-view?id={leave_request.id}",
                             )
@@ -588,11 +603,10 @@ class LeaveRequestFormView(HorillaFormView):
                         notify.send(
                             self.request.user.employee_get,
                             recipient=leave_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
-                            verb=f"New leave request created for {leave_request.employee_id}.",
-                            verb_ar=f"تم إنشاء طلب إجازة جديد لـ {leave_request.employee_id}.",
-                            verb_de=f"Neuer Urlaubsantrag erstellt für {leave_request.employee_id}.",
-                            verb_es=f"Nueva solicitud de permiso creada para {leave_request.employee_id}.",
-                            verb_fr=f"Nouvelle demande de congé créée pour {leave_request.employee_id}.",
+                            verb=gettext_noop(
+                                "New leave request created for %(employee)s."
+                            ),
+                            verb_params={"employee": str(leave_request.employee_id)},
                             icon="people-circle",
                             redirect=reverse("request-view")
                             + f"?id={leave_request.id}",
@@ -603,15 +617,23 @@ class LeaveRequestFormView(HorillaFormView):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(hx_request_required, name="dispatch")
 class LeaveClashListView(LeaveRequestsListView):
     """
     list view of leave clash col
     """
 
+    def dispatch(self, request, *args, **kwargs):
+        if not LeaveRequest.objects.filter(id=kwargs.get("pk")).exists():
+            return HttpResponse()
+        return super().dispatch(request, *args, **kwargs)
+
     def get_queryset(self):
         queryset = HorillaListView.get_queryset(self)
         pk = self.kwargs.get("pk")
-        record = LeaveRequest.objects.get(id=pk)
+        record = LeaveRequest.objects.filter(id=pk).first()
+        if not record:
+            return queryset.none()
         if record.status != "rejected" or record.status != "cancelled":
             queryset = (
                 queryset.filter(
@@ -634,7 +656,7 @@ class LeaveClashListView(LeaveRequestsListView):
         col
         for col in LeaveRequestsListView.columns
         if col[1] not in ["leave_clash_col", "penality_col", "actions_col"]
-    ] + [(_("Clased Due To"), "clashed_due_to")]
+    ] + [(_("Clashed Due To"), "clashed_due_to")]
 
     row_status_class = ""
     row_status_indications = None

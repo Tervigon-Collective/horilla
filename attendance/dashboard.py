@@ -4,6 +4,7 @@ Modern attendance dashboard views — KPI summary + ApexCharts.
 Accessible at /attendance/dashboard/modern/ alongside the existing dashboard.
 """
 
+import calendar
 from datetime import date, datetime, timedelta
 
 from django.contrib.auth.decorators import login_required
@@ -34,6 +35,80 @@ def _parse_period(request):
 def _period_end(to_date):
     """Last day of the selected period that is not in the future."""
     return min(to_date, date.today())
+def _current_month_bounds():
+    """First and last calendar day of the current month (server "today").
+
+    Used by the charts that must always reflect the present month
+    regardless of the dashboard's own from/to period picker - see
+    attendance_weekly_trend, attendance_overview, attendance_late_early_data
+    and attendance_hours_distribution. (The KPI cards in attendance_kpi_data
+    are day-scoped instead - see that function's own docstring.)
+    """
+    today = date.today()
+    start = today.replace(day=1)
+    last_day = calendar.monthrange(today.year, today.month)[1]
+    end = today.replace(day=last_day)
+    return start, end
+
+
+def _missing_punches_employees(today=None):
+    """
+    Active employees who should already be at work today but haven't
+    clocked in: their shift's scheduled start time for today has already
+    passed, they're not on approved leave, and no AttendanceActivity
+    (punch-in) row exists for them today.
+
+    Employees with no shift assigned are skipped entirely -- there's no
+    schedule to compare "has it started" against.
+    """
+    from attendance.models import AttendanceActivity
+    from base.models import EmployeeShiftSchedule
+    from employee.models import Employee
+    from leave.models import LeaveRequest
+
+    today = today or date.today()
+    now_time = datetime.now().time()
+    weekday = today.strftime("%A").lower()
+
+    on_leave_ids = LeaveRequest.employees_on_leave_today(
+        today=today, status="approved"
+    ).values_list("employee_id", flat=True)
+    checked_in_ids = AttendanceActivity.objects.filter(
+        attendance_date=today
+    ).values_list("employee_id", flat=True)
+
+    candidates = (
+        Employee.objects.filter(is_active=True)
+        .exclude(id__in=on_leave_ids)
+        .exclude(id__in=checked_in_ids)
+        .select_related("employee_work_info__shift_id")
+    )
+
+    shift_ids = {
+        emp.employee_work_info.shift_id_id
+        for emp in candidates
+        if getattr(emp, "employee_work_info", None)
+        and emp.employee_work_info.shift_id_id
+    }
+    # One lookup for every shift's schedule on today's weekday, instead of a
+    # query per candidate employee.
+    schedules = {
+        schedule.shift_id_id: schedule
+        for schedule in EmployeeShiftSchedule.objects.filter(
+            shift_id_id__in=shift_ids, day__day=weekday
+        )
+    }
+
+    missing_ids = []
+    for emp in candidates:
+        work_info = getattr(emp, "employee_work_info", None)
+        if not work_info or not work_info.shift_id_id:
+            continue
+        schedule = schedules.get(work_info.shift_id_id)
+        if schedule and schedule.start_time and schedule.start_time <= now_time:
+            missing_ids.append(emp.id)
+
+    return Employee.objects.filter(id__in=missing_ids)
 
 
 def _latest_attendance_date(reference_date=None):
@@ -82,14 +157,11 @@ def attendance_kpi_data(request):
         "attendance.view_attendance",
     )
 
-    # "Present Today" is a real-time indicator, not scoped to whatever
-    # report period is selected above (to_date defaults to end-of-month,
-    # a future date) - use the actual current date, like the main HR
-    # dashboard's equivalent KPI does. Deliberately NOT routed through
-    # _latest_attendance_date(): that fallback would silently substitute an
-    # older date with data, so the card's own label ("Present Today") and
-    # the date actually being filtered/linked to would disagree - a 0 for
-    # today is a more honest result than a non-zero count for some other day.
+    # Deliberately NOT routed through _latest_attendance_date(): that
+    # fallback would silently substitute an older date with data, so the
+    # card's own label ("Present Today") and the date actually being
+    # filtered/linked to would disagree - a 0 for today is a more honest
+    # result than a non-zero count for some other day.
     today = date.today()
 
     # Everyone with an attendance row today, validated or not - matches the
@@ -106,9 +178,10 @@ def attendance_kpi_data(request):
         round((present_today / total_employees * 100), 1) if total_employees > 0 else 0
     )
 
-    # Not scoped to attendance_validated=False: "On Time" below is present_today
-    # minus late_come, so both sides need the same validated+unvalidated scope
-    # or the subtraction undercounts lateness and inflates "On Time".
+    # Not scoped to attendance_validated=False: "On Time" below is
+    # present_today minus late_come, so both sides need the same
+    # validated+unvalidated scope or the subtraction undercounts lateness
+    # and inflates "On Time".
     late_come = (
         AttendanceLateComeEarlyOut.objects.filter(
             type="late_come",
@@ -136,8 +209,9 @@ def attendance_kpi_data(request):
     pending_validation = attendance_qs.filter(attendance_validated=False).count()
     missing_punches = missing_punch_count(request, days=30)
 
-    # Pending overtime approval - same reasoning, matches the "OT
-    # Attendances" tab's own active-employee scoping.
+    # Pending overtime approval, for today's attendance only - same
+    # reasoning as "On Time" above, matches the "OT Attendances" tab's own
+    # active-employee scoping.
     pending_overtime = 0
     try:
         pending_overtime = attendance_qs.filter(
@@ -167,14 +241,16 @@ def attendance_kpi_data(request):
 
 @login_required
 def attendance_weekly_trend(request):
-    """Attendance headcount across the selected period.
+    """Attendance headcount for the current calendar month.
 
     Daily bars when span ≤ 14 days; otherwise aggregates by ISO week so the
-    chart stays readable for longer ranges (e.g. a quarter).
+    chart stays readable. Always scoped to the current month (first day to
+    last day, via _current_month_bounds()) regardless of any from_date/
+    to_date GET params, so it stays in step with the KPI cards above.
     """
     from attendance.models import Attendance
 
-    from_date, to_date = _parse_period(request)
+    from_date, to_date = _current_month_bounds()
     today = date.today()
     span = (to_date - from_date).days
 
@@ -311,22 +387,29 @@ def attendance_department_breakdown(request):
 
 @login_required
 def attendance_late_early_data(request):
-    """Late come and early out breakdown by department for the selected date (to_date)."""
+    """Late come and early out breakdown by department for the current month."""
     from attendance.models import AttendanceLateComeEarlyOut
 
-    _, to_date = _parse_period(request)
-    today = _latest_attendance_date(_period_end(to_date))
+    month_start, month_end = _current_month_bounds()
     late_data = []
     early_data = []
 
     try:
+        # Plain row count, not distinct-employee: AttendanceLateComeEarlyOut
+        # is unique per (attendance, type) - see Attendance's own
+        # unique_together - so over a month range this is total late-arrival
+        # incidents in the department (per-department counts here sum to
+        # the department total, unlike a distinct-employee dedup, which
+        # would collapse an employee's multiple late days into one).
         late = (
             AttendanceLateComeEarlyOut.objects.filter(
                 type="late_come",
-                attendance_id__attendance_date=today,
+                attendance_id__attendance_date__gte=month_start,
+                attendance_id__attendance_date__lte=month_end,
             )
+            .order_by()
             .values("employee_id__employee_work_info__department_id__department")
-            .annotate(count=Count("employee_id", distinct=True))
+            .annotate(count=Count("id"))
             .order_by("-count")
         )
         for item in late:
@@ -337,10 +420,12 @@ def attendance_late_early_data(request):
         early = (
             AttendanceLateComeEarlyOut.objects.filter(
                 type="early_out",
-                attendance_id__attendance_date=today,
+                attendance_id__attendance_date__gte=month_start,
+                attendance_id__attendance_date__lte=month_end,
             )
+            .order_by()
             .values("employee_id__employee_work_info__department_id__department")
-            .annotate(count=Count("employee_id", distinct=True))
+            .annotate(count=Count("id"))
             .order_by("-count")
         )
         for item in early:
@@ -351,7 +436,14 @@ def attendance_late_early_data(request):
         pass
 
     return JsonResponse(
-        {"late_come": late_data, "early_out": early_data, "date": today.isoformat()}
+        {
+            "late_come": late_data,
+            "early_out": early_data,
+            "date": month_end.isoformat(),
+            "from_date": month_start.isoformat(),
+            "to_date": month_end.isoformat(),
+            "month": month_end.strftime("%B %Y"),
+        }
     )
 
 
@@ -411,44 +503,70 @@ def attendance_overtime_summary(request):
 
 @login_required
 def attendance_hours_distribution(request):
-    """Worked hours vs pending hours by department for the selected period."""
+    """Worked hours vs pending hours by department for the current month."""
     from attendance.models import Attendance, AttendanceOverTime
-    from base.models import Department
 
-    from_date, to_date = _parse_period(request)
+    month_start, month_end = _current_month_bounds()
     departments = []
 
     try:
-        dept_list = list(Department.objects.values_list("department", flat=True))
-
-        for dept in dept_list:
-            worked_seconds = (
-                Attendance.objects.filter(
-                    employee_id__employee_work_info__department_id__department=dept,
-                    employee_id__is_active=True,
-                    attendance_date__gte=from_date,
-                    attendance_date__lte=to_date,
-                ).aggregate(total=Sum("at_work_second"))["total"]
-                or 0
+        # Worked hours: Attendance has an attendance_date, so bound directly
+        # to the current month. One grouped query for every department
+        # instead of one query per department.
+        worked_by_dept = {
+            row["employee_id__employee_work_info__department_id__department"]: (
+                row["total"] or 0
             )
-
-            pending_seconds = sum(
-                max(r.hour_pending_second or 0, 0)
-                for r in AttendanceOverTime.objects.filter(
-                    employee_id__employee_work_info__department_id__department=dept,
+            for row in (
+                Attendance.objects.filter(
                     employee_id__is_active=True,
-                    month=from_date.strftime("%B"),
-                    year=str(from_date.year),
+                    attendance_date__gte=month_start,
+                    attendance_date__lte=month_end,
+                )
+                .order_by()
+                .values("employee_id__employee_work_info__department_id__department")
+                .annotate(total=Sum("at_work_second"))
+            )
+        }
+
+        # Pending hours: AttendanceOverTime (the "hour account") has no
+        # attendance_date - it's keyed by its own month/year accounting
+        # period instead, so that's the field to bound to the current
+        # month rather than attendance_date. filter=Q(...) on the Sum
+        # ignores negative hour_pending_second rows, same as the previous
+        # per-row max(value, 0) clamp before summing.
+        pending_by_dept = {
+            row["employee_id__employee_work_info__department_id__department"]: (
+                row["total"] or 0
+            )
+            for row in (
+                AttendanceOverTime.objects.filter(
+                    employee_id__is_active=True,
+                    month=month_start.strftime("%B").lower(),
+                    year=str(month_start.year),
+                )
+                .order_by()
+                .values("employee_id__employee_work_info__department_id__department")
+                .annotate(
+                    total=Sum(
+                        "hour_pending_second",
+                        filter=Q(hour_pending_second__gt=0),
+                    )
                 )
             )
+        }
 
+        for dept in set(worked_by_dept) | set(pending_by_dept):
+            if not dept:
+                continue
+            worked_seconds = max(worked_by_dept.get(dept, 0), 0)
+            pending_seconds = max(pending_by_dept.get(dept, 0), 0)
             if worked_seconds == 0 and pending_seconds == 0:
                 continue
-
             departments.append(
                 {
                     "department": dept,
-                    "worked_hours": round(max(worked_seconds, 0) / 3600, 1),
+                    "worked_hours": round(worked_seconds / 3600, 1),
                     "pending_hours": round(pending_seconds / 3600, 1),
                 }
             )
@@ -923,17 +1041,15 @@ def attendance_calendar_heatmap(request):
 
 @login_required
 def attendance_overview(request):
-    """Department-wise on-time / late / early counts for the latest day with attendance.
+    """Department-wise on-time / late / early counts for the current month.
 
-    Same shape as the legacy dashboard_attendance endpoint, but falls back to the most
-    recent day that actually has records (so the modern dashboard renders even when
-    today has no clock-ins yet).
+    One grouped query per metric (present/late/early) instead of the
+    original per-department loop, so the query count stays constant no
+    matter how many departments exist.
     """
     from attendance.models import Attendance, AttendanceLateComeEarlyOut
-    from base.models import Department
 
-    _from_date, to_date = _parse_period(request)
-    target_date = _latest_attendance_date(to_date)
+    month_start, month_end = _current_month_bounds()
 
     labels = []
     on_time_series = []
@@ -941,42 +1057,59 @@ def attendance_overview(request):
     early_series = []
 
     try:
-        for dept in Department.objects.all():
-            dept_attendance = Attendance.objects.filter(
-                attendance_date=target_date,
-                employee_id__employee_work_info__department_id=dept,
-                employee_id__is_active=True,
-            )
-            present_count = dept_attendance.values("employee_id").distinct().count()
-            if not present_count:
-                continue
+        dept_field = "employee_id__employee_work_info__department_id__department"
 
-            late_count = (
+        present_by_dept = {
+            row[dept_field]: row["c"]
+            for row in (
+                Attendance.objects.filter(
+                    attendance_date__gte=month_start,
+                    attendance_date__lte=month_end,
+                    employee_id__is_active=True,
+                )
+                .order_by()
+                .values(dept_field)
+                .annotate(c=Count("id"))
+            )
+        }
+        late_by_dept = {
+            row[dept_field]: row["c"]
+            for row in (
                 AttendanceLateComeEarlyOut.objects.filter(
                     type="late_come",
-                    attendance_id__attendance_date=target_date,
-                    employee_id__employee_work_info__department_id=dept,
+                    attendance_id__attendance_date__gte=month_start,
+                    attendance_id__attendance_date__lte=month_end,
                     employee_id__is_active=True,
                 )
-                .values("employee_id")
-                .distinct()
-                .count()
+                .order_by()
+                .values(dept_field)
+                .annotate(c=Count("id"))
             )
-            early_count = (
+        }
+        early_by_dept = {
+            row[dept_field]: row["c"]
+            for row in (
                 AttendanceLateComeEarlyOut.objects.filter(
                     type="early_out",
-                    attendance_id__attendance_date=target_date,
-                    employee_id__employee_work_info__department_id=dept,
+                    attendance_id__attendance_date__gte=month_start,
+                    attendance_id__attendance_date__lte=month_end,
                     employee_id__is_active=True,
                 )
-                .values("employee_id")
-                .distinct()
-                .count()
+                .order_by()
+                .values(dept_field)
+                .annotate(c=Count("id"))
             )
-            on_time_count = max(0, present_count - late_count)
+        }
 
-            labels.append(dept.department)
-            on_time_series.append(on_time_count)
+        for dept, present_count in sorted(
+            present_by_dept.items(), key=lambda kv: kv[1], reverse=True
+        ):
+            if not dept or not present_count:
+                continue
+            late_count = late_by_dept.get(dept, 0)
+            early_count = early_by_dept.get(dept, 0)
+            labels.append(dept)
+            on_time_series.append(max(0, present_count - late_count))
             late_series.append(late_count)
             early_series.append(early_count)
     except Exception:
@@ -991,6 +1124,9 @@ def attendance_overview(request):
         {
             "dataSet": data_set,
             "labels": labels,
-            "date": target_date.isoformat(),
+            "date": month_end.isoformat(),
+            "from_date": month_start.isoformat(),
+            "to_date": month_end.isoformat(),
+            "month": month_end.strftime("%B %Y"),
         }
     )

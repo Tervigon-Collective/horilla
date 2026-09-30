@@ -4,11 +4,13 @@ Scheduled / on-demand delivery of standard report subscriptions.
 
 from __future__ import annotations
 
+import calendar
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 
+from dateutil.relativedelta import relativedelta
 from django.core.mail import EmailMessage
 from django.test import RequestFactory
 from django.utils import timezone
@@ -40,10 +42,27 @@ def subscription_is_due(subscription: ReportSubscription, now=None) -> bool:
     if subscription.frequency == ReportSubscription.FREQUENCY_DAILY:
         return delta >= timedelta(hours=23)
     if subscription.frequency == ReportSubscription.FREQUENCY_WEEKLY:
-        return delta >= timedelta(days=6, hours=12)
+        return delta >= timedelta(hours=23) and now.weekday() == last.weekday()
     if subscription.frequency == ReportSubscription.FREQUENCY_MONTHLY:
-        return delta >= timedelta(days=28)
+        target_day = min(last.day, calendar.monthrange(now.year, now.month)[1])
+        return delta >= timedelta(hours=23) and now.day == target_day
     return False
+
+
+def compute_schedule_anchor(frequency, now, weekday=None, day_of_month=None):
+    """Seed value for last_run_at so the first delivery lands on the chosen weekday/day-of-month."""
+    today = now.date()
+    if frequency == ReportSubscription.FREQUENCY_WEEKLY and weekday is not None:
+        next_occurrence = today + timedelta(days=(weekday - today.weekday()) % 7)
+        seed_date = next_occurrence - timedelta(days=7)
+    elif frequency == ReportSubscription.FREQUENCY_MONTHLY and day_of_month is not None:
+        next_occurrence = today + relativedelta(day=day_of_month)
+        if next_occurrence < today:
+            next_occurrence += relativedelta(months=1, day=day_of_month)
+        seed_date = next_occurrence - relativedelta(months=1)
+    else:
+        return None
+    return datetime.combine(seed_date, now.time(), tzinfo=now.tzinfo)
 
 
 def _owner_request(subscription: ReportSubscription):
@@ -106,6 +125,9 @@ def deliver_subscription(
     if not force and not subscription_is_due(subscription, now):
         return DeliveryResult(False, "skipped", "Not due yet")
 
+    claimed_from = subscription.last_run_at
+    claimed = False
+
     definition = get_report(subscription.report_slug)
     if not definition:
         logger.warning(
@@ -141,6 +163,36 @@ def deliver_subscription(
             subscription.id,
         )
         return DeliveryResult(False, "mail_unconfigured", "Email server not configured")
+
+    # Claim the run before building the report, but after the cheap guards
+    # above -- a subscription rejected for permissions or configuration must
+    # stay unclaimed so it is re-evaluated next poll rather than looking as
+    # though it had already been delivered.
+    #
+    # Duplicate execution across workers is now prevented upstream: jobs
+    # register with horilla.scheduling and exactly one process
+    # (manage.py run_scheduler) owns execution, rather than every gunicorn
+    # worker starting its own BackgroundScheduler at import.
+    #
+    # This claim is kept as defence in depth, not as that fix. last_run_at
+    # was written only *after* the mail was sent, so any second poller --
+    # a stray scheduler, an operator running the management command by hand
+    # while the service is up, a retry -- would pass the due check above and
+    # send again. Claiming first makes delivery idempotent regardless of how
+    # many pollers exist.
+    #
+    # A conditional UPDATE guarded on the value just read: exactly one
+    # racer's write matches and the rest see 0 rows affected.
+    # select_for_update is not an option here, since sqlite is the default
+    # engine and treats it as a no-op.
+    if update_last_run and not force:
+        rows = ReportSubscription.objects.filter(
+            pk=subscription.pk, last_run_at=claimed_from
+        ).update(last_run_at=now)
+        if not rows:
+            return DeliveryResult(False, "skipped", "Already claimed by another worker")
+        subscription.last_run_at = now
+        claimed = True
 
     try:
         filters = filters_from_dict(
@@ -213,9 +265,13 @@ def deliver_subscription(
         email.attach(attach_name, response.content, attach_type)
         sent = email.send(fail_silently=False)
         if not sent:
+            # Hand the slot back so the next poll retries instead of waiting
+            # a whole frequency interval for a send that never happened.
+            _release_claim(subscription, claimed_from, claimed)
             return DeliveryResult(False, "send_failed", "Mail backend returned 0")
 
-        if update_last_run:
+        if update_last_run and force:
+            # Forced runs skip the claim above, so stamp them here.
             subscription.last_run_at = now
             subscription.save(update_fields=["last_run_at"])
 
@@ -236,7 +292,27 @@ def deliver_subscription(
         return DeliveryResult(True, "sent", f"Sent to {', '.join(recipients)}")
     except Exception as exc:
         logger.exception("Failed report subscription %s", subscription.id)
+        _release_claim(subscription, claimed_from, claimed)
         return DeliveryResult(False, "error", str(exc))
+
+
+def _release_claim(subscription, previous_last_run, was_claimed: bool) -> None:
+    """Undo the run claim so a failed delivery is retried next poll.
+
+    Only rolls back if this process still holds the claim, so a later
+    successful run by another worker is never clobbered.
+    """
+    if not was_claimed:
+        return
+    try:
+        ReportSubscription.objects.filter(
+            pk=subscription.pk, last_run_at=subscription.last_run_at
+        ).update(last_run_at=previous_last_run)
+        subscription.last_run_at = previous_last_run
+    except Exception:
+        logger.exception(
+            "Could not release run claim for subscription %s", subscription.id
+        )
 
 
 def run_due_subscriptions(*, force_id: Optional[int] = None) -> list[DeliveryResult]:

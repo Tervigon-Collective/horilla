@@ -5,6 +5,7 @@ This module is used to map url pattens with django views or methods
 """
 
 import csv
+import hmac
 import json
 import logging
 import mimetypes
@@ -42,6 +43,7 @@ from django.utils.decorators import method_decorator
 from django.utils.html import format_html, strip_tags
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.translation import gettext as _
+from django.utils.translation import gettext_noop
 from django.views import View
 from django.views.decorators.http import require_http_methods
 from django.views.generic import RedirectView, TemplateView
@@ -183,6 +185,7 @@ from employee.models import (
 )
 from horilla.decorators import (
     any_permission_required,
+    database_init_required,
     delete_permission,
     duplicate_permission,
     hx_request_required,
@@ -453,7 +456,7 @@ def load_demo_database(request):
                             call_command("loaddata", file_path)
                     except Exception as e:
                         messages.error(
-                            request, _("An error occured : %(e)s") % {"e": e}
+                            request, _("An error occurred : %(e)s") % {"e": e}
                         )
                     finally:
                         if tmp and path.exists(tmp):
@@ -515,12 +518,11 @@ def initialize_database(request):
     Returns:
         HttpResponse: The rendered HTML template or a redirect response.
     """
-    if not settings.DEBUG:
-        raise Http404
     if initialize_database_condition():
         if request.method == "POST":
-            password = request._post.get("password")
+            password = request.POST.get("password")
             if settings.DB_INIT_PASSWORD == password:
+                request.session["db_init_verified"] = True
                 return redirect(initialize_database_user)
             else:
                 messages.warning(
@@ -530,9 +532,10 @@ def initialize_database(request):
                 return HorillaRedirect(request)
         return render(request, "initialize_database/horilla_user.html")
     else:
-        return redirect("/")
+        return redirect("login")
 
 
+@database_init_required
 @hx_request_required
 def initialize_database_user(request):
     """
@@ -545,7 +548,7 @@ def initialize_database_user(request):
         HttpResponse: The rendered HTML template for company creation or user signup.
     """
     if request.method == "POST":
-        form_data = request.__dict__.get("_post")
+        form_data = request.POST
         username = form_data.get("username")
         password = form_data.get("password")
         confirm_password = form_data.get("confirm_password")
@@ -570,6 +573,7 @@ def initialize_database_user(request):
         employee.email = email
         employee.phone = phone
         employee.save()
+        request.session.pop("db_init_verified", None)
         user = authenticate(request, username=username, password=password)
         login(request, user)
         return render(
@@ -580,6 +584,7 @@ def initialize_database_user(request):
     return render(request, "initialize_database/horilla_user_signup.html")
 
 
+@superuser_required
 @hx_request_required
 def initialize_database_company(request):
     """
@@ -600,8 +605,10 @@ def initialize_database_company(request):
                 employee = request.user.employee_get
                 employee.employee_work_info.company_id = company
                 employee.employee_work_info.save()
-            except:
-                pass
+            except Exception:
+                logger.exception(
+                    "initialize database: could not attach creator to company"
+                )
             return render(
                 request,
                 "initialize_database/horilla_department.html",
@@ -610,6 +617,7 @@ def initialize_database_company(request):
     return render(request, "initialize_database/horilla_company.html", {"form": form})
 
 
+@superuser_required
 @hx_request_required
 def initialize_database_department(request):
     """
@@ -636,6 +644,7 @@ def initialize_database_department(request):
     )
 
 
+@superuser_required
 @hx_request_required
 def initialize_department_edit(request, obj_id):
     """
@@ -674,6 +683,7 @@ def initialize_department_edit(request, obj_id):
     )
 
 
+@superuser_required
 @hx_request_required
 def initialize_department_delete(request, obj_id):
     """
@@ -691,6 +701,7 @@ def initialize_department_delete(request, obj_id):
     return redirect(initialize_database_department)
 
 
+@superuser_required
 @hx_request_required
 def initialize_database_job_position(request):
     """
@@ -725,6 +736,7 @@ def initialize_database_job_position(request):
     )
 
 
+@superuser_required
 @hx_request_required
 def initialize_job_position_edit(request, obj_id):
     """
@@ -765,6 +777,7 @@ def initialize_job_position_edit(request, obj_id):
     )
 
 
+@superuser_required
 @hx_request_required
 def initialize_job_position_delete(request, obj_id):
     """
@@ -808,11 +821,12 @@ def login_user(request):
         user = authenticate(request, username=username, password=password)
 
         if not user:
-            user_object = HorillaUser.objects.filter(username=username).first()
-            if user_object and not user_object.is_active:
-                messages.warning(request, _("Access Denied: Your account is blocked."))
-            else:
-                messages.error(request, _("Invalid username or password."))
+            # One message for every failure mode. Distinguishing "blocked" from
+            # "invalid" told an unauthenticated caller which usernames exist,
+            # which is what turns a password-guessing attempt into a targeted
+            # one. Blocked users are told to contact their administrator via
+            # the same text rather than being confirmed as real accounts.
+            messages.error(request, _("Invalid username or password."))
             return redirect("login")
 
         employee = getattr(user, "employee_get", None)
@@ -1060,14 +1074,16 @@ def two_factor_auth(request):
     # request.session["otp_code"] = None
     try:
         otp = get_otp(request)
-    except:
+    except Exception:
+        logger.exception("two_factor_auth: could not read OTP from session")
         otp = None
 
     if request.method == "POST":
-        user_otp = request.POST.get("otp")
-        if user_otp == otp:
+        user_otp = request.POST.get("otp") or ""
+        if otp is not None and hmac.compare_digest(str(user_otp), str(otp)):
             request.session["otp_code"] = None
             request.session["otp_code_timestamp"] = None
+            request.session["otp_attempts"] = 0
             request.session["otp_code_verified"] = True
             request.session.save()
             messages.success(request, _("OTP verified successfully."))
@@ -1076,7 +1092,20 @@ def two_factor_auth(request):
             messages.error(request, _("OTP expired. Please request a new one."))
             return render(request, "base/auth/two_factor_auth.html")
         else:
-            messages.error(request, _("Invalid OTP."))
+            # A six-digit code with a ten-minute life is guessable at network
+            # speed; a handful of misses burns the code and forces a resend.
+            attempts = request.session.get("otp_attempts", 0) + 1
+            request.session["otp_attempts"] = attempts
+            if attempts >= 5:
+                request.session["otp_code"] = None
+                request.session["otp_code_timestamp"] = None
+                request.session["otp_attempts"] = 0
+                request.session.save()
+                messages.error(
+                    request, _("Too many incorrect attempts. Request a new OTP.")
+                )
+            else:
+                messages.error(request, _("Invalid OTP."))
             return render(request, "base/auth/two_factor_auth.html")
 
     if not settings.TWO_FACTORS_AUTHENTICATION:
@@ -1162,6 +1191,7 @@ def logout_user(request):
 
 
 @login_required
+# @hx_request_required
 def toggle_theme(request):
     if request.method == "POST":
         current = request.session.get("theme")
@@ -2231,7 +2261,10 @@ def view_mail_template(request, obj_id):
     """
     This method is used to display the template/form to edit
     """
-    template = HorillaMailTemplate.objects.get(id=obj_id)
+    template = HorillaMailTemplate.objects.filter(id=obj_id).first()
+    if not template:
+        messages.error(request, _("Template not found."))
+        return HorillaRedirect(request)
     form = MailTemplateForm(instance=template)
     searchWords = form.get_template_language()
     if request.method == "POST":
@@ -2332,7 +2365,10 @@ def company_update(request, id, **kwargs):
         id : company instance id
 
     """
-    company = Company.objects.get(id=id)
+    company = Company.objects.filter(id=id).first()
+    if not company:
+        messages.error(request, _("Company not found."))
+        return HorillaRedirect(request)
     form = CompanyForm(instance=company)
     if request.method == "POST":
         form = CompanyForm(request.POST, request.FILES, instance=company)
@@ -2767,11 +2803,7 @@ def rotating_work_type_assign_add(request):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb="You are added to rotating work type",
-                verb_ar="تمت إضافتك إلى نوع العمل المتناوب",
-                verb_de="Sie werden zum rotierenden Arbeitstyp hinzugefügt",
-                verb_es="Se le agrega al tipo de trabajo rotativo",
-                verb_fr="Vous êtes ajouté au type de travail rotatif",
+                verb=gettext_noop("You are added to rotating work type"),
                 icon="infinite",
                 redirect=reverse("employee-profile"),
             )
@@ -2910,6 +2942,7 @@ def rotating_work_type_assign_update(request, id):
 
 
 @login_required
+@hx_request_required
 @manager_can_enter("base.change_rotatingworktypeassign")
 def rotating_work_type_assign_export(request):
     if request.META.get("HTTP_HX_REQUEST") == "true":
@@ -3463,11 +3496,7 @@ def rotating_shift_assign_add(request):
             notify.send(
                 request.user.employee_get,
                 recipient=users,
-                verb="You are added to rotating shift",
-                verb_ar="تمت إضافتك إلى وردية الدورية",
-                verb_de="Sie werden der rotierenden Arbeitsschicht hinzugefügt",
-                verb_es="Estás agregado a turno rotativo",
-                verb_fr="Vous êtes ajouté au quart de travail rotatif",
+                verb=gettext_noop("You are added to rotating shift"),
                 icon="infinite",
                 redirect=reverse("employee-profile"),
             )
@@ -3603,6 +3632,7 @@ def rotating_shift_assign_update(request, id):
 
 
 @login_required
+@hx_request_required
 @manager_can_enter("base.change_rotatingshiftassign")
 def rotating_shift_assign_export(request):
     if request.META.get("HTTP_HX_REQUEST"):
@@ -3629,6 +3659,7 @@ def normalize_list(lst):
 
 
 @login_required
+@hx_request_required
 @manager_can_enter("base.add_rotatingworktypeassign")
 def rotating_shift_assign_import(request):
     if request.method == "POST":
@@ -4443,19 +4474,11 @@ def work_type_request(request):
             try:
                 notify.send(
                     instance.employee_id,
-                    recipient=(
-                        instance.employee_id.employee_work_info.reporting_manager_id.employee_user_id
+                    recipient=instance.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
+                    verb=gettext_noop(
+                        "You have new work type request to validate for %(employee)s"
                     ),
-                    verb=f"You have new work type request to \
-                            validate for {instance.employee_id}",
-                    verb_ar=f"لديك طلب نوع وظيفة جديد للتحقق من \
-                            {instance.employee_id}",
-                    verb_de=f"Sie haben eine neue Arbeitstypanfrage zur \
-                            Validierung für {instance.employee_id}",
-                    verb_es=f"Tiene una nueva solicitud de tipo de trabajo para \
-                            validar para {instance.employee_id}",
-                    verb_fr=f"Vous avez une nouvelle demande de type de travail\
-                            à valider pour {instance.employee_id}",
+                    verb_params={"employee": str(instance.employee_id)},
                     icon="information",
                     redirect=reverse("work-type-request-view") + f"?id={instance.id}",
                 )
@@ -4544,11 +4567,7 @@ def work_type_request_cancel(request, id):
     notify.send(
         request.user.employee_get,
         recipient=work_type_request.employee_id.employee_user_id,
-        verb="Your work type request has been rejected.",
-        verb_ar="تم إلغاء طلب نوع وظيفتك",
-        verb_de="Ihre Arbeitstypanfrage wurde storniert",
-        verb_es="Su solicitud de tipo de trabajo ha sido cancelada",
-        verb_fr="Votre demande de type de travail a été annulée",
+        verb=gettext_noop("Your work type request has been rejected."),
         redirect=reverse("work-type-request-view") + f"?id={work_type_request.id}",
         icon="close",
     )
@@ -4589,11 +4608,7 @@ def work_type_request_bulk_cancel(request):
             notify.send(
                 request.user.employee_get,
                 recipient=work_type_request.employee_id.employee_user_id,
-                verb="Your work type request has been canceled.",
-                verb_ar="تم إلغاء طلب نوع وظيفتك.",
-                verb_de="Ihre Arbeitstypanfrage wurde storniert.",
-                verb_es="Su solicitud de tipo de trabajo ha sido cancelada.",
-                verb_fr="Votre demande de type de travail a été annulée.",
+                verb=gettext_noop("Your work type request has been canceled."),
                 redirect=reverse("work-type-request-view")
                 + f"?id={work_type_request.id}",
                 icon="close",
@@ -4641,11 +4656,7 @@ def work_type_request_approve(request, id):
         notify.send(
             request.user.employee_get,
             recipient=work_type_request.employee_id.employee_user_id,
-            verb="Your work type request has been approved.",
-            verb_ar="تمت الموافقة على طلب نوع وظيفتك.",
-            verb_de="Ihre Arbeitstypanfrage wurde genehmigt.",
-            verb_es="Su solicitud de tipo de trabajo ha sido aprobada.",
-            verb_fr="Votre demande de type de travail a été approuvée.",
+            verb=gettext_noop("Your work type request has been approved."),
             redirect=reverse("work-type-request-view") + f"?id={work_type_request.id}",
             icon="checkmark",
         )
@@ -4698,11 +4709,7 @@ def work_type_request_bulk_approve(request):
             notify.send(
                 request.user.employee_get,
                 recipient=work_type_request.employee_id.employee_user_id,
-                verb="Your work type request has been approved.",
-                verb_ar="تمت الموافقة على طلب نوع وظيفتك.",
-                verb_de="Ihre Arbeitstypanfrage wurde genehmigt.",
-                verb_es="Su solicitud de tipo de trabajo ha sido aprobada.",
-                verb_fr="Votre demande de type de travail a été approuvée.",
+                verb=gettext_noop("Your work type request has been approved."),
                 redirect=reverse("work-type-request-view")
                 + f"?id={work_type_request.id}",
                 icon="checkmark",
@@ -4756,11 +4763,7 @@ def work_type_request_delete(request, obj_id):
         notify.send(
             request.user.employee_get,
             recipient=employee.employee_user_id,
-            verb="Your work type request has been deleted.",
-            verb_ar="تم حذف طلب نوع وظيفتك.",
-            verb_de="Ihre Arbeitstypanfrage wurde gelöscht.",
-            verb_es="Su solicitud de tipo de trabajo ha sido eliminada.",
-            verb_fr="Votre demande de type de travail a été supprimée.",
+            verb=gettext_noop("Your work type request has been deleted."),
             redirect="#",
             icon="trash",
         )
@@ -4865,11 +4868,7 @@ def work_type_request_bulk_delete(request):
             notify.send(
                 request.user.employee_get,
                 recipient=user,
-                verb="Your work type request has been deleted.",
-                verb_ar="تم حذف طلب نوع وظيفتك.",
-                verb_de="Ihre Arbeitstypanfrage wurde gelöscht.",
-                verb_es="Su solicitud de tipo de trabajo ha sido eliminada.",
-                verb_fr="Votre demande de type de travail a été supprimée.",
+                verb=gettext_noop("Your work type request has been deleted."),
                 redirect="#",
                 icon="trash",
             )
@@ -4919,18 +4918,11 @@ def shift_request(request):
             try:
                 notify.send(
                     instance.employee_id,
-                    recipient=(
-                        instance.employee_id.employee_work_info.reporting_manager_id.employee_user_id
+                    recipient=instance.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
+                    verb=gettext_noop(
+                        "You have new shift request to approve for %(employee)s"
                     ),
-                    verb=f"You have new shift request to approve \
-                        for {instance.employee_id}",
-                    verb_ar=f"لديك طلب وردية جديد للموافقة عليه لـ {instance.employee_id}",
-                    verb_de=f"Sie müssen eine neue Schichtanfrage \
-                        für {instance.employee_id} genehmigen",
-                    verb_es=f"Tiene una nueva solicitud de turno para \
-                        aprobar para {instance.employee_id}",
-                    verb_fr=f"Vous avez une nouvelle demande de quart de\
-                        travail à approuver pour {instance.employee_id}",
+                    verb_params={"employee": str(instance.employee_id)},
                     icon="information",
                     redirect=reverse("shift-request-view") + f"?id={instance.id}",
                 )
@@ -4993,14 +4985,11 @@ def shift_request_allocation(request):
             try:
                 notify.send(
                     instance.employee_id,
-                    recipient=(
-                        instance.employee_id.employee_work_info.reporting_manager_id.employee_user_id
+                    recipient=instance.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
+                    verb=gettext_noop(
+                        "You have a new shift reallocation request to approve for %(employee)s."
                     ),
-                    verb=f"You have a new shift reallocation request to approve for {instance.employee_id}.",
-                    verb_ar=f"لديك طلب تخصيص جديد للورديات يتعين عليك الموافقة عليه لـ {instance.employee_id}.",
-                    verb_de=f"Sie haben eine neue Anfrage zur Verschiebung der Schichtzuteilung zur Genehmigung für {instance.employee_id}.",
-                    verb_es=f"Tienes una nueva solicitud de reasignación de turnos para aprobar para {instance.employee_id}.",
-                    verb_fr=f"Vous avez une nouvelle demande de réaffectation de shift à approuver pour {instance.employee_id}.",
+                    verb_params={"employee": str(instance.employee_id)},
                     icon="information",
                     redirect=reverse("shift-request-view") + f"?id={instance.id}",
                 )
@@ -5011,11 +5000,10 @@ def shift_request_allocation(request):
                 notify.send(
                     instance.employee_id,
                     recipient=reallocate_emp,
-                    verb=f"You have a new shift reallocation request from {instance.employee_id}.",
-                    verb_ar=f"لديك طلب تخصيص جديد للورديات من {instance.employee_id}.",
-                    verb_de=f"Sie haben eine neue Anfrage zur Verschiebung der Schichtzuteilung von {instance.employee_id}.",
-                    verb_es=f"Tienes una nueva solicitud de reasignación de turnos de {instance.employee_id}.",
-                    verb_fr=f"Vous avez une nouvelle demande de réaffectation de shift de {instance.employee_id}.",
+                    verb=gettext_noop(
+                        "You have a new shift reallocation request from %(employee)s."
+                    ),
+                    verb_params={"employee": str(instance.employee_id)},
                     icon="information",
                     redirect=reverse("shift-request-view") + f"?id={instance.id}",
                 )
@@ -5357,14 +5345,11 @@ def shift_allocation_request_update(request, shift_request_id):
             try:
                 notify.send(
                     instance.employee_id,
-                    recipient=(
-                        instance.employee_id.employee_work_info.reporting_manager_id.employee_user_id
+                    recipient=instance.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
+                    verb=gettext_noop(
+                        "You have a new shift reallocation request to approve for %(employee)s."
                     ),
-                    verb=f"You have a new shift reallocation request to approve for {instance.employee_id}.",
-                    verb_ar=f"لديك طلب تخصيص جديد للورديات يتعين عليك الموافقة عليه لـ {instance.employee_id}.",
-                    verb_de=f"Sie haben eine neue Anfrage zur Verschiebung der Schichtzuteilung zur Genehmigung für {instance.employee_id}.",
-                    verb_es=f"Tienes una nueva solicitud de reasignación de turnos para aprobar para {instance.employee_id}.",
-                    verb_fr=f"Vous avez une nouvelle demande de réaffectation de shift à approuver pour {instance.employee_id}.",
+                    verb_params={"employee": str(instance.employee_id)},
                     icon="information",
                     redirect=reverse("shift-request-view") + f"?id={instance.id}",
                 )
@@ -5375,11 +5360,10 @@ def shift_allocation_request_update(request, shift_request_id):
                 notify.send(
                     instance.employee_id,
                     recipient=reallocate_emp,
-                    verb=f"You have a new shift reallocation request from {instance.employee_id}.",
-                    verb_ar=f"لديك طلب تخصيص جديد للورديات من {instance.employee_id}.",
-                    verb_de=f"Sie haben eine neue Anfrage zur Verschiebung der Schichtzuteilung von {instance.employee_id}.",
-                    verb_es=f"Tienes una nueva solicitud de reasignación de turnos de {instance.employee_id}.",
-                    verb_fr=f"Vous avez une nouvelle demande de réaffectation de shift de {instance.employee_id}.",
+                    verb=gettext_noop(
+                        "You have a new shift reallocation request from %(employee)s."
+                    ),
+                    verb_params={"employee": str(instance.employee_id)},
                     icon="information",
                     redirect=reverse("shift-request-view") + f"?id={instance.id}",
                 )
@@ -5446,11 +5430,7 @@ def shift_request_cancel(request, id):
     notify.send(
         request.user.employee_get,
         recipient=shift_request.employee_id.employee_user_id,
-        verb="Your shift request has been canceled.",
-        verb_ar="تم إلغاء طلبك للوردية.",
-        verb_de="Ihr Schichtantrag wurde storniert.",
-        verb_es="Se ha cancelado su solicitud de turno.",
-        verb_fr="Votre demande de quart a été annulée.",
+        verb=gettext_noop("Your shift request has been canceled."),
         redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
         icon="close",
     )
@@ -5458,11 +5438,7 @@ def shift_request_cancel(request, id):
         notify.send(
             request.user.employee_get,
             recipient=shift_request.reallocate_to.employee_user_id,
-            verb="Your shift request has been rejected.",
-            verb_ar="تم إلغاء طلبك للوردية.",
-            verb_de="Ihr Schichtantrag wurde storniert.",
-            verb_es="Se ha cancelado su solicitud de turno.",
-            verb_fr="Votre demande de quart a été annulée.",
+            verb=gettext_noop("Your shift request has been rejected."),
             redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
             icon="close",
         )
@@ -5499,11 +5475,7 @@ def shift_allocation_request_cancel(request, id):
     notify.send(
         request.user.employee_get,
         recipient=shift_request.employee_id.employee_user_id,
-        verb="Your shift request has been canceled.",
-        verb_ar="تم إلغاء طلبك للوردية.",
-        verb_de="Ihr Schichtantrag wurde storniert.",
-        verb_es="Se ha cancelado su solicitud de turno.",
-        verb_fr="Votre demande de quart a été annulée.",
+        verb=gettext_noop("Your shift request has been canceled."),
         redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
         icon="close",
     )
@@ -5547,11 +5519,7 @@ def shift_request_bulk_cancel(request):
             notify.send(
                 request.user.employee_get,
                 recipient=shift_request.employee_id.employee_user_id,
-                verb="Your shift request has been canceled.",
-                verb_ar="تم إلغاء طلبك للوردية.",
-                verb_de="Ihr Schichtantrag wurde storniert.",
-                verb_es="Se ha cancelado su solicitud de turno.",
-                verb_fr="Votre demande de quart a été annulée.",
+                verb=gettext_noop("Your shift request has been canceled."),
                 redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
                 icon="close",
             )
@@ -5559,11 +5527,7 @@ def shift_request_bulk_cancel(request):
                 notify.send(
                     request.user.employee_get,
                     recipient=shift_request.employee_id.employee_user_id,
-                    verb="Your shift request has been canceled.",
-                    verb_ar="تم إلغاء طلبك للوردية.",
-                    verb_de="Ihr Schichtantrag wurde storniert.",
-                    verb_es="Se ha cancelado su solicitud de turno.",
-                    verb_fr="Votre demande de quart a été annulée.",
+                    verb=gettext_noop("Your shift request has been canceled."),
                     redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
                     icon="close",
                 )
@@ -5638,11 +5602,7 @@ def shift_request_approve(request, id):
         notify.send(
             user.employee_get,
             recipient=recipient,
-            verb="Your shift request has been approved.",
-            verb_ar="تمت الموافقة على طلبك للوردية.",
-            verb_de="Ihr Schichtantrag wurde genehmigt.",
-            verb_es="Se ha aprobado su solicitud de turno.",
-            verb_fr="Votre demande de quart a été approuvée.",
+            verb=gettext_noop("Your shift request has been approved."),
             redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
             icon="checkmark",
         )
@@ -5684,11 +5644,8 @@ def shift_allocation_request_approve(request, id):
         notify.send(
             request.user.employee_get,
             recipient=shift_request.employee_id.employee_user_id,
-            verb=f"{request.user.employee_get} is available for shift reallocation.",
-            verb_ar=f"{request.user.employee_get} متاح لإعادة توزيع الورديات.",
-            verb_de=f"{request.user.employee_get} steht für die Verschiebung der Schichtzuteilung zur Verfügung.",
-            verb_es=f"{request.user.employee_get} está disponible para la reasignación de turnos.",
-            verb_fr=f"{request.user.employee_get} est disponible pour la réaffectation de shift.",
+            verb=gettext_noop("%(employee_get)s is available for shift reallocation."),
+            verb_params={"employee_get": str(request.user.employee_get)},
             redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
             icon="checkmark",
         )
@@ -5743,11 +5700,7 @@ def shift_request_bulk_approve(request):
             notify.send(
                 request.user.employee_get,
                 recipient=shift_request.employee_id.employee_user_id,
-                verb="Your shift request has been approved.",
-                verb_ar="تمت الموافقة على طلبك للوردية.",
-                verb_de="Ihr Schichtantrag wurde genehmigt.",
-                verb_es="Se ha aprobado su solicitud de turno.",
-                verb_fr="Votre demande de quart a été approuvée.",
+                verb=gettext_noop("Your shift request has been approved."),
                 redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
                 icon="checkmark",
             )
@@ -5787,11 +5740,7 @@ def shift_request_delete(request, id):
         notify.send(
             request.user.employee_get,
             recipient=user,
-            verb="Your shift request has been deleted.",
-            verb_ar="تم حذف طلب الوردية الخاص بك.",
-            verb_de="Ihr Schichtantrag wurde gelöscht.",
-            verb_es="Se ha eliminado su solicitud de turno.",
-            verb_fr="Votre demande de quart a été supprimée.",
+            verb=gettext_noop("Your shift request has been deleted."),
             redirect="#",
             icon="trash",
         )
@@ -5853,11 +5802,7 @@ def shift_request_bulk_delete(request):
             notify.send(
                 request.user.employee_get,
                 recipient=user,
-                verb="Your shift request has been deleted.",
-                verb_ar="تم حذف طلب الوردية الخاص بك.",
-                verb_de="Ihr Schichtantrag wurde gelöscht.",
-                verb_es="Se ha eliminado su solicitud de turno.",
-                verb_fr="Votre demande de quart a été supprimée.",
+                verb=gettext_noop("Your shift request has been deleted."),
                 redirect="#",
                 icon="trash",
             )
@@ -5880,6 +5825,7 @@ def shift_request_bulk_delete(request):
 
 
 @login_required
+@hx_request_required
 def notifications(request):
     """
     This method will render notification items
@@ -5911,6 +5857,7 @@ def clear_notification(request):
 
 
 @login_required
+@hx_request_required
 def delete_all_notifications(request):
     try:
         request.user.notifications.read().delete()
@@ -5955,7 +5902,9 @@ def mark_as_read_notification(request, notification_id):
         return HorillaRedirect(
             request, message=_("No notification found matching the query.")
         )
-    notification = Notification.objects.get(id=notification_id)
+    notification = get_object_or_404(
+        Notification, id=notification_id, recipient=request.user
+    )
     notification.mark_as_read()
     if not request.user.notifications.unread():
         script = """<span hx-get='/notifications' hx-target='#notificationContainer' hx-trigger='load'></span>"""
@@ -5967,14 +5916,24 @@ def mark_as_read_notification_json(request):
     try:
         notification_id = request.POST["notification_id"]
         notification_id = int(notification_id)
-        notification = Notification.objects.get(id=notification_id)
+        notification = Notification.objects.get(
+            id=notification_id, recipient=request.user
+        )
         notification.mark_as_read()
         return JsonResponse({"success": True})
-    except:
+    except (KeyError, ValueError, TypeError, Notification.DoesNotExist):
+        # Missing or non-numeric notification_id, or no such notification.
+        # Narrowed from a bare except so a genuine failure in mark_as_read
+        # is no longer reported to the client as "Invalid request".
+        logger.warning(
+            "mark_as_read failed for notification_id=%r",
+            request.POST.get("notification_id"),
+        )
         return JsonResponse({"success": False, "error": "Invalid request"})
 
 
 @login_required
+@hx_request_required
 def read_notifications(request):
     """
     This method is to mark as read the notification
@@ -5994,6 +5953,7 @@ def read_notifications(request):
 
 
 @login_required
+@hx_request_required
 def all_notifications(request):
     """
     This method to render all notifications to template
@@ -6006,6 +5966,7 @@ def all_notifications(request):
 
 
 @login_required
+@hx_request_required
 def notification_sound(request):
     employee = request.user.employee_get
     sound, created = NotificationSound.objects.get_or_create(employee=employee)
@@ -6219,16 +6180,21 @@ def encashment_general_settings_view(request):
     EncashmentGeneralSettings = get_horilla_model_class(
         app_label="payroll", model="encashmentgeneralsettings"
     )
-    from payroll.forms.forms import EncashmentGeneralSettingsForm
+    from payroll.forms.forms import (
+        EncashmentEligibilityForm,
+        EncashmentGeneralSettingsForm,
+    )
 
     encashment_instance = EncashmentGeneralSettings.objects.first()
     encashment_form = EncashmentGeneralSettingsForm(instance=encashment_instance)
+    eligibility_form = EncashmentEligibilityForm(instance=encashment_instance)
 
     return render(
         request,
         "base/encashment_general_settings.html",
         {
             "encashment_form": encashment_form,
+            "eligibility_form": eligibility_form,
         },
     )
 
@@ -6300,7 +6266,7 @@ def save_date_format(request):
                 return JsonResponse({"success": True})
 
     # Return a JSON response for unsupported methods
-    return JsonResponse({"error": False, "error": "Unsupported method"}, status=405)
+    return JsonResponse({"error": "Unsupported method"}, status=405)
 
 
 @login_required
@@ -6384,7 +6350,7 @@ def save_time_format(request):
                 return JsonResponse({"success": True})
 
     # Return a JSON response for unsupported methods
-    return JsonResponse({"error": False, "error": "Unsupported method"}, status=405)
+    return JsonResponse({"error": "Unsupported method"}, status=405)
 
 
 @login_required
@@ -6515,6 +6481,7 @@ def history_field_settings(request):
 
 
 @login_required
+@hx_request_required
 @permission_required("horilla_audit.change_accountblockunblock")
 def enable_account_block_unblock(request):
     if request.method == "POST":
@@ -6538,6 +6505,7 @@ def enable_account_block_unblock(request):
 
 
 @login_required
+@hx_request_required
 @permission_required("employee.change_employee")
 def enable_profile_edit_feature(request):
 
@@ -6597,6 +6565,7 @@ def default_export_access_settings_view(request):
 
 
 @login_required
+@hx_request_required
 @permission_required("base.change_defaultexportpermission")
 def enable_default_export_access(request):
     if request.method == "POST":
@@ -6905,7 +6874,10 @@ def tag_update(request, tag_id):
     """
     This method renders form and template to create Ticket type
     """
-    tag = Tags.objects.get(id=tag_id)
+    tag = Tags.objects.filter(id=tag_id).first()
+    if not tag:
+        messages.error(request, _("Tag not found."))
+        return HorillaRedirect(request)
     form = TagsForm(instance=tag)
     if request.method == "POST":
         form = TagsForm(request.POST, instance=tag)
@@ -6952,7 +6924,10 @@ def audit_tag_update(request, tag_id):
     """
     This method renders form and template to create Ticket type
     """
-    tag = AuditTag.objects.get(id=tag_id)
+    tag = AuditTag.objects.filter(id=tag_id).first()
+    if not tag:
+        messages.error(request, _("Tag not found."))
+        return HorillaRedirect(request)
     form = AuditTagForm(instance=tag)
     if request.method == "POST":
         form = AuditTagForm(request.POST, instance=tag)
@@ -7028,8 +7003,15 @@ def get_condition_value_fields(request):
 @permission_required("base.add_multipleapprovalcondition")
 def add_more_approval_managers(request):
     current_hx_target = request.META.get("HTTP_HX_TARGET")
+    if not current_hx_target:
+        return HttpResponse()
     hx_target_split = current_hx_target.split("_")
-    next_hx_target = "_".join([hx_target_split[0], str(int(hx_target_split[-1]) + 1)])
+    try:
+        next_hx_target = "_".join(
+            [hx_target_split[0], str(int(hx_target_split[-1]) + 1)]
+        )
+    except (IndexError, ValueError):
+        return HttpResponse()
 
     form = MultipleApproveConditionForm()
     managers_count = request.GET.get("managers_count")
@@ -7305,11 +7287,10 @@ def create_shiftrequest_comment(request, shift_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb=f"{shift.employee_id}'s shift request has received a comment.",
-                            verb_ar=f"تلقت طلب تحويل {shift.employee_id} تعليقًا.",
-                            verb_de=f"{shift.employee_id}s Schichtantrag hat einen Kommentar erhalten.",
-                            verb_es=f"La solicitud de turno de {shift.employee_id} ha recibido un comentario.",
-                            verb_fr=f"La demande de changement de poste de {shift.employee_id} a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "%(employee)s's shift request has received a comment."
+                            ),
+                            verb_params={"employee": str(shift.employee_id)},
                             redirect=reverse("shift-request-view") + f"?id={shift.id}",
                             icon="chatbox-ellipses",
                         )
@@ -7321,11 +7302,9 @@ def create_shiftrequest_comment(request, shift_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb="Your shift request has received a comment.",
-                            verb_ar="تلقت طلبك للتحول تعليقًا.",
-                            verb_de="Ihr Schichtantrag hat einen Kommentar erhalten.",
-                            verb_es="Tu solicitud de turno ha recibido un comentario.",
-                            verb_fr="Votre demande de changement de poste a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "Your shift request has received a comment."
+                            ),
                             redirect=reverse("shift-request-view") + f"?id={shift.id}",
                             icon="chatbox-ellipses",
                         )
@@ -7337,11 +7316,10 @@ def create_shiftrequest_comment(request, shift_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb=f"{shift.employee_id}'s shift request has received a comment.",
-                            verb_ar=f"تلقت طلب تحويل {shift.employee_id} تعليقًا.",
-                            verb_de=f"{shift.employee_id}s Schichtantrag hat einen Kommentar erhalten.",
-                            verb_es=f"La solicitud de turno de {shift.employee_id} ha recibido un comentario.",
-                            verb_fr=f"La demande de changement de poste de {shift.employee_id} a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "%(employee)s's shift request has received a comment."
+                            ),
+                            verb_params={"employee": str(shift.employee_id)},
                             redirect=reverse("shift-request-view") + f"?id={shift.id}",
                             icon="chatbox-ellipses",
                         )
@@ -7350,11 +7328,7 @@ def create_shiftrequest_comment(request, shift_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=rec,
-                        verb="Your shift request has received a comment.",
-                        verb_ar="تلقت طلبك للتحول تعليقًا.",
-                        verb_de="Ihr Schichtantrag hat einen Kommentar erhalten.",
-                        verb_es="Tu solicitud de turno ha recibido un comentario.",
-                        verb_fr="Votre demande de changement de poste a reçu un commentaire.",
+                        verb=gettext_noop("Your shift request has received a comment."),
                         redirect=reverse("shift-request-view") + f"?id={shift.id}",
                         icon="chatbox-ellipses",
                     )
@@ -7611,11 +7585,10 @@ def create_worktyperequest_comment(request, worktype_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb=f"{work_type.employee_id}'s work type request has received a comment.",
-                            verb_ar=f"تلقت طلب نوع العمل {work_type.employee_id} تعليقًا.",
-                            verb_de=f"{work_type.employee_id}s Arbeitsart-Antrag hat einen Kommentar erhalten.",
-                            verb_es=f"La solicitud de tipo de trabajo de {work_type.employee_id} ha recibido un comentario.",
-                            verb_fr=f"La demande de type de travail de {work_type.employee_id} a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "%(employee)s's work type request has received a comment."
+                            ),
+                            verb_params={"employee": str(work_type.employee_id)},
                             redirect=reverse("work-type-request-view")
                             + f"?id={work_type.id}",
                             icon="chatbox-ellipses",
@@ -7628,11 +7601,9 @@ def create_worktyperequest_comment(request, worktype_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb="Your work type request has received a comment.",
-                            verb_ar="تلقى طلب نوع العمل الخاص بك تعليقًا.",
-                            verb_de="Ihr Arbeitsart-Antrag hat einen Kommentar erhalten.",
-                            verb_es="Tu solicitud de tipo de trabajo ha recibido un comentario.",
-                            verb_fr="Votre demande de type de travail a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "Your work type request has received a comment."
+                            ),
                             redirect=reverse("work-type-request-view")
                             + f"?id={work_type.id}",
                             icon="chatbox-ellipses",
@@ -7645,11 +7616,10 @@ def create_worktyperequest_comment(request, worktype_id):
                         notify.send(
                             request.user.employee_get,
                             recipient=rec,
-                            verb=f"{work_type.employee_id}'s work type request has received a comment.",
-                            verb_ar=f"تلقت طلب نوع العمل {work_type.employee_id} تعليقًا.",
-                            verb_de=f"{work_type.employee_id}s Arbeitsart-Antrag hat einen Kommentar erhalten.",
-                            verb_es=f"La solicitud de tipo de trabajo de {work_type.employee_id} ha recibido un comentario.",
-                            verb_fr=f"La demande de type de travail de {work_type.employee_id} a reçu un commentaire.",
+                            verb=gettext_noop(
+                                "%(employee)s's work type request has received a comment."
+                            ),
+                            verb_params={"employee": str(work_type.employee_id)},
                             redirect=reverse("work-type-request-view")
                             + f"?id={work_type.id}",
                             icon="chatbox-ellipses",
@@ -7659,11 +7629,9 @@ def create_worktyperequest_comment(request, worktype_id):
                     notify.send(
                         request.user.employee_get,
                         recipient=rec,
-                        verb="Your work type request has received a comment.",
-                        verb_ar="تلقى طلب نوع العمل الخاص بك تعليقًا.",
-                        verb_de="Ihr Arbeitsart-Antrag hat einen Kommentar erhalten.",
-                        verb_es="Tu solicitud de tipo de trabajo ha recibido un comentario.",
-                        verb_fr="Votre demande de type de travail a reçu un commentaire.",
+                        verb=gettext_noop(
+                            "Your work type request has received a comment."
+                        ),
                         redirect=reverse("work-type-request-view")
                         + f"?id={work_type.id}",
                         icon="chatbox-ellipses",
@@ -7784,7 +7752,10 @@ def action_type_update(request, act_id):
     """
     This method renders form and template to update Action type
     """
-    action = Actiontype.objects.get(id=act_id)
+    action = Actiontype.objects.filter(id=act_id).first()
+    if not action:
+        messages.error(request, _("Action type not found."))
+        return HorillaRedirect(request)
     form = ActiontypeForm(instance=action)
 
     if action.action_type == "warning":
@@ -8674,7 +8645,7 @@ def delete_penalities(request, penalty_id):
             request, message=_("No penalty account found matching the query.")
         )
     penalty.delete()
-    messages.success(request, _("Penalty deleted suucessfully"))
+    messages.success(request, _("Penalty deleted successfully"))
     return HttpResponse(
         "<script>$('.reload-record').click();$('#reloadMessagesButton').click();</script>"
     )
@@ -8762,6 +8733,13 @@ def protected_media(request, path):
         raise Http404("Invalid file path")
 
     if not os.path.exists(media_path) or not os.path.isfile(media_path):
+        raise Http404("File not found")
+
+    # Uploads never produce dot-files or dot-directories, but the Docker
+    # entrypoint persists the generated SECRET_KEY at media/.generated_secret_key
+    # so it survives restarts. Serving it would let any logged-in user forge
+    # sessions and JWTs, so refuse every hidden path outright.
+    if any(part.startswith(".") for part in path.split("/")):
         raise Http404("File not found")
 
     is_public_asset = any(path.startswith(prefix) for prefix in public_media_prefixes)

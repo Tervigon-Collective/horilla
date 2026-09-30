@@ -13,6 +13,7 @@ from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 
 from base.models import IntegrationApps
+from horilla.decorators import hx_request_required
 from horilla_views.cbv_methods import login_required, permission_required
 from horilla_views.generic.cbv.views import (
     HorillaDetailedView,
@@ -172,6 +173,11 @@ class RecruitmentNav(HorillaNavView):
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"
     filter_body_template = "cbv/recruitment/filters.html"
+    # Modern slide-over filter panel (generic/horilla_nav.html's own
+    # {% if modern_filter %} branch) -- same treatment as every other
+    # panel this session. RecruitmentFilter.ajax_fields (Managers,
+    # Company) already exists from the Pipeline panel work.
+    modern_filter = True
 
     # Mirrors RecruitmentList.nested_group_by_fields
     nested_group_by_fields = [
@@ -304,8 +310,9 @@ class RecruitmentForm(HorillaFormView):
         Process form submission to save or update a Recruitment object and display success message.
         """
         targets_to_reload = []
+        is_create = not form.instance.pk
 
-        if form.instance.pk:
+        if not is_create:
             recruitment = form.save()
             recruitment_managers = self.request.POST.getlist("recruitment_managers")
             if recruitment_managers:
@@ -328,11 +335,24 @@ class RecruitmentForm(HorillaFormView):
             message = _("Recruitment Created Successfully")
         CACHE.delete(f"matching_resumes_{recruitment.pk}")
         messages.success(self.request, message)
-        if self.request.GET.get("pipeline") == "true" or (
+
+        from_pipeline = self.request.GET.get("pipeline") == "true" or (
             self.request.resolver_match
             and self.request.resolver_match.url_name == "recruitment-update-pipeline"
-        ):
-            # Refresh pipeline container only, instead of reloading the whole page.
+        )
+        if from_pipeline and is_create:
+            # A brand-new recruitment has no tab yet - the per-tab nav's
+            # #applyFilter only re-fetches the CURRENTLY open tab's content,
+            # it never rebuilds the tab bar itself. Navigate the whole page
+            # instead so RecruitmentTabView re-runs and picks the new
+            # recruitment's tab up; RecruitmentTabView orders tabs newest
+            # first, so with no stored active tab for this fresh load it
+            # opens directly on the recruitment just created.
+            script = f"window.location.href = '{reverse('cbv-pipeline')}';"
+            return self.HttpResponse(script=script)
+        if from_pipeline:
+            # Editing an existing recruitment: its tab already exists and is
+            # the one open, so just refresh that tab's own content.
             targets_to_reload.append("#applyFilter")
 
         return self.HttpResponse(targets_to_reload=targets_to_reload)
@@ -342,6 +362,7 @@ class RecruitmentForm(HorillaFormView):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(hx_request_required, name="dispatch")
 class AddCandidateFormView(HorillaFormView):
     """
     form view for add candidate
@@ -350,6 +371,15 @@ class AddCandidateFormView(HorillaFormView):
     form_class = AddCandidateForm
     model = Candidate
     new_display_title = _("Add Candidate")
+
+    def dispatch(self, request, *args, **kwargs):
+        # This is a fragment meant to be loaded via htmx into the "Add
+        # Candidate" modal from a specific pipeline stage, always carrying
+        # stage_id. Visited directly/standalone without it, render nothing
+        # rather than the raw, unstyled form fragment.
+        if request.method == "GET" and not request.GET.get("stage_id"):
+            return HttpResponse()
+        return super().dispatch(request, *args, **kwargs)
 
     def get_initial(self) -> dict:
         initial = super().get_initial()

@@ -1,7 +1,7 @@
 {% load static horillafilters attendancefilters i18n %}
 
 {% if request.user.employee_get %}
-    {% with get_forecasted_at_work=request.user.employee_get.get_forecasted_at_work %}
+    {% with get_forecasted_at_work=request.user.employee_get.get_forecasted_at_work geo_on=request|is_geofencing_enabled %}
         {% if request.session.selected_company == "all" or request.user.employee_get.employee_work_info.company_id.id == request.session.selected_company|default:"-1"|add:"0" %}
             <!-- "CHEKING WETHER Check in/check out enabled" -->
             {% if request|is_check_in_enabled %}
@@ -14,12 +14,13 @@
                     </button>
                     <span class="at_work_seconds" data-at-work-seconds = "{{ get_forecasted_at_work.forecasted_at_work_seconds|default:0 }}" data-run= "{{run|default:1}}" ></span> {% endcomment %}
                     <button
-                        class="check checkout"
+                        class="check checkout{% if geo_on %} geo-clock-btn{% endif %}"
                         data-punch-url="{% url 'clock-out' %}"
+                        {% if geo_on %}data-clock-url="{% url 'clock-out' %}"{% endif %}
                         hx-target="#attendance-activity-container"
                         hx-swap="innerHTML"
                         onclick="return punchWithLocation(event, this)"
-                        {% if request|is_geofencing_enabled %}data-punch-precise="1"{% endif %}
+                        {% if geo_on %}data-punch-precise="1"{% endif %}
                         {% if request|is_timerunner_enabled and get_forecasted_at_work.has_attendance %}
                             onmouseenter="$(this).find('span.hr-Check-In-out-text').show();$(this).find('.time-runner').hide()"
                             onmouseleave="$(this).find('span.hr-Check-In-out-text').hide();$(this).find('.time-runner').show()"
@@ -59,12 +60,13 @@
                     </button>
                     <span class="at_work_seconds" data-at-work-seconds = "{{ get_forecasted_at_work.forecasted_at_work_seconds|default:0 }}" data-run= "{{run|default:0}}" ></span> {% endcomment %}
                     <button
-                        class="check checkin"
+                        class="check checkin{% if geo_on %} geo-clock-btn{% endif %}"
                         data-punch-url="{% url 'clock-in' %}"
+                        {% if geo_on %}data-clock-url="{% url 'clock-in' %}"{% endif %}
                         hx-target="#attendance-activity-container"
                         hx-swap="innerHTML"
                         onclick="return punchWithLocation(event, this)"
-                        {% if request|is_geofencing_enabled %}data-punch-precise="1"{% endif %}
+                        {% if geo_on %}data-punch-precise="1"{% endif %}
                         {% if request|is_timerunner_enabled %}
                             onmouseenter="$(this).find('span.hr-Check-In-out-text').show();$(this).find('.at-work-seconds').hide()"
                             onmouseleave="$(this).find('span.hr-Check-In-out-text').hide();$(this).find('.at-work-seconds').show()"
