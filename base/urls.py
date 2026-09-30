@@ -119,6 +119,11 @@ urlpatterns = [
         name="dashboard-upcoming-holidays",
     ),
     path(
+        "dashboard/api/thought-of-the-day/",
+        dashboard_module.dashboard_thought_of_the_day,
+        name="dashboard-thought-of-the-day",
+    ),
+    path(
         "dashboard/api/birthdays-anniversaries/",
         dashboard_module.dashboard_birthdays_anniversaries,
         name="dashboard-birthdays-anniversaries",

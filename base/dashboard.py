@@ -957,6 +957,14 @@ def dashboard_upcoming_holidays(request):
 
 
 @login_required
+def dashboard_thought_of_the_day(request):
+    """Team-specific Thought of the Day (Mon–Sat). Hidden on Sunday."""
+    from base.thought_of_the_day import get_thought_of_the_day
+
+    return JsonResponse(get_thought_of_the_day())
+
+
+@login_required
 def dashboard_birthdays_anniversaries(request):
     """Upcoming birthdays and work anniversaries in the next 7 days."""
     today = date.today()
