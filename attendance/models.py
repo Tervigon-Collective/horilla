@@ -587,6 +587,25 @@ class Attendance(HorillaModel):
     def clock_out_location_col(self):
         return format_punch_location(self.punch_location, "out")
 
+    # List/detail display: on a missing-punch day the auto check-out time and
+    # the provisional worked hours aren't real punches, so show "—" instead
+    # (stored values stay for regularization). Also avoids "None" while a
+    # punch is still open.
+    @staticmethod
+    def _hhmm(value):
+        return value.strftime("%H:%M") if value else "—"
+
+    def clock_in_display_col(self):
+        return "—" if self.missing_punch_in else self._hhmm(self.attendance_clock_in)
+
+    def clock_out_display_col(self):
+        return "—" if self.missing_punch_out else self._hhmm(self.attendance_clock_out)
+
+    def worked_hour_display_col(self):
+        if self.missing_punch_in or self.missing_punch_out:
+            return "—"
+        return self.attendance_worked_hour or "—"
+
     def missing_punch_col(self):
         """Missing punch badge for the attendance lists (was only on the dashboard)."""
         labels = []
