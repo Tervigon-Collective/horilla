@@ -37,6 +37,8 @@ ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 CSRF_TRUSTED_ORIGINS = env("CSRF_TRUSTED_ORIGINS")
 HORILLA_ENV = env("HORILLA_ENV", default="")
 REDIS_URL = env("REDIS_URL", default=None)
+# Unknown hostnames and the bare server IP are redirected here.
+PRIMARY_HOST = env("PRIMARY_HOST", default="hrms.seleric.com")
 
 # Default site ID for django.contrib.sites framework.
 SITE_ID = 1
@@ -197,6 +199,7 @@ MIDDLEWARE = [
     # First, so every log line emitted while handling the request -- including
     # ones from middleware below -- carries the correlation id.
     "horilla.observability.RequestIDMiddleware",
+    "horilla.canonical_host.CanonicalHostMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
