@@ -1,5 +1,9 @@
 import datetime
+import fcntl
+import os
 import sys
+import tempfile
+from contextlib import contextmanager
 from datetime import timedelta
 
 import pytz
@@ -11,7 +15,32 @@ from django.utils import timezone
 from base.backends import logger
 
 
+@contextmanager
+def _single_run(name):
+    """
+    Every gunicorn worker starts its own scheduler; hold a non-blocking file
+    lock so a job never runs concurrently (concurrent attendance saves would
+    apply the same Hours Balance diff more than once).
+    """
+    with open(os.path.join(tempfile.gettempdir(), f"horilla-{name}.lock"), "w") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def auto_punch_out():
+    with _single_run("auto_punch_out") as acquired:
+        if acquired:
+            _auto_punch_out()
+
+
+def _auto_punch_out():
     from attendance.methods.utils import Request
     from attendance.models import Attendance, AttendanceActivity
     from attendance.views.clock_in_out import clock_out
@@ -31,39 +60,60 @@ def auto_punch_out():
         for activity in activities:
             attendance = Attendance.objects.filter(
                 employee_id=activity.employee_id,
-                attendance_clock_out=None,
-                attendance_clock_out_date=None,
                 shift_id=shift_schedule.shift_id,
                 attendance_day=shift_schedule.day,
                 attendance_date=activity.attendance_date,
             ).first()
+            if not attendance:
+                continue
 
-            if attendance:
-                date = activity.attendance_date
-                if (
-                    shift_schedule.is_night_shift
-                    and shift_schedule.start_time
-                    and shift_schedule.end_time
-                    and shift_schedule.start_time > shift_schedule.end_time
-                ):
-                    date += timedelta(days=1)
+            date = activity.attendance_date
+            if (
+                shift_schedule.is_night_shift
+                and shift_schedule.start_time
+                and shift_schedule.end_time
+                and shift_schedule.start_time > shift_schedule.end_time
+            ):
+                date += timedelta(days=1)
 
-                combined_datetime = timezone.make_aware(
-                    datetime.datetime.combine(date, shift_schedule.auto_punch_out_time)
-                )
+            cutoff = datetime.datetime.combine(date, shift_schedule.auto_punch_out_time)
+            combined_datetime = timezone.make_aware(cutoff)
+            if combined_datetime >= timezone.now():
+                continue
 
-                if combined_datetime < timezone.now():
-                    try:
-                        clock_out(
-                            Request(
-                                user=attendance.employee_id.employee_user_id,
-                                date=date,
-                                time=shift_schedule.auto_punch_out_time,
-                                datetime=combined_datetime,
-                            )
+            activity_in = datetime.datetime.combine(
+                activity.clock_in_date, activity.clock_in
+            )
+            try:
+                if attendance.attendance_clock_out is None and activity_in < cutoff:
+                    clock_out(
+                        Request(
+                            user=attendance.employee_id.employee_user_id,
+                            date=date,
+                            time=shift_schedule.auto_punch_out_time,
+                            datetime=combined_datetime,
                         )
-                    except Exception as e:
-                        logger.error(f"auto_punch_out error: {e}")
+                    )
+                    continue
+
+                # Attendance already has a check-out (edited/approved while the
+                # punch was still open) or the punch started after the cutoff:
+                # close just the activity, never before it started.
+                out = cutoff
+                if attendance.attendance_clock_out and attendance.attendance_clock_out_date:
+                    attendance_out = datetime.datetime.combine(
+                        attendance.attendance_clock_out_date,
+                        attendance.attendance_clock_out,
+                    )
+                    if attendance_out >= activity_in:
+                        out = min(out, attendance_out)
+                out = max(out, activity_in)
+                activity.clock_out = out.time()
+                activity.clock_out_date = out.date()
+                activity.out_datetime = timezone.make_aware(out)
+                activity.save()
+            except Exception as e:
+                logger.error(f"auto_punch_out error: {e}")
 
 
 def _is_end_of_day_reached(target_date):
@@ -85,6 +135,12 @@ def mark_missing_punches():
     - Missing punch IN: check-out without check-in on attendance rows
     - Missing punch IN: active employees on working days with no check-in
     """
+    with _single_run("mark_missing_punches") as acquired:
+        if acquired:
+            _mark_missing_punches()
+
+
+def _mark_missing_punches():
     from attendance.models import Attendance, WorkRecords
     from base.methods import get_working_days
     from employee.models import Employee

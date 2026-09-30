@@ -737,7 +737,7 @@ class Attendance(HorillaModel):
             in_time = activity.clock_in
             combined_in = datetime.combine(activity.clock_in_date, in_time)
             diffs = combined_out - combined_in
-            at_work_seconds = at_work_seconds + diffs.total_seconds()
+            at_work_seconds = at_work_seconds + max(0, diffs.total_seconds())
         return at_work_seconds
 
     def sync_worked_hours_from_clock_times(self):
@@ -763,22 +763,55 @@ class Attendance(HorillaModel):
                 self.attendance_worked_hour = "00:00"
             return
 
+        clock_in = datetime.combine(
+            self.attendance_clock_in_date, self.attendance_clock_in
+        )
+        clock_out = datetime.combine(
+            self.attendance_clock_out_date, self.attendance_clock_out
+        )
+        if clock_out <= clock_in:
+            return
+
         activities = AttendanceActivity.objects.filter(
             attendance_date=self.attendance_date,
             employee_id=self.employee_id,
+            clock_out__isnull=False,
         )
-        if activities.exists():
-            at_work_seconds = self.get_at_work_from_activities()
+        # The attendance check-in/out is authoritative (it may have been edited
+        # or set by auto check-out); activities only contribute the breaks
+        # between punches inside that window. Attendance times are stored to
+        # the minute while activities keep seconds, hence the one-minute slack.
+        slack = timedelta(seconds=59)
+        window_end = clock_out + slack
+        intervals = []
+        for activity in activities:
+            start = max(
+                clock_in, datetime.combine(activity.clock_in_date, activity.clock_in)
+            )
+            end = min(
+                window_end,
+                datetime.combine(activity.clock_out_date, activity.clock_out),
+            )
+            if end > start:
+                intervals.append([start, end])
+        intervals.sort()
+
+        merged = []
+        for start, end in intervals:
+            if merged and start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+
+        if not merged:
+            at_work_seconds = (clock_out - clock_in).total_seconds()
         else:
-            clock_in = datetime.combine(
-                self.attendance_clock_in_date, self.attendance_clock_in
-            )
-            clock_out = datetime.combine(
-                self.attendance_clock_out_date, self.attendance_clock_out
-            )
-            if clock_out <= clock_in:
-                return
-            at_work_seconds = int((clock_out - clock_in).total_seconds())
+            if merged[0][0] - clock_in > slack:
+                merged[0][0] = clock_in
+            if clock_out - merged[-1][1] > slack:
+                merged[-1][1] = clock_out
+            at_work_seconds = sum((end - start).total_seconds() for start, end in merged)
+        at_work_seconds = int(at_work_seconds)
 
         if at_work_seconds > 0:
             self.attendance_worked_hour = format_time(at_work_seconds)
