@@ -999,6 +999,9 @@ def _classify_approved_overtime_seconds(employee, start_date, end_date):
     )
     regular_ot = week_off_ot = holiday_ot = 0
     for attendance in attendances:
+        # No overtime from a missing-punch day until it is regularized.
+        if attendance.missing_punch_in or attendance.missing_punch_out:
+            continue
         att_date = attendance.attendance_date
         if att_date in working_day_dates or att_date in regularized_dates:
             regular_ot += attendance.overtime_second or 0

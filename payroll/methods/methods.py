@@ -306,6 +306,10 @@ def hourly_computation(employee, wage, start_date, end_date):
     regular_seconds = 0
     ot_regular_seconds = ot_week_off_seconds = ot_holiday_seconds = 0
     for attendance in attendances_on_period:
+        # Missing-punch hours come from an auto check-out: pay 0 hours for
+        # that day until the employee regularizes it.
+        if attendance.missing_punch_in or attendance.missing_punch_out:
+            continue
         att_date = attendance.attendance_date
         if att_date in working_day_dates or att_date in regularized_dates:
             regular_seconds += attendance.at_work_second - attendance.overtime_second

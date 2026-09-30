@@ -32,11 +32,11 @@ class DashboardAttendanceToValidate(ValidateAttendancesList):
     columns = [
         (_("Employee"), "employee_id", "employee_id__get_avatar"),
         (_("Attendance Date"), "attendance_date"),
-        (_("Worked Hours"), "attendance_worked_hour"),
+        (_("Worked Hours"), "worked_hour_display_col"),
     ]
 
     header_attrs = {
-        "attendance_worked_hour": """style="width:100px !important;" """,
+        "worked_hour_display_col": """style="width:100px !important;" """,
         "employee_id": """ style="width:100px !important;" """,
         "action": """ style="width:100px !important;" """,
     }

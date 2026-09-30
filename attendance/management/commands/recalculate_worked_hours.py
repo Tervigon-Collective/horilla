@@ -86,6 +86,10 @@ class Command(BaseCommand):
 
             totals = defaultdict(lambda: [0, 0, 0])
             for attendance in Attendance.objects.filter(attendance_validated=True):
+                # Missing-punch days only count once regularized (see
+                # Attendance._balance_contribution).
+                if attendance.missing_punch_in or attendance.missing_punch_out:
+                    continue
                 key = (
                     attendance.employee_id_id,
                     attendance.attendance_date.strftime("%B").lower(),

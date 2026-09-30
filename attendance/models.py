@@ -955,6 +955,13 @@ class Attendance(HorillaModel):
             attendance.save()
         return attendance
 
+    @staticmethod
+    def _balance_contribution(missing_punch, work, approved_ot, pending):
+        """(worked, approved OT, pending) seconds this day adds to Hours Balance."""
+        if missing_punch:
+            return (0, 0, 0)
+        return (work, approved_ot, pending)
+
     def _apply_hour_balance_diff(self, diff_work, diff_approved_ot, diff_pending):
         """Apply incremental worked/pending/overtime deltas to Hours Balance."""
         if diff_work == diff_approved_ot == diff_pending == 0:
@@ -1134,6 +1141,8 @@ class Attendance(HorillaModel):
                 "attendance_validated",
                 "attendance_clock_out",
                 "attendance_clock_out_date",
+                "missing_punch_in",
+                "missing_punch_out",
             ).get(pk=self.pk)
 
             old_work = old.at_work_second or 0
@@ -1143,7 +1152,9 @@ class Attendance(HorillaModel):
 
             old_min = strtime_seconds(old.minimum_hour)
             old_pending_today = max(0, old_min - old_work)
+            old_missing = bool(old.missing_punch_in or old.missing_punch_out)
         else:
+            old_missing = False
             old_work = 0
             old_approved_ot = 0
             old_pending_today = 0
@@ -1181,9 +1192,20 @@ class Attendance(HorillaModel):
         new_min = strtime_seconds(self.minimum_hour)
         new_pending_today = max(0, new_min - new_work)
 
-        diff_work = new_work - old_work
-        diff_approved_ot = new_approved_ot - old_approved_ot
-        diff_pending = new_pending_today - old_pending_today
+        # A missing-punch day's hours are provisional (auto check-out), so it
+        # contributes nothing to Hours Balance until it is regularized.
+        old_bal = self._balance_contribution(
+            old_missing, old_work, old_approved_ot, old_pending_today
+        )
+        new_bal = self._balance_contribution(
+            bool(self.missing_punch_in or self.missing_punch_out),
+            new_work,
+            new_approved_ot,
+            new_pending_today,
+        )
+        diff_work, diff_approved_ot, diff_pending = (
+            new - old for new, old in zip(new_bal, old_bal)
+        )
 
         super().save(*args, **kwargs)
 
@@ -1191,13 +1213,9 @@ class Attendance(HorillaModel):
             if old_validated:
                 self._apply_hour_balance_diff(diff_work, diff_approved_ot, diff_pending)
             else:
-                self._apply_hour_balance_diff(
-                    new_work, new_approved_ot, new_pending_today
-                )
+                self._apply_hour_balance_diff(*new_bal)
         elif old_validated:
-            self._apply_hour_balance_diff(
-                -old_work, -old_approved_ot, -old_pending_today
-            )
+            self._apply_hour_balance_diff(*(-value for value in old_bal))
 
         # Spawn multi-level OT stages when OT is pending (skip if auto-approved)
         if (
@@ -1271,6 +1289,12 @@ class Attendance(HorillaModel):
             ).delete()
 
         if self.attendance_validated:
+            work, approved_ot, pending = self._balance_contribution(
+                bool(self.missing_punch_in or self.missing_punch_out),
+                work,
+                approved_ot,
+                pending,
+            )
             self._apply_hour_balance_diff(-work, -approved_ot, -pending)
         super().delete(*args, **kwargs)
 
