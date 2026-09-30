@@ -849,12 +849,15 @@ class Attendance(HorillaModel):
                 self.attendance_worked_hour = "00:00"
             return
 
-        clock_in = datetime.combine(
-            self.attendance_clock_in_date, self.attendance_clock_in
-        )
-        clock_out = datetime.combine(
-            self.attendance_clock_out_date, self.attendance_clock_out
-        )
+        # clock_in/clock_out views assign "HH:MM:SS" strings before save(), so
+        # coerce the way the model fields would (combine() rejects a str, which
+        # 404'd check-out).
+        in_date = models.DateField().to_python(self.attendance_clock_in_date)
+        out_date = models.DateField().to_python(self.attendance_clock_out_date)
+        in_time = models.TimeField().to_python(self.attendance_clock_in)
+        out_time = models.TimeField().to_python(self.attendance_clock_out)
+        clock_in = datetime.combine(in_date, in_time)
+        clock_out = datetime.combine(out_date, out_time)
         if clock_out <= clock_in:
             # Never keep a client-supplied worked hour for an impossible span.
             self.attendance_worked_hour = "00:00"
