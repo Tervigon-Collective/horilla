@@ -578,6 +578,26 @@ class BulkAttendanceRequestFormView(HorillaFormView):
         self.form.fields["employee_id"].initial = self.request.user.employee_get.id
         return context
 
+    def _bulk_result(self, form):
+        """Report how many days were actually requested (and why any were skipped)."""
+        created = getattr(form, "created_dates", [])
+        failed = getattr(form, "failed_dates", {})
+        if created:
+            messages.success(
+                self.request,
+                _("Attendance requests created for %(count)s day(s).")
+                % {"count": len(created)},
+            )
+        if failed:
+            details = "; ".join(
+                f"{day.strftime('%d %b')}: {reason}" for day, reason in failed.items()
+            )
+            (messages.warning if created else messages.error)(
+                self.request,
+                _("Not requested: %(details)s") % {"details": details},
+            )
+        return self.HttpResponse()
+
     def post(self, request, *args, pk=None, **kwargs):
         self.get_form()
         form = self.form
@@ -587,8 +607,8 @@ class BulkAttendanceRequestFormView(HorillaFormView):
             if form.instance.pk:
                 message = _("New Attendance request updated")
             else:
-                message = _("New Attendance request created")
-                instance = form.save(commit=False)
+                form.save(commit=False)
+                return self._bulk_result(form)
             messages.success(self.request, message)
             return self.HttpResponse()
         return super().post(request, *args, pk=pk, **kwargs)
@@ -600,8 +620,8 @@ class BulkAttendanceRequestFormView(HorillaFormView):
             if form.instance.pk:
                 message = _("New Attendance request updated")
             else:
-                message = _("New Attendance request created")
-                instance = form.save(commit=False)
+                form.save(commit=False)
+                return self._bulk_result(form)
             messages.success(self.request, message)
             return self.HttpResponse()
         return super().form_valid(form)

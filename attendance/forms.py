@@ -1250,6 +1250,8 @@ class BulkAttendanceRequestForm(BaseModelForm):
         request = getattr(horilla_middlewares._thread_locals, "request", None)
         employee = request.user.employee_get
         super().__init__(*args, **kwargs)
+        # clean() derives it from check-in/out when left blank.
+        self.fields["attendance_worked_hour"].required = False
         if employee and hasattr(employee, "employee_work_info"):
             shift = employee.employee_work_info.shift_id
             self.fields["shift_id"].initial = shift
@@ -1285,6 +1287,22 @@ class BulkAttendanceRequestForm(BaseModelForm):
         employee_id = cleaned_data.get("employee_id")
         now = datetime.datetime.now().time()
         today = datetime.datetime.today().date()
+        attendance_clock_in = cleaned_data.get("attendance_clock_in")
+        if not attendance_worked_hour and attendance_clock_in and attendance_clock_out:
+            # Blank worked hours crashed validate_time_format (500); derive it
+            # from the requested check-in/out instead.
+            span = datetime.datetime.combine(
+                today, attendance_clock_out
+            ) - datetime.datetime.combine(today, attendance_clock_in)
+            minutes = max(0, int(span.total_seconds() // 60))
+            attendance_worked_hour = f"{minutes // 60:02d}:{minutes % 60:02d}"
+            cleaned_data["attendance_worked_hour"] = attendance_worked_hour
+        if not attendance_worked_hour:
+            raise ValidationError(
+                {"attendance_worked_hour": _("This field is required.")}
+            )
+        if not minimum_hour:
+            raise ValidationError({"minimum_hour": _("This field is required.")})
         validate_time_format(attendance_worked_hour)
         validate_time_format(minimum_hour)
         attendance_date_validate(from_date)
@@ -1302,9 +1320,14 @@ class BulkAttendanceRequestForm(BaseModelForm):
         if to_date == today and attendance_clock_out > now:
             raise ValidationError(
                 {
-                    "attendance_clock_out": (
-                        f"Check out time is in the future for the date {to_date}."
+                    "attendance_clock_out": _(
+                        "Check-out %(time)s on %(date)s hasn't happened yet. End "
+                        "the range yesterday, or request today after %(time)s."
                     )
+                    % {
+                        "time": attendance_clock_out.strftime("%H:%M"),
+                        "date": to_date.strftime("%d %b %Y"),
+                    }
                 }
             )
         if employee_id and not hasattr(employee_id, "employee_work_info"):
@@ -1356,6 +1379,10 @@ class BulkAttendanceRequestForm(BaseModelForm):
                 attendance_date__in=date_list, employee_id=employee_id
             ).values_list("attendance_date", "pk")
         )
+        # The view reports these instead of a blanket "created": an invalid
+        # day used to be skipped silently (and logger(...) raised a 500).
+        self.created_dates = []
+        self.failed_dates = {}
         for date in date_list:
             initial_data.update(
                 {
@@ -1376,8 +1403,13 @@ class BulkAttendanceRequestForm(BaseModelForm):
                 if batch:
                     instance.batch_attendance_id = batch
                 instance.save()
+                self.created_dates.append(date)
             else:
-                logger(form.errors)
+                errors = "; ".join(
+                    str(message) for messages in form.errors.values() for message in messages
+                )
+                self.failed_dates[date] = errors
+                logger.warning("Bulk attendance request %s skipped: %s", date, errors)
         instance = super().save(commit=False)
         if commit:
             instance.save()
