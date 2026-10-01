@@ -469,3 +469,14 @@ register_job(undo_work_type, "interval", job_id="job6", hours=4)
 register_job(switch_work_type, "interval", job_id="job5", hours=4)
 register_job(recurring_holiday, "interval", hours=4)
 register_job(sync_roster_shifts, "interval", hours=4)
+
+
+@scheduled_job
+def clear_expired_sessions():
+    """Delete expired django_session rows; nothing else prunes them."""
+    from django.core.management import call_command
+
+    call_command("clearsessions")
+
+
+register_job(clear_expired_sessions, "cron", hour=3, minute=30)

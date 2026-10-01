@@ -49,3 +49,14 @@ DISABLE_SETUP_CHECKLIST = True
 
 # Expired login form -> fresh login page instead of a bare 403 (login only).
 CSRF_FAILURE_VIEW = "horilla.csrf_failure.csrf_failure"
+
+# Hashed + compressed static files so browsers can cache CSS/JS long-term
+# (see horilla/static_storage.py).
+from .base import STORAGES as _STORAGES
+
+STORAGES = {
+    **_STORAGES,
+    "staticfiles": {
+        "BACKEND": "horilla.static_storage.ForgivingManifestStaticFilesStorage"
+    },
+}
