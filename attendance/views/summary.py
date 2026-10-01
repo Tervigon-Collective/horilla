@@ -94,6 +94,39 @@ def _summary_count_end_date(to_date):
     return min(to_date, datetime.date.today())
 
 
+def ot_offset_full_dates(days, grace_secs):
+    """
+    Use overtime from the period to make up half days.
+
+    ``days``: iterable of dicts with ``date``, ``worked``, ``min_secs``, ``ot``
+    (seconds), ``bank`` (this day's overtime may be used: a regular working
+    day with real punches) and ``half`` (a half day with real punches that
+    may be topped up). Half days are topped up to the full-day threshold
+    (minimum hours minus grace), smallest shortfall first, while the overtime
+    bank lasts.
+
+    Returns ``(full_dates, used_seconds)``: the dates that count as full
+    days, and the overtime consumed (subtract it from the reported overtime
+    so the same hours aren't counted twice).
+    """
+    days = list(days)
+    bank = sum(day["ot"] or 0 for day in days if day["bank"])
+    shortfalls = sorted(
+        (max(0, day["min_secs"] - grace_secs) - day["worked"], day["date"])
+        for day in days
+        if day["half"] and day["min_secs"] > 0
+    )
+    full_dates, used = set(), 0
+    for shortfall, date in shortfalls:
+        if shortfall <= 0:
+            continue
+        if shortfall > bank - used:
+            break
+        used += shortfall
+        full_dates.add(date)
+    return full_dates, used
+
+
 def _present_day_value(worked_secs, min_secs, grace_secs, has_clock_in, open_punch):
     """
     Classify one employee-day as present fraction (0.0, 0.5, or 1.0).
@@ -308,7 +341,10 @@ def build_monthly_summary(from_date, to_date, employee_qs):
         "attendance_clock_in",
         "attendance_clock_out",
         "attendance_overtime_approve",
+        "missing_punch_in",
+        "missing_punch_out",
     )
+    att_records = list(att_records)
 
     (
         att_dates_map,
@@ -317,6 +353,19 @@ def build_monthly_summary(from_date, to_date, employee_qs):
         att_date_ot_secs_map,
         att_date_ot_approved_map,
     ) = _aggregate_attendance_days(att_records, _strtime_secs, grace_secs)
+
+    # Per employee-day facts for the overtime-for-half-day offset.
+    att_day_meta = defaultdict(
+        lambda: {"min_secs": 0, "real_punches": True, "missing": False}
+    )
+    for _rec in att_records:
+        _meta = att_day_meta[(_rec["employee_id_id"], _rec["attendance_date"])]
+        if _rec.get("minimum_hour"):
+            _meta["min_secs"] = max(_meta["min_secs"], _strtime_secs(_rec["minimum_hour"]))
+        if not (_rec.get("attendance_clock_in") and _rec.get("attendance_clock_out")):
+            _meta["real_punches"] = False
+        if _rec.get("missing_punch_in") or _rec.get("missing_punch_out"):
+            _meta["missing"] = True
 
     # -- 2b. Batch-load shift schedules for hours computation -----------------
     from base.models import EmployeeShiftSchedule
@@ -455,7 +504,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
         "employee_work_info__department_id",
         "employee_work_info__job_position_id",
     ):
-        _att_vals = att_date_value_map.get(emp.pk, {})
+        _att_vals = dict(att_date_value_map.get(emp.pk, {}))
         _att_secs = att_date_secs_map.get(emp.pk, {})
         _paid_dates = paid_day_dates_per_emp.get(emp.pk, set())
         _unpaid_dates = unpaid_day_dates_per_emp.get(emp.pk, set())
@@ -465,6 +514,35 @@ def build_monthly_summary(from_date, to_date, employee_qs):
             else company_off_dates
         )
         _resolutions = resolutions_per_emp.get(emp.pk, {})
+
+        # Overtime on regular working days makes up half days (see
+        # ot_offset_full_dates); the overtime used is not reported again.
+        _emp_ot_map = att_date_ot_secs_map.get(emp.pk, {})
+        _offset_days = []
+        for _d, _val in _att_vals.items():
+            _meta = att_day_meta[(emp.pk, _d)]
+            _regular_day = (
+                _d not in holiday_dates_set
+                and _d not in _emp_off
+                and _d not in _paid_dates
+                and _d not in _unpaid_dates
+                and _d not in _resolutions
+                and _meta["real_punches"]
+                and not _meta["missing"]
+            )
+            _offset_days.append(
+                {
+                    "date": _d,
+                    "worked": _att_secs.get(_d, 0),
+                    "min_secs": _meta["min_secs"],
+                    "ot": _emp_ot_map.get(_d, 0),
+                    "bank": _regular_day,
+                    "half": _regular_day and _val == 0.5,
+                }
+            )
+        _ot_full_dates, _ot_offset_used = ot_offset_full_dates(_offset_days, grace_secs)
+        for _d in _ot_full_dates:
+            _att_vals[_d] = 1.0
         _shift_pk = emp_shift_map.get(emp.pk)
         _shift_sched = shift_day_secs.get(_shift_pk, {}) if _shift_pk else {}
         _daily_hrs = daily_manual_map.get(emp.pk, {})  # per-day manual overrides
@@ -603,6 +681,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
             else:
                 ot_regular_seconds += _emp_ot_secs.get(_d, 0)
 
+        ot_regular_seconds = max(0, ot_regular_seconds - _ot_offset_used)
         worked_seconds = sum(_att_secs.values())
         overtime_seconds = ot_regular_seconds + ot_week_off_seconds + ot_holiday_seconds
         regular_seconds = worked_seconds - overtime_seconds
@@ -1504,6 +1583,8 @@ def _build_calendar_context(emp, from_date, to_date):
             "minimum_hour",
             "overtime_second",
             "attendance_overtime_approve",
+            "missing_punch_in",
+            "missing_punch_out",
         )
     }
 
@@ -1563,6 +1644,36 @@ def _build_calendar_context(emp, from_date, to_date):
     # HR has regularized away from holiday/week-off (Full Present/Half Day)
     # is treated as a normal working day instead.
     cal_worked_seconds = 0
+    # Overtime makes up half days, same rule as build_monthly_summary.
+    _offset_days = []
+    for _d, _r in att_map.items():
+        _min = strtime_seconds(_r["minimum_hour"]) if _r.get("minimum_hour") else 0
+        _w = _r["at_work_second"] or 0
+        _regular_day = (
+            _d not in holiday_map
+            and _d not in week_off_dates
+            and _d not in paid_map
+            and _d not in unpaid_map
+            and _d not in resolutions_map
+            and _r.get("attendance_clock_in")
+            and _r.get("attendance_clock_out")
+            and not (_r.get("missing_punch_in") or _r.get("missing_punch_out"))
+        )
+        _is_half = (
+            _min > 0 and max(0, _min - grace_secs) > _w >= _min / 2
+        )
+        _offset_days.append(
+            {
+                "date": _d,
+                "worked": _w,
+                "min_secs": _min,
+                "ot": _r["overtime_second"] or 0,
+                "bank": bool(_regular_day),
+                "half": bool(_regular_day and _is_half),
+            }
+        )
+    ot_full_dates, ot_offset_used = ot_offset_full_dates(_offset_days, grace_secs)
+
     cal_ot_regular_seconds = cal_ot_week_off_seconds = cal_ot_holiday_seconds = 0
     for _d, _r in att_map.items():
         _wsec = _r["at_work_second"] or 0
@@ -1574,6 +1685,7 @@ def _build_calendar_context(emp, from_date, to_date):
             cal_ot_week_off_seconds += _wsec
         else:
             cal_ot_regular_seconds += _r["overtime_second"] or 0
+    cal_ot_regular_seconds = max(0, cal_ot_regular_seconds - ot_offset_used)
     cal_overtime_seconds = (
         cal_ot_regular_seconds + cal_ot_week_off_seconds + cal_ot_holiday_seconds
     )
@@ -1657,12 +1769,17 @@ def _build_calendar_context(emp, from_date, to_date):
                     att_status = "short" if clock_out else "absent"
             else:
                 att_status = "present"
+            ot_adjusted = att_status == "half_present" and d in ot_full_dates
+            if ot_adjusted:
+                att_status = "present"
 
             detail = ""
             if clock_in:
                 detail = str(clock_in)
                 if clock_out:
                     detail += f" – {clock_out}"
+            if ot_adjusted:
+                detail += " (" + str(_("OT adjusted")) + ")"
             if att_status in ("half_present", "short", "absent") and min_secs > 0:
                 worked_h = worked // 3600
                 worked_m = (worked % 3600) // 60

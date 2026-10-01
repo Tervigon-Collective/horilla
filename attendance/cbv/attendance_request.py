@@ -588,6 +588,16 @@ class BulkAttendanceRequestFormView(HorillaFormView):
                 _("Attendance requests created for %(count)s day(s).")
                 % {"count": len(created)},
             )
+        skipped = getattr(form, "skipped_dates", [])
+        if skipped:
+            messages.info(
+                self.request,
+                _(
+                    "Skipped (already has attendance or approved leave): %(days)s. "
+                    "To correct those days, use a normal attendance request."
+                )
+                % {"days": ", ".join(day.strftime("%d %b") for day in skipped)},
+            )
         if failed:
             details = "; ".join(
                 f"{day.strftime('%d %b')}: {reason}" for day, reason in failed.items()

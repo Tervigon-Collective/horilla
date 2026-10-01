@@ -1335,7 +1335,9 @@ class BulkAttendanceRequestForm(BaseModelForm):
         if len(date_list) <= 0:
             raise ValidationError(
                 _(
-                    "There is no valid date to create attendance request between this date range"
+                    "Every working day in this range already has attendance or "
+                    "approved leave, so there is nothing to request. To correct an "
+                    "existing day, use a normal attendance request for that date."
                 )
             )
         return cleaned_data
@@ -1383,6 +1385,10 @@ class BulkAttendanceRequestForm(BaseModelForm):
         # day used to be skipped silently (and logger(...) raised a 500).
         self.created_dates = []
         self.failed_dates = {}
+        # Working days in the range that get_date_list() dropped because they
+        # already have attendance or approved leave; reported to the user.
+        working = get_working_days(from_date, to_date)["working_days_on"]
+        self.skipped_dates = sorted(set(working) - set(date_list))
         for date in date_list:
             initial_data.update(
                 {
