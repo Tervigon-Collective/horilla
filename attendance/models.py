@@ -909,15 +909,27 @@ class Attendance(HorillaModel):
         # the minute while activities keep seconds, hence the one-minute slack.
         slack = timedelta(seconds=59)
         window_end = clock_out + slack
-        intervals = []
-        for activity in activities:
-            start = max(
-                clock_in, datetime.combine(activity.clock_in_date, activity.clock_in)
-            )
-            end = min(
-                window_end,
+        # A check-out within 2 minutes of the check-in is an accidental double
+        # tap, not a break: the employee kept working until their next
+        # check-in. Bridging it stops e.g. 10:01 in / 10:01:05 out / 13:52 in
+        # from losing the whole morning.
+        tap = timedelta(minutes=2)
+        spans = sorted(
+            (
+                datetime.combine(activity.clock_in_date, activity.clock_in),
                 datetime.combine(activity.clock_out_date, activity.clock_out),
             )
+            for activity in activities
+        )
+        bridged = []
+        for index, (act_in, act_out) in enumerate(spans):
+            if act_out - act_in < tap and index + 1 < len(spans):
+                act_out = max(act_out, spans[index + 1][0])
+            bridged.append((act_in, act_out))
+        intervals = []
+        for act_in, act_out in bridged:
+            start = max(clock_in, act_in)
+            end = min(window_end, act_out)
             if end > start:
                 intervals.append([start, end])
         intervals.sort()
