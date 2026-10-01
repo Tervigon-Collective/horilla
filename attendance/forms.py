@@ -73,6 +73,16 @@ from horilla_widgets.widgets.select_widgets import HorillaMultiSelectWidget
 logger = logging.getLogger(__name__)
 
 
+def _check_clock_order(cleaned_data):
+    """Reject a check-out that isn't after the check-in (e.g. 6:26 PM typed as 06:26)."""
+    validate_clock_times(
+        cleaned_data.get("attendance_clock_in_date"),
+        cleaned_data.get("attendance_clock_in"),
+        cleaned_data.get("attendance_clock_out_date"),
+        cleaned_data.get("attendance_clock_out"),
+    )
+
+
 class AttendanceUpdateForm(BaseModelForm):
     """
     This model form is used to direct save the validated query dict to attendance model
@@ -206,7 +216,9 @@ class AttendanceUpdateForm(BaseModelForm):
 
     def clean(self):
         self.instance._allow_future_checkout = True
-        return super().clean()
+        cleaned_data = super().clean()
+        _check_clock_order(cleaned_data)
+        return cleaned_data
 
     def as_p(self, *args, **kwargs):
         """
@@ -374,6 +386,7 @@ class AttendanceForm(BaseModelForm):
     def clean(self) -> Dict[str, Any]:
         self.instance._allow_future_checkout = True
         super().clean()
+        _check_clock_order(self.cleaned_data)
         self.instance.employee_id = Employee.objects.filter(
             id=self.data.get("employee_id")
         ).first()
@@ -683,6 +696,11 @@ class AttendanceRequestForm(BaseModelForm):
                 "onchange": "dynamicBatchAttendance($(this))",
             }
         )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        _check_clock_order(cleaned_data)
+        return cleaned_data
 
     class Meta:
         """
