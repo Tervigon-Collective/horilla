@@ -46,3 +46,6 @@ DISABLE_SETUP_CHECKLIST = True
 
 # Official 2.0 already registers geofencing from horilla_api.__init__.
 # Do not append it again — Django rejects duplicate app labels.
+
+# Expired login form -> fresh login page instead of a bare 403 (login only).
+CSRF_FAILURE_VIEW = "horilla.csrf_failure.csrf_failure"

@@ -1696,12 +1696,44 @@ def dashboard_leave_coverage(request):
 # ---------------------------------------------------------------------------
 
 
+# The dashboard fires ~12 chart requests per load and these module charts are
+# monthly aggregates (attendance-overview alone ~0.5s), so serve a repeat load
+# from the shared cache for a couple of minutes. The key is per user, company,
+# language and query, so it never crosses permission or company scope.
+DASHBOARD_CHART_CACHE_SECONDS = 120
+
+
 def _call_module_json(view_callable, request):
     """Invoke a module chart view; always return JsonResponse-compatible output."""
+    from django.core.cache import cache
+    from django.utils.translation import get_language
+
+    session = getattr(request, "session", None)
+    cache_key = "dashchart:{}:{}:{}:{}:{}:{}".format(
+        getattr(request.user, "pk", None),
+        session.get("selected_company", "") if session is not None else "",
+        get_language(),
+        view_callable.__module__,
+        view_callable.__name__,
+        request.GET.urlencode(),
+    )
+    cached = cache.get(cache_key)
+    if cached is not None:
+        content, content_type = cached
+        return HttpResponse(content, content_type=content_type)
     try:
-        return view_callable(request)
+        response = view_callable(request)
     except Exception as exc:
         return JsonResponse({"error": str(exc), "no_permission": True}, status=500)
+    if getattr(response, "status_code", None) == 200 and not getattr(
+        response, "streaming", False
+    ):
+        cache.set(
+            cache_key,
+            (response.content, response.get("Content-Type", "application/json")),
+            DASHBOARD_CHART_CACHE_SECONDS,
+        )
+    return response
 
 
 def _force_get_params(request, **params):
