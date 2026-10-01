@@ -26,6 +26,7 @@ from django.utils.translation import gettext as __
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
+from horilla.payroll_cycle import cycle_bounds
 from xhtml2pdf import pisa
 
 from base.filters import PenaltyFilter
@@ -89,9 +90,9 @@ def _dashboard_period(request):
     from_str = request.GET.get("from_date")
     to_str = request.GET.get("to_date")
     try:
-        from_date = date.fromisoformat(from_str) if from_str else today.replace(day=1)
+        from_date = date.fromisoformat(from_str) if from_str else cycle_bounds(today)[0]
     except (ValueError, TypeError):
-        from_date = today.replace(day=1)
+        from_date = cycle_bounds(today)[0]
     try:
         to_date = date.fromisoformat(to_str) if to_str else today
     except (ValueError, TypeError):
@@ -3094,7 +3095,7 @@ def overall_leave(request):
     get_params = request.GET.copy()
     if not get_params.get("from_date") or not get_params.get("to_date"):
         today = date.today()
-        get_params.setdefault("from_date", today.replace(day=1).isoformat())
+        get_params.setdefault("from_date", cycle_bounds(today)[0].isoformat())
         get_params.setdefault("to_date", today.isoformat())
     leave_requests = LeaveRequestFilter(get_params).qs
     for department in departments:

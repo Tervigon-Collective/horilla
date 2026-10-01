@@ -15,6 +15,7 @@ from django.shortcuts import render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.decorators.http import require_http_methods
+from horilla.payroll_cycle import cycle_bounds
 
 
 def _safe_url(url_name):
@@ -639,7 +640,7 @@ def dashboard_attendance_trend(request):
 
     # Always the current calendar month -- ignores any from_date/to_date so
     # the trend can't be pinned to a stale period by the shared date picker.
-    from_date, to_date = _current_month_bounds()
+    from_date, to_date = cycle_bounds()
 
     try:
         from attendance.models import Attendance
@@ -1603,7 +1604,7 @@ def dashboard_leave_coverage(request):
     Managers without org-wide employee view see team-scoped counts.
     """
     today = date.today()
-    first_of_month, last_of_month = _current_month_bounds()
+    first_of_month, last_of_month = cycle_bounds()
     scoped_ids = _scoped_active_employee_ids(request)
     days = []
     by_department = []
@@ -1795,7 +1796,7 @@ def dashboard_leave_trends(request):
 def dashboard_leave_by_department(request):
     from leave.views import overall_leave
 
-    first_of_month, last_of_month = _current_month_bounds()
+    first_of_month, last_of_month = cycle_bounds()
     scoped_request = _force_get_params(
         request,
         from_date=first_of_month.isoformat(),

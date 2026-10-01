@@ -68,3 +68,6 @@ STORAGES = {
 # entry win and returned no IP for normal visitors.
 AXES_IPWARE_PROXY_COUNT = None
 AXES_IPWARE_META_PRECEDENCE_ORDER = ["HTTP_X_REAL_IP", "REMOTE_ADDR"]
+
+# Seleric's payroll/attendance month runs 26th -> 25th (horilla/payroll_cycle.py).
+PAYROLL_CYCLE_START_DAY = 26

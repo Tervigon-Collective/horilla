@@ -21,6 +21,8 @@ from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+
+from horilla.payroll_cycle import cycle_bounds
 from xlsxwriter.utility import xl_range
 
 from attendance.models import Attendance, AttendanceDailyHours, AttendanceSummaryHours
@@ -109,22 +111,32 @@ def ot_offset_full_dates(days, grace_secs):
     days, and the overtime consumed (subtract it from the reported overtime
     so the same hours aren't counted twice).
     """
-    days = list(days)
-    bank = sum(day["ot"] or 0 for day in days if day["bank"])
-    shortfalls = sorted(
-        (max(0, day["min_secs"] - grace_secs) - day["worked"], day["date"])
-        for day in days
-        if day["half"] and day["min_secs"] > 0
-    )
-    full_dates, used = set(), 0
-    for shortfall, date in shortfalls:
-        if shortfall <= 0:
-            continue
-        if shortfall > bank - used:
-            break
-        used += shortfall
-        full_dates.add(date)
-    return full_dates, used
+    from horilla.payroll_cycle import cycle_key
+
+    # Overtime never carries over: each payroll cycle (26th-25th) has its
+    # own bank and can only top up its own half days.
+    cycles = defaultdict(list)
+    for day in days:
+        cycles[cycle_key(day["date"])].append(day)
+
+    full_dates, total_used = set(), 0
+    for cycle_days in cycles.values():
+        bank = sum(day["ot"] or 0 for day in cycle_days if day["bank"])
+        shortfalls = sorted(
+            (max(0, day["min_secs"] - grace_secs) - day["worked"], day["date"])
+            for day in cycle_days
+            if day["half"] and day["min_secs"] > 0
+        )
+        used = 0
+        for shortfall, date in shortfalls:
+            if shortfall <= 0:
+                continue
+            if shortfall > bank - used:
+                break
+            used += shortfall
+            full_dates.add(date)
+        total_used += used
+    return full_dates, total_used
 
 
 def _present_day_value(worked_secs, min_secs, grace_secs, has_clock_in, open_punch):
@@ -769,8 +781,7 @@ def attendance_monthly_summary(request):
     The table is populated via HTMX on load.
     """
     today = datetime.date.today()
-    from_date_default = today.replace(day=1)
-    to_date_default = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+    from_date_default, to_date_default = cycle_bounds(today)
 
     # Employee/Department/Job Position/Shift/Work Type render as AJAX-
     # searched Select2 comboboxes now (see monthly_summary.html) rather
@@ -826,10 +837,10 @@ def attendance_monthly_summary_table(request):
     Triggered by the Filter button and on initial page load.
     """
     today = datetime.date.today()
-    from_date = _parse_date(request.GET.get("from_date"), today.replace(day=1))
+    from_date = _parse_date(request.GET.get("from_date"), cycle_bounds(today)[0])
     to_date = _parse_date(
         request.GET.get("to_date"),
-        today.replace(day=calendar.monthrange(today.year, today.month)[1]),
+        cycle_bounds(today)[1],
     )
 
     if from_date > to_date:
@@ -947,10 +958,10 @@ def attendance_monthly_summary_export(request):
     Accepts the same GET params as the table view (no pagination).
     """
     today = datetime.date.today()
-    from_date = _parse_date(request.GET.get("from_date"), today.replace(day=1))
+    from_date = _parse_date(request.GET.get("from_date"), cycle_bounds(today)[0])
     to_date = _parse_date(
         request.GET.get("to_date"),
-        today.replace(day=calendar.monthrange(today.year, today.month)[1]),
+        cycle_bounds(today)[1],
     )
 
     if from_date > to_date:
@@ -1977,7 +1988,7 @@ def attendance_monthly_summary_calendar(request):
     """
     emp_id = request.GET.get("employee_id")
     from_date = _parse_date(
-        request.GET.get("from_date"), datetime.date.today().replace(day=1)
+        request.GET.get("from_date"), cycle_bounds()[0]
     )
     to_date = _parse_date(request.GET.get("to_date"), datetime.date.today())
 
@@ -2017,7 +2028,7 @@ def attendance_monthly_summary_conflict_resolve(request):
     date_str = request.POST.get("date") or request.GET.get("date")
     from_date = _parse_date(
         request.POST.get("from_date") or request.GET.get("from_date"),
-        datetime.date.today().replace(day=1),
+        cycle_bounds()[0],
     )
     to_date = _parse_date(
         request.POST.get("to_date") or request.GET.get("to_date"), datetime.date.today()
