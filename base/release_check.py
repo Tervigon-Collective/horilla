@@ -1,5 +1,5 @@
 """
-Tell superusers when a newer Horilla release has been published.
+Tell admins and HR when a newer Horilla release has been published.
 
 The GitHub lookup is cached and only ever made from the background request the
 notice loads with, so a slow or unreachable GitHub never delays a page.
@@ -78,7 +78,10 @@ def available_update():
 
 @login_required
 def release_update_notice(request):
-    if not request.user.is_superuser:
+    from employee.cbv.accessibility import is_hr_user
+
+    # Admins and HR (who can add/edit employees) see the notice.
+    if not is_hr_user(request):
         return HttpResponse("")
     release = available_update()
     if not release:

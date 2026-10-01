@@ -275,7 +275,7 @@
         >
         </button>
 
-        {% if request.user.is_superuser %}
+        {% if request.user.is_superuser or perms.employee.change_employee or perms.employee.add_employee %}
             <div id="releaseUpdateNotice"
                  hx-get="{% url 'release-update-notice' %}"
                  hx-trigger="load delay:2s"
