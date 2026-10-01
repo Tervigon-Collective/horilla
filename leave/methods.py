@@ -246,7 +246,13 @@ def leave_requests_awaiting_approval(request):
         if multi_ids:
             normal_requests = normal_requests.exclude(id__in=multi_ids)
 
-    return (normal_requests | multiple_approvals).distinct()
+    # One side can be DISTINCT (company manager / filters) and the other not,
+    # and Django refuses to OR those together ("Cannot combine a unique query
+    # with a non-unique query"), which crashed the approvals inbox API.
+    return LeaveRequest.objects.filter(
+        Q(id__in=normal_requests.values("id"))
+        | Q(id__in=multiple_approvals.values("id"))
+    ).distinct()
 
 
 def leave_approval_progress(leave_request) -> dict:

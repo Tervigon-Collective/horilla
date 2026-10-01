@@ -457,9 +457,10 @@ class LeaveAllocationRequestGetSerializer(serializers.ModelSerializer):
         return None
 
     def get_created_by(self, obj):
-        created_by = obj.created_by
-        if created_by:
-            return EmployeeGetSerializer(created_by).data
+        # created_by is a user account; serialize the employee behind it.
+        employee = getattr(obj.created_by, "employee_get", None)
+        if employee:
+            return EmployeeGetSerializer(employee).data
         return None
 
 

@@ -1365,7 +1365,9 @@ class AttendanceMonthlySummaryAPIView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    @method_decorator(manager_permission_required("attendance.view_attendance"))
+    # The API decorator already takes (self, request); method_decorator
+    # dropped self, so every call failed with a missing-argument TypeError.
+    @manager_permission_required("attendance.view_attendance")
     def get(self, request):
         import calendar
         import datetime
@@ -1414,6 +1416,19 @@ class AttendanceMonthlySummaryAPIView(APIView):
         rows, total_working, summary_totals = build_monthly_summary(
             from_date, to_date, employee_qs
         )
+        # Rows carry the Employee instance for the web templates; the API
+        # couldn't JSON-encode it (TypeError on every call).
+        rows = [
+            {
+                **row,
+                "employee": {
+                    "id": row["employee"].id,
+                    "name": row["employee"].get_full_name(),
+                    "badge_id": row["employee"].badge_id,
+                },
+            }
+            for row in rows
+        ]
 
         return Response(
             {

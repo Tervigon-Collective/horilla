@@ -6,7 +6,7 @@ from django.db.models import Q
 from django.http import QueryDict
 from rest_framework.pagination import PageNumberPagination
 
-from employee.models import EmployeeWorkInformation
+from employee.models import Employee, EmployeeWorkInformation
 
 
 def mobile_file_path(file_field):
@@ -86,27 +86,37 @@ def permission_based_queryset(user, perm, queryset, user_obj=None):
     # is no per-employee predicate to apply on such a model, and returning
     # the unfiltered queryset would hand a permissionless caller everything,
     # so the correct answer is an empty queryset.
-    if not any(f.name == "employee_id" for f in queryset.model._meta.fields):
+    field = next(
+        (f for f in queryset.model._meta.fields if f.name == "employee_id"), None
+    )
+    if field is None:
         return queryset.none()
+    # employee_id normally points at Employee, but on e.g. offboarding notes
+    # and tasks it points at OffboardingEmployee (which has its own
+    # employee_id); filtering those by an Employee raised ValueError (500).
+    path = "employee_id"
+    if field.related_model is not Employee:
+        inner = next(
+            (
+                f
+                for f in field.related_model._meta.fields
+                if f.name == "employee_id" and f.related_model is Employee
+            ),
+            None,
+        )
+        if inner is None:
+            return queryset.none()
+        path = "employee_id__employee_id"
 
+    own = Q(**{path: employee})
+    reports = Q(**{f"{path}__employee_work_info__reporting_manager_id": employee})
     is_manager = EmployeeWorkInformation.objects.filter(
         reporting_manager_id=employee
     ).exists()
     if is_manager:
-        if user_obj:
-            return queryset.filter(
-                Q(employee_id=employee)
-                | Q(employee_id__employee_work_info__reporting_manager_id=employee)
-            )
-        manager_filter = Q(employee_id=employee)
-        subordinates_filter = Q(
-            employee_id__employee_work_info__reporting_manager_id=employee
-        )
-        merged_filter = manager_filter | subordinates_filter
-        merged_queryset = queryset.filter(merged_filter)
-        return merged_queryset
+        return queryset.filter(own | reports)
 
-    return queryset.filter(employee_id=employee)
+    return queryset.filter(own)
 
 
 def reject_reason_from(request):
