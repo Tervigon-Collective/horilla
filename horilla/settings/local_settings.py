@@ -60,3 +60,11 @@ STORAGES = {
         "BACKEND": "horilla.static_storage.ForgivingManifestStaticFilesStorage"
     },
 }
+
+# Real client IP for django-axes lockouts and attendance IP rules. nginx sets
+# X-Real-IP to $remote_addr (overwriting any client value) and gunicorn only
+# listens on 127.0.0.1, so it can't be spoofed. Don't use AXES_PROXY_COUNT:
+# nginx appends to X-Forwarded-For, which made the client-supplied (spoofable)
+# entry win and returned no IP for normal visitors.
+AXES_IPWARE_PROXY_COUNT = None
+AXES_IPWARE_META_PRECEDENCE_ORDER = ["HTTP_X_REAL_IP", "REMOTE_ADDR"]
