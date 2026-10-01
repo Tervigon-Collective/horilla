@@ -135,7 +135,7 @@ class AllowanceForm(ModelForm):
                     condition.save()
                     multiple_conditions.append(condition)
         except Exception as e:
-            logger(e)
+            logger.exception("Saving payroll component conditions failed: %s", e)
         if commit:
             self.instance.other_conditions.add(*multiple_conditions)
         return multiple_conditions
