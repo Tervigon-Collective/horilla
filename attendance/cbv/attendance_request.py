@@ -2,6 +2,7 @@
 Attendance requests
 """
 
+from horilla.record_access import EmployeeRecordAccessMixin
 import json
 from typing import Any
 
@@ -460,10 +461,12 @@ class AllAttendanceTabShell(AttendanceTabContentShell):
 
 
 @method_decorator(login_required, name="dispatch")
-class AttendanceListTabDetailView(HorillaDetailedView):
+class AttendanceListTabDetailView(EmployeeRecordAccessMixin, HorillaDetailedView):
     """
     Detail view of page
     """
+    # Only own / direct reports' records unless the user can view all.
+    access_perm = "attendance.view_attendance"
 
     model = Attendance
 

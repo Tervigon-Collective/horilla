@@ -2,6 +2,7 @@
 My attendances
 """
 
+from horilla.record_access import EmployeeRecordAccessMixin
 from typing import Any
 
 from django.urls import reverse
@@ -222,10 +223,12 @@ class MyAttendancestNav(HorillaNavView):
 
 
 @method_decorator(login_required, name="dispatch")
-class MyAttendancesDetailView(HorillaDetailedView):
+class MyAttendancesDetailView(EmployeeRecordAccessMixin, HorillaDetailedView):
     """
     Detail View
     """
+    # Only own / direct reports' records unless the user can view all.
+    access_perm = "attendance.view_attendance"
 
     model = Attendance
 

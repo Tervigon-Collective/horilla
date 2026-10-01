@@ -2,6 +2,7 @@
 this page is handling the cbv methods of  attendances page
 """
 
+from horilla.record_access import can_see_all, employee_scope_q
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -838,10 +839,11 @@ class ValidateAttendancesIndividualTabView(AttendancesListView):
             employee_id=pk,
             attendance_validated=False,
         )
-        queryset = (
-            filtersubordinates(self.request, queryset, "attendance.view_attendance")
-            | queryset
-        )
+        # Was `filtersubordinates(...) | queryset`, which OR'd the filtered
+        # rows back with the unfiltered ones: anyone could list any employee's
+        # attendance by changing the pk.
+        if not can_see_all(self.request, "attendance.view_attendance"):
+            queryset = queryset.filter(employee_scope_q(self.request))
         return queryset
 
     selected_instances_key_id = "validateselectedInstances"

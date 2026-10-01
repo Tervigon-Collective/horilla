@@ -2,6 +2,7 @@
 This page is handled the cbv of my leave request page
 """
 
+from horilla.record_access import EmployeeRecordAccessMixin
 import contextlib
 from datetime import datetime
 from typing import Any
@@ -266,10 +267,12 @@ class MyLeaveRequestNavView(HorillaNavView):
 
 
 @method_decorator(login_required, name="dispatch")
-class MyLeaveRequestDetailView(HorillaDetailedView):
+class MyLeaveRequestDetailView(EmployeeRecordAccessMixin, HorillaDetailedView):
     """
     detail view of page
     """
+    # Only own / direct reports' records unless the user can view all.
+    access_perm = "leave.view_leaverequest"
 
     model = LeaveRequest
     title = _("Details")

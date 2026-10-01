@@ -2,6 +2,7 @@
 employee view page
 """
 
+from horilla.record_access import EmployeeRecordAccessMixin
 import logging
 import threading
 from typing import Any
@@ -503,10 +504,13 @@ class TabEmployeeWorkList(HorillaListView):
 
 
 @method_decorator(login_required, name="dispatch")
-class EmployeeWorkDetails(HorillaDetailedView):
+class EmployeeWorkDetails(EmployeeRecordAccessMixin, HorillaDetailedView):
     """
     Employee Detail View
     """
+    # Only own / direct reports' records unless the user can view all.
+    access_perm = "employee.view_employee"
+    employee_lookup = ""
 
     title = _("Work Information")
     model = Employee

@@ -2,6 +2,7 @@
 Hour account page
 """
 
+from horilla.record_access import EmployeeRecordAccessMixin
 from typing import Any
 
 from django.contrib import messages
@@ -215,10 +216,12 @@ class HourExportView(TemplateView):
 
 
 @method_decorator(login_required, name="dispatch")
-class HourAccountDetailView(HorillaDetailedView):
+class HourAccountDetailView(EmployeeRecordAccessMixin, HorillaDetailedView):
     """
     Detail View
     """
+    # Only own / direct reports' records unless the user can view all.
+    access_perm = "attendance.view_attendanceovertime"
 
     model = AttendanceOverTime
     title = _("Details")

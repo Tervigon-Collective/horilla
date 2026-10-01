@@ -406,6 +406,15 @@ def validate_attendance_request(request, attendance_id):
         attendance_id : attendance id
     """
     attendance = Attendance.find(attendance_id)
+    from horilla.record_access import can_see_all, employee_scope_q
+
+    # Only the owner, their manager, or attendance viewers may open a request;
+    # any logged-in user could read a colleague's by changing the id.
+    if attendance and not can_see_all(request, "attendance.view_attendance"):
+        if not Attendance.objects.filter(
+            employee_scope_q(request), pk=attendance.pk
+        ).exists():
+            attendance = None
     if not attendance:
         return HorillaRedirect(
             request, message=_("No Attendance found matching the query.")
