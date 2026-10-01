@@ -72,7 +72,8 @@ def save_report_template(request):
     if existing and existing.visibility == ReportTemplate.VISIBILITY_SYSTEM:
         return JsonResponse({"error": "Cannot overwrite system templates."}, status=403)
 
-    template, _created = ReportTemplate.objects.update_or_create(
+    # _base_manager: update_or_create locks (FOR UPDATE), which Postgres rejects with the company manager's DISTINCT.
+    template, _created = ReportTemplate._base_manager.update_or_create(
         report_slug=report_slug,
         name=name,
         created_by=request.user,

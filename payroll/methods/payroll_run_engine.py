@@ -545,7 +545,8 @@ def archive_payroll_snapshots(run: PayrollRun) -> int:
 
     count = 0
     for slip in Payslip.objects.filter(payroll_run=run).select_related("employee_id"):
-        PayrollRunSnapshot.objects.update_or_create(
+        # _base_manager: update_or_create locks (FOR UPDATE), which Postgres rejects with the company manager's DISTINCT.
+        PayrollRunSnapshot._base_manager.update_or_create(
             payroll_run=run,
             employee_id=slip.employee_id,
             defaults={

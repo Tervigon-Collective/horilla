@@ -785,7 +785,8 @@ def standard_report_presets(request, slug):
     if not isinstance(filters, dict):
         return JsonResponse({"error": _("Invalid filters.")}, status=400)
 
-    preset, created = ReportFilterPreset.objects.update_or_create(
+    # _base_manager: update_or_create locks (FOR UPDATE), which Postgres rejects with the company manager's DISTINCT.
+    preset, created = ReportFilterPreset._base_manager.update_or_create(
         user=request.user,
         report_slug=slug,
         name=name,

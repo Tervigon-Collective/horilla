@@ -238,7 +238,8 @@ def form16_view(request, emp_id):
                 gettext("No payslips found for this financial year. Form 16 was not saved."),
             )
         else:
-            Form16Record.objects.update_or_create(
+            # _base_manager: update_or_create locks (FOR UPDATE), which Postgres rejects with the company manager's DISTINCT.
+            Form16Record._base_manager.update_or_create(
                 employee_id=employee,
                 financial_year_start=fy_start,
                 defaults={

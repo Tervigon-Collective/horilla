@@ -1313,7 +1313,8 @@ def employee_creation(request, token):
             employee_personal_info.is_from_onboarding = True
             employee_personal_info.save()
 
-            EmployeeWorkInformation.objects.update_or_create(
+            # _base_manager: update_or_create locks (FOR UPDATE), which Postgres rejects with the company manager's DISTINCT.
+            EmployeeWorkInformation._base_manager.update_or_create(
                 employee_id=employee_personal_info,
                 defaults={
                     "department_id": candidate.job_position_id.department_id,

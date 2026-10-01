@@ -310,6 +310,10 @@ def validate_time_format(value):
     """
     this method is used to validate the format of duration like fields.
     """
+    if not value:
+        # A blank field reached here as None and crashed on .count() (500).
+        raise ValidationError(_("This field is required."))
+    value = str(value)
     if value.count(":") == 2:
         # If the format is "H:MM:SS", check if it can be reduced to "HH:MM"
         # Django's DurationField internally converts it to a timedelta object, it becomes "0:00:00"
