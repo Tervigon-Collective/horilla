@@ -956,6 +956,31 @@ def clock_out(request):
         if request.__dict__.get("datetime"):
             datetime_now = request.datetime
         employee, work_info = employee_exists(request)
+        if employee and not request.__dict__.get("datetime"):
+            # The button flips to Check-out as soon as it's clicked, so a
+            # double click checked people straight back out (and the next
+            # click "restarted" the day). Ignore a check-out within 2 minutes
+            # of the check-in.
+            open_punch = (
+                AttendanceActivity.objects.filter(
+                    employee_id=employee, clock_out__isnull=True
+                )
+                .order_by("-clock_in_date", "-clock_in")
+                .first()
+            )
+            if open_punch:
+                punched_in = timezone.make_aware(
+                    datetime.combine(open_punch.clock_in_date, open_punch.clock_in)
+                )
+                if timezone.localtime() - punched_in < timedelta(minutes=2):
+                    messages.info(
+                        request,
+                        _(
+                            "You checked in less than 2 minutes ago, so this "
+                            "check-out was ignored. You are still checked in."
+                        ),
+                    )
+                    return HorillaRedirect(request)
         if validate_request_location:
             ok, geofence_error = validate_request_location(request)
             if not ok:
