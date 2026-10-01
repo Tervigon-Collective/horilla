@@ -1,5 +1,14 @@
 # Build stage - for compiling dependencies
 FROM python:3.12-slim AS builder
+# Build-host networking: no IPv6 route, and 2 of the 4 deb.debian.org (Fastly)
+# addresses time out from here, so apt failed at random. Use the kernel.org
+# mirror for main/updates, security.debian.org for security, IPv4 + retries.
+RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "10";\n' > /etc/apt/apt.conf.d/99network \
+    && sed -i \
+        -e 's|http://deb.debian.org/debian-security|http://security.debian.org/debian-security|' \
+        -e 's|http://deb.debian.org/debian$|http://mirrors.edge.kernel.org/debian|' \
+        /etc/apt/sources.list.d/debian.sources
+
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -57,6 +66,15 @@ RUN pip show en_core_web_sm | grep -qx "Version: ${SPACY_MODEL_VERSION}" \
 
 # Production stage - minimal runtime image
 FROM python:3.12-slim AS production
+# Build-host networking: no IPv6 route, and 2 of the 4 deb.debian.org (Fastly)
+# addresses time out from here, so apt failed at random. Use the kernel.org
+# mirror for main/updates, security.debian.org for security, IPv4 + retries.
+RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "10";\n' > /etc/apt/apt.conf.d/99network \
+    && sed -i \
+        -e 's|http://deb.debian.org/debian-security|http://security.debian.org/debian-security|' \
+        -e 's|http://deb.debian.org/debian$|http://mirrors.edge.kernel.org/debian|' \
+        /etc/apt/sources.list.d/debian.sources
+
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
