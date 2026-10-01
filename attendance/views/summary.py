@@ -540,7 +540,6 @@ def build_monthly_summary(from_date, to_date, employee_qs):
                 and _d not in _unpaid_dates
                 and _d not in _resolutions
                 and _meta["real_punches"]
-                and not _meta["missing"]
             )
             _offset_days.append(
                 {
@@ -548,7 +547,9 @@ def build_monthly_summary(from_date, to_date, employee_qs):
                     "worked": _att_secs.get(_d, 0),
                     "min_secs": _meta["min_secs"],
                     "ot": _emp_ot_map.get(_d, 0),
-                    "bank": _regular_day,
+                    # A missed-punch day's own hours are provisional, so it
+                    # doesn't add overtime, but it can still be topped up.
+                    "bank": _regular_day and not _meta["missing"],
                     "half": _regular_day and _val == 0.5,
                 }
             )
@@ -1668,8 +1669,8 @@ def _build_calendar_context(emp, from_date, to_date):
             and _d not in resolutions_map
             and _r.get("attendance_clock_in")
             and _r.get("attendance_clock_out")
-            and not (_r.get("missing_punch_in") or _r.get("missing_punch_out"))
         )
+        _missing = bool(_r.get("missing_punch_in") or _r.get("missing_punch_out"))
         _is_half = (
             _min > 0 and max(0, _min - grace_secs) > _w >= _min / 2
         )
@@ -1679,7 +1680,7 @@ def _build_calendar_context(emp, from_date, to_date):
                 "worked": _w,
                 "min_secs": _min,
                 "ot": _r["overtime_second"] or 0,
-                "bank": bool(_regular_day),
+                "bank": bool(_regular_day and not _missing),
                 "half": bool(_regular_day and _is_half),
             }
         )
