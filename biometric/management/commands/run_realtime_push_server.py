@@ -1,5 +1,6 @@
 """
-Receive punches pushed by Realtime Biometric devices (FK web-push protocol).
+Receive punches pushed by Realtime Biometric devices (FK web-push protocol),
+and hand them queued commands (e.g. pushing employee names) when they poll.
 
 Run as its own service with the device's "Web Server URL" pointing here:
 
@@ -52,14 +53,21 @@ def _serve(conn):
         if headers is None:
             return
         code = headers.get("request_code", "")
-        response_code = handle_message(code, headers.get("dev_id", ""), body)
-        trans = headers.get("trans_id")
-        extra = f"trans_id: {trans}\r\n" if trans else ""
+        if code != "receive_cmd":
+            logger.warning("Realtime push: %s from %s", code, headers.get("dev_id"))
+        response_code, extra, payload = handle_message(
+            code, headers.get("dev_id", ""), body, headers
+        )
+        if "trans_id" not in extra and headers.get("trans_id"):
+            extra["trans_id"] = headers["trans_id"]
+        lines = "".join(f"{k}: {v}\r\n" for k, v in extra.items() if v)
         conn.sendall(
             (
-                f"HTTP/1.0 200 OK\r\nresponse_code: {response_code}\r\n{extra}"
-                "Content-Length: 0\r\nConnection: close\r\n\r\n"
+                f"HTTP/1.0 200 OK\r\nresponse_code: {response_code}\r\n{lines}"
+                "Content-Type: application/octet-stream\r\n"
+                f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n"
             ).encode()
+            + payload
         )
     except Exception:
         logger.exception("Realtime push: request failed")

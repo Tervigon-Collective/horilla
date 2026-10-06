@@ -26,6 +26,7 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 DOUBLE_TAP = timedelta(minutes=2)
+COMMAND_TIMEOUT = timedelta(minutes=5)
 
 
 def parse_body(body):
@@ -149,17 +150,91 @@ def process_pending():
         apply_punch(log)
 
 
-def handle_message(request_code, serial, body):
-    """Process one push message; returns the response_code to send back."""
+def frame_json(data):
+    """A command body: length-prefixed, NUL-terminated JSON (the device's own framing)."""
+    raw = json.dumps(data).encode("utf-8") + b"\x00"
+    return struct.pack("<I", len(raw)) + raw
+
+
+def queue_command(device, cmd_code, params):
+    from biometric.models import RealtimeDeviceCommand
+
+    return RealtimeDeviceCommand.objects.create(
+        device_id=device, cmd_code=cmd_code, params=params
+    )
+
+
+def next_command(device):
+    """The oldest waiting command for this poll, marked sent. Commands go one at
+    a time: the next is handed out only once the previous reported back (or
+    timed out), so the device never has two user writes in flight."""
+    from biometric.models import RealtimeDeviceCommand
+
+    commands = RealtimeDeviceCommand.objects.filter(device_id=device)
+    commands.filter(
+        status="sent", updated_at__lt=timezone.now() - COMMAND_TIMEOUT
+    ).update(status="error", result="no reply from device", updated_at=timezone.now())
+    if commands.filter(status="sent").exists():
+        return None
+    command = commands.filter(status="waiting").order_by("pk").first()
+    if command:
+        command.status = "sent"
+        command.save(update_fields=["status", "updated_at"])
+    return command
+
+
+_result_blocks = {}  # (serial, trans_id) -> {blk_no: bytes}; results come in blocks N..1, then 0
+
+
+def record_result(device, headers, body):
+    from biometric.models import RealtimeDeviceCommand
+
+    trans_id = headers.get("trans_id", "")
+    blk_no = int(headers.get("blk_no") or 0)
+    key = (device.serial_number, trans_id)
+    if blk_no:
+        _result_blocks.setdefault(key, {})[blk_no] = body
+        return
+    parts = _result_blocks.pop(key, {})
+    body = b"".join(parts[n] for n in sorted(parts)) + body
+    if not trans_id.isdigit():
+        return
+    command = RealtimeDeviceCommand.objects.filter(
+        device_id=device, pk=int(trans_id)
+    ).first()
+    if command is None:
+        return
+    return_code = headers.get("cmd_return_code", "OK")
+    command.return_code = return_code[:40]
+    command.status = "ok" if return_code == "OK" else "error"
+    payload = parse_body(body)
+    command.result = json.dumps(payload)[:20000] if payload else ""
+    command.save(update_fields=["return_code", "status", "result", "updated_at"])
+
+
+def handle_message(request_code, serial, body, headers=None):
+    """Process one push message; returns (response_code, extra headers, body)."""
+    headers = headers or {}
     close_old_connections()
-    if request_code == "receive_cmd":
-        return "ERROR_NO_CMD"
     device = find_device(serial)
     if device is None:
         # Acknowledge so an unregistered device doesn't flood us; nothing is stored.
-        return "OK"
+        return "OK", {}, b""
+    if request_code == "receive_cmd":
+        command = next_command(device)
+        if command is None:
+            # Plain OK = "nothing to do"; the device keeps polling (~10 s).
+            return "OK", {}, b""
+        return (
+            "OK",
+            {"trans_id": str(command.pk), "cmd_code": command.cmd_code},
+            frame_json(command.params),
+        )
+    if request_code == "send_cmd_result":
+        record_result(device, headers, body)
+        return "OK", {"trans_id": headers.get("trans_id", "")}, b""
     if request_code == "realtime_glog":
         log = record_punch(device, parse_body(body))
         if log is not None:
             apply_punch(log)
-    return "OK"
+    return "OK", {}, b""

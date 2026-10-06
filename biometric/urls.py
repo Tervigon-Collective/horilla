@@ -121,6 +121,11 @@ urlpatterns = [
         name="add-biometric-user",
     ),
     path(
+        "push-realtime-users/<uuid:device_id>/",
+        views.push_realtime_users,
+        name="push-realtime-users",
+    ),
+    path(
         "map-biometric-users/<uuid:device_id>/",
         views.map_biometric_users,
         name="map-biometric-users",

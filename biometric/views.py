@@ -18,6 +18,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
+from django.views.decorators.http import require_http_methods
 from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
 from django.utils import timezone as django_timezone
@@ -1269,11 +1270,13 @@ def biometric_device_employees(request, device_id, **kwargs):
                 return render(
                     request, "biometric_users/dahua/view_dahua_employees.html", context
                 )
-            if device.machine_type == "etimeoffice":
+            if device.machine_type in ("etimeoffice", "realtime"):
+                # Realtime devices push to us, so the list is the stored links.
                 employees = BiometricEmployees.objects.filter(device_id=device_id)
                 context = {
                     "device_id": device.id,
                     "employees": employees,
+                    "realtime": device.machine_type == "realtime",
                 }
                 return render(
                     request,
@@ -1334,7 +1337,7 @@ def search_employee_device(request):
             "device_id": device_id,
             "pd": previous_data,
         }
-    elif device.machine_type == "dahua" or device.machine_type == "etimeoffice":
+    elif device.machine_type in ("dahua", "etimeoffice", "realtime"):
         search_employees = BiometricEmployees.objects.filter(device_id=device)
         if search:
             search_employees = search_employees.filter(
@@ -1349,6 +1352,7 @@ def search_employee_device(request):
         context = {
             "device_id": device.id,
             "employees": search_employees,
+            "realtime": device.machine_type == "realtime",
         }
 
     else:
@@ -1840,9 +1844,13 @@ def map_biometric_users(request, device_id):
     form = MapBioUsers(request.POST or None)
     template = "biometric_users/dahua/map_dahua_users.html"
 
-    if device.machine_type == "etimeoffice":
+    if device.machine_type in ("etimeoffice", "realtime"):
         template = "biometric_users/etimeoffice/map_etimeoffice_users.html"
-        form.fields["user_id"].label = _("Emp Code")
+        form.fields["user_id"].label = (
+            _("Device User ID")
+            if device.machine_type == "realtime"
+            else _("Emp Code")
+        )
 
     if request.method == "POST" and form.is_valid():
         user_id = form.cleaned_data["user_id"]
@@ -1858,8 +1866,12 @@ def map_biometric_users(request, device_id):
             )
             form = MapBioUsers()
 
-            if device.machine_type == "etimeoffice":
-                form.fields["user_id"].label = _("Emp Code")
+            if device.machine_type in ("etimeoffice", "realtime"):
+                form.fields["user_id"].label = (
+                    _("Device User ID")
+                    if device.machine_type == "realtime"
+                    else _("Emp Code")
+                )
 
     return render(
         request,
@@ -2711,3 +2723,47 @@ register_job(
     job_id="biometric.poll_devices",
     minutes=1,
 )
+
+
+def realtime_device_name(employee):
+    """The name shown on the device screen; this firmware keeps only 8 characters."""
+    return employee.get_full_name().strip()[:8]
+
+
+@login_required
+@install_required
+@require_http_methods(["POST"])
+@permission_required("biometric.change_biometricdevices")
+def push_realtime_users(request, device_id):
+    """
+    Queue every linked employee's name for a Realtime device. SET_USER_NAME
+    creates the user if the device doesn't have it and leaves enrolled faces
+    untouched (SET_USER_INFO would rebuild the device's user table). The device
+    collects the commands on its next polls.
+    """
+    from biometric.realtime_push import queue_command
+
+    device = BiometricDevices.find(device_id)
+    if device is None or device.machine_type != "realtime":
+        messages.error(request, _("Biometric device not found"))
+        return redirect(biometric_devices_view)
+    links = BiometricEmployees.objects.filter(device_id=device).select_related(
+        "employee_id"
+    )
+    for link in links:
+        queue_command(
+            device,
+            "SET_USER_NAME",
+            {
+                "user_id": link.user_id,
+                "user_name": realtime_device_name(link.employee_id),
+            },
+        )
+    messages.success(
+        request,
+        _(
+            "{} employees queued for the device. It picks them up on its next "
+            "polls; this takes a few minutes."
+        ).format(links.count()),
+    )
+    return redirect("biometric-device-employees", device_id=device.id)

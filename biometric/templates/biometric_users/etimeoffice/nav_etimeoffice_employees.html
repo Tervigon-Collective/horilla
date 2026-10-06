@@ -53,6 +53,17 @@
                                     {% trans "Map Employee" %}
                                 </a>
                             </li>
+                            {% if realtime and perms.biometric.change_biometricdevices %}
+                                <li class="oh-dropdown__item">
+                                    <form method="post" action="{% url 'push-realtime-users' device_id %}"
+                                        onsubmit="return confirm('{% trans "Send all linked employees (ID and name) to the device? Enrolled faces are not changed." %}')">
+                                        {% csrf_token %}
+                                        <button type="submit" class="oh-dropdown__link" style="border:0;background:none;width:100%;text-align:left">
+                                            {% trans "Push Employees to Device" %}
+                                        </button>
+                                    </form>
+                                </li>
+                            {% endif %}
                             {% if perms.delete_biometricdevices %}
                                 <li class="oh-dropdown__item">
                                     <a

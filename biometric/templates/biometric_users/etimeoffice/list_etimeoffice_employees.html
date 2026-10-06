@@ -11,7 +11,7 @@
                 </div>
                 <div class="oh-sticky-table__th">{% trans "Employee" %}</div>
                 <div class="oh-sticky-table__th">{% trans "Badge ID" %}</div>
-                <div class="oh-sticky-table__th">{% trans "Emp Code" %}</div>
+                <div class="oh-sticky-table__th">{% if realtime %}{% trans "Device User ID" %}{% else %}{% trans "Emp Code" %}{% endif %}</div>
                 <div class="oh-sticky-table__th">{% trans "Work Email" %}</div>
                 <div class="oh-sticky-table__th">{% trans "Phone" %}</div>
                 <div class="oh-sticky-table__th">{% trans "Job Position" %}</div>

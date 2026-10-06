@@ -448,3 +448,38 @@ class RealtimePunchLog(models.Model):
 
     def __str__(self):
         return f"{self.user_id} @ {self.punch_time:%Y-%m-%d %H:%M:%S}"
+
+
+class RealtimeDeviceCommand(models.Model):
+    """
+    A command queued for a Realtime (web push) device. The device can't be
+    called; it collects one waiting command each time it polls (receive_cmd)
+    and reports the outcome back (send_cmd_result), matched by trans_id = pk.
+    """
+
+    STATUS = [
+        ("waiting", _("Waiting for device")),
+        ("sent", _("Sent")),
+        ("ok", _("Done")),
+        ("error", _("Failed")),
+    ]
+
+    device_id = models.ForeignKey(
+        BiometricDevices, on_delete=models.CASCADE, related_name="realtime_commands"
+    )
+    cmd_code = models.CharField(max_length=40)
+    params = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS, default="waiting")
+    return_code = models.CharField(max_length=40, blank=True, default="")
+    result = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    objects = models.Manager()
+
+    class Meta:
+        verbose_name = _("Realtime Device Command")
+        verbose_name_plural = _("Realtime Device Commands")
+        indexes = [models.Index(fields=["device_id", "status"])]
+
+    def __str__(self):
+        return f"{self.cmd_code} {self.params} ({self.status})"
