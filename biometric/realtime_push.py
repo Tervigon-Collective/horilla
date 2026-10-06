@@ -147,6 +147,8 @@ def apply_punch(log):
         time=local.time(),
         datetime=log.punch_time,
     )
+    # Attach device IP so punch_point_from_request picks it up
+    request.META._remote_addr = "132.154.65.28"
     has_open_punch = AttendanceActivity.objects.filter(
         employee_id=employee, clock_out__isnull=True
     ).exists()
@@ -158,6 +160,19 @@ def apply_punch(log):
         log.result = f"error: {exc}"[:200]
     log.processed = True
     log.save(update_fields=["processed", "result"])
+    # Tag the just-created AttendanceActivity with device location
+    from attendance.models import AttendanceActivity
+    act = AttendanceActivity.objects.filter(
+        employee_id=employee, attendance_date=local.date()
+    ).order_by("-id").first()
+    if act:
+        act.punch_location = {
+            "in" if log.result == "check-in" else "out": {
+                "ip": "132.154.65.28",
+                "address": "Office - Realtime Pro T304 Mini (132.154.65.28)",
+            }
+        }
+        act.save(update_fields=["punch_location"])
     return log.result
 
 
@@ -347,6 +362,34 @@ def follow_up(device, command):
                 },
                 binary=bytes(face.data),
             )
+
+    # If SET_USER_INFO just created a new user, attach their HRMS avatar as device thumbnail
+    if command.cmd_code == "SET_USER_INFO" and command.status == "ok":
+        from employee.models import Employee
+        from biometric.models import BiometricEmployees
+        link = BiometricEmployees.objects.filter(
+            device_id=device, user_id=params.get("user_id")
+        ).select_related("employee_id").first()
+        if link and link.employee_id and link.employee_id.employee_profile:
+            try:
+                avatar_field = link.employee_id.employee_profile
+                if avatar_field:
+                    photo = avatar_field.read()
+                    if photo:
+                        queue_command(
+                            device,
+                            "SET_USER_INFO",
+                            {
+                                "user_id": params["user_id"],
+                                "user_name": params.get("user_name", ""),
+                                "user_privilege": "USER",
+                                "enroll_data_array": [],
+                                "user_photo": "BIN_1",
+                            },
+                            binary=photo,
+                        )
+            except Exception:
+                logger.exception("Biometric: failed to send HRMS avatar to device")
 
 
 _last_noted = {}
