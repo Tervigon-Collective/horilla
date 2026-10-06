@@ -24,6 +24,14 @@ from employee.models import Employee
 logger = logging.getLogger(__name__)
 
 
+def badge_user_id_from_str(badge_id):
+    """Extract numeric suffix from badge string ("PEP0031" -> "31"), or None."""
+    if not badge_id:
+        return None
+    match = re.search(r"(\d+)\s*$", badge_id)
+    return str(int(match.group(1))) if match else None
+
+
 def badge_user_id(employee):
     """Device user id from the badge number ("PEP0031" -> "31"), or None."""
     match = re.search(r"(\d+)\s*$", employee.badge_id or "")
@@ -67,13 +75,36 @@ def sync_employee(employee_pk, old):
                 device_id=device, employee_id=employee, user_id=user_id,
                 ref_user_id=int(user_id),
             )
-        elif old.get("is_active", True) and old.get("name") == name:
+        elif old.get("is_active", True) and old.get("name") == name and old.get("badge_id") == employee.badge_id:
             continue  # nothing the device shows has changed
-        # SET_USER_NAME renames; a user the device lacks is created and given
-        # their saved face by realtime_push.follow_up.
-        queue_command(
-            device, "SET_USER_NAME", {"user_id": link.user_id, "user_name": name}
-        )
+
+        # Badge ID changed -> device user ID must change
+        old_badge_id = old.get("badge_id")
+        new_user_id = badge_user_id(employee)
+        if old_badge_id and new_user_id and badge_user_id_from_str(old_badge_id) != new_user_id:
+            # Delete old device user
+            if link:
+                queue_command(device, "DELETE_USER", {"user_id": link.user_id})
+            # Create new device user with new ID
+            link = BiometricEmployees.objects.update_or_create(
+                device_id=device, employee_id=employee,
+                defaults={"user_id": new_user_id, "ref_user_id": int(new_user_id)}
+            )[0]
+            queue_command(
+                device,
+                "SET_USER_INFO",
+                {"user_id": new_user_id, "user_name": name, "user_privilege": "USER", "enroll_data_array": []},
+            )
+        # Reactivation after deactivation: device user was deleted, so use
+        # SET_USER_INFO to create (follow_up will then push saved faces).
+        elif not old.get("is_active", True) and employee.is_active:
+            queue_command(
+                device,
+                "SET_USER_INFO",
+                {"user_id": link.user_id, "user_name": name, "user_privilege": "USER", "enroll_data_array": []},
+            )
+        else:
+            queue_command(device, "SET_USER_NAME", {"user_id": link.user_id, "user_name": name})
 
 
 @receiver(pre_save, sender=Employee)

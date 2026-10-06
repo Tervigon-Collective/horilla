@@ -141,9 +141,28 @@ def apply_punch(log):
         return log.result
 
     local = timezone.localtime(log.punch_time)
+    # Night-shift date boundary: same logic as web clock-in
+    # Shift day runs noon-to-noon; punches before 12:00 belong to previous day
+    punch_time_local = log.punch_time.astimezone(timezone.get_current_timezone())
+    shift = resolve_effective_shift(employee, log.punch_time)
+    mid_day_sec = 12 * 3600
+    punch_sec = punch_time_local.hour * 3600 + punch_time_local.minute * 60 + punch_time_local.second
+    if shift:
+        schedule = shift_schedule_today(
+            day=str(punch_time_local.strftime("%A")).lower(),
+            shift=shift
+        )
+        if schedule[1] > schedule[2] and punch_sec < mid_day_sec:
+            # Night shift crossing midnight: attendance date is previous day
+            attendance_date = punch_time_local.date() - timedelta(days=1)
+        else:
+            attendance_date = punch_time_local.date()
+    else:
+        attendance_date = punch_time_local.date()
+
     request = Request(
         user=employee.employee_user_id,
-        date=local.date(),
+        date=attendance_date,
         time=local.time(),
         datetime=log.punch_time,
     )
@@ -163,7 +182,7 @@ def apply_punch(log):
     # Tag the just-created AttendanceActivity with device location
     from attendance.models import AttendanceActivity
     act = AttendanceActivity.objects.filter(
-        employee_id=employee, attendance_date=local.date()
+        employee_id=employee, attendance_date=attendance_date
     ).order_by("-id").first()
     if act:
         act.punch_location = {
