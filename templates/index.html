@@ -152,6 +152,12 @@
                             </div>
                             <!-- End of check in/out button in nav bar -->
                         {% endif %}
+            {% if "attendance"|app_installed %}
+                {# Device punches happen outside the browser: refresh the button when its state changes. #}
+                <span hidden hx-get="{% url 'punch-button' %}" hx-target="#attendance-activity-container" hx-swap="innerHTML"
+                    hx-trigger="every 30s, visibilitychange[document.visibilityState==='visible'] from:document"
+                    hx-vals='js:{shown: document.querySelector("#attendance-activity-container .check.checkout") ? "checkout" : "checkin"}'></span>
+            {% endif %}
 
                         {% if show_section %}
                             <!-- Start of settings button in nav bar -->

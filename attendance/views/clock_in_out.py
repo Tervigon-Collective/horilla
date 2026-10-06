@@ -1063,3 +1063,27 @@ def clock_out(request):
             ),
         )
         return HorillaRedirect(request)
+
+
+@login_required
+def punch_button(request):
+    """
+    The navbar Check-in/Check-out button, re-rendered only when its state
+    changed. Punches on the biometric device happen outside the browser, so
+    the page polls this; 204 (htmx: no swap) while the shown state is right.
+    """
+    employee = getattr(request.user, "employee_get", None)
+    if employee is None:
+        return HttpResponse(status=204)
+    from attendance.templatetags.attendancefilters import is_clocked_in
+
+    forecast = employee.get_forecasted_at_work()
+    has_attendance = forecast.get("has_attendance") if isinstance(forecast, dict) else forecast
+    clocked_in = bool(is_clocked_in(request.user) and has_attendance)
+    if request.GET.get("shown") == ("checkout" if clocked_in else "checkin"):
+        return HttpResponse(status=204)
+    return render(
+        request,
+        "attendance/components/in_out_component.html",
+        {"run": 1 if clocked_in else 0},
+    )

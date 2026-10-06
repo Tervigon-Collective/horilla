@@ -352,6 +352,7 @@ urlpatterns = [
         name="wfh-requests-count",
     ),
     path("clock-out/", clock_in_out.clock_out, name="clock-out"),
+    path("punch-button/", clock_in_out.punch_button, name="punch-button"),
     path(
         "on-time-view/",
         views.on_time_view,

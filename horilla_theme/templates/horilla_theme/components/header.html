@@ -39,6 +39,12 @@
                     {% include "attendance/components/in_out_component.html" %}
                 </div>
             {% endif %}
+            {% if "attendance"|app_installed %}
+                {# Device punches happen outside the browser: refresh the button when its state changes. #}
+                <span hidden hx-get="{% url 'punch-button' %}" hx-target="#attendance-activity-container" hx-swap="innerHTML"
+                    hx-trigger="every 30s, visibilitychange[document.visibilityState==='visible'] from:document"
+                    hx-vals='js:{shown: document.querySelector("#attendance-activity-container .check.checkout") ? "checkout" : "checkin"}'></span>
+            {% endif %}
             <button
                 id="themeToggleButton"
                 class="md:block p-2 group text-primary-600 w-12 h-12 bg-primary-100 hover:bg-primary-600 rounded-full transition duration-300 flex items-center justify-center"
