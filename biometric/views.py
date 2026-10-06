@@ -1277,6 +1277,7 @@ def biometric_device_employees(request, device_id, **kwargs):
                     "device_id": device.id,
                     "employees": employees,
                     "realtime": device.machine_type == "realtime",
+                    "face_saved": realtime_face_users(),
                 }
                 return render(
                     request,
@@ -1353,6 +1354,7 @@ def search_employee_device(request):
             "device_id": device.id,
             "employees": search_employees,
             "realtime": device.machine_type == "realtime",
+            "face_saved": realtime_face_users(),
         }
 
     else:
@@ -2725,6 +2727,13 @@ register_job(
 )
 
 
+def realtime_face_users():
+    """Device user ids (unpadded) whose face is saved in Horilla."""
+    from biometric.models import BiometricFaceData
+
+    return set(BiometricFaceData.objects.values_list("device_user_id", flat=True))
+
+
 def realtime_device_name(employee):
     """First name for the device screen; this firmware keeps only 8 characters."""
     return ((employee.employee_first_name or "").split() or [""])[0][:8]
@@ -2741,7 +2750,8 @@ def push_realtime_users(request, device_id):
     untouched (SET_USER_INFO would rebuild the device's user table). The device
     collects the commands on its next polls.
     """
-    from biometric.realtime_push import queue_command
+    from biometric.models import BiometricFaceData
+    from biometric.realtime_push import normalize_user_id, queue_command
 
     device = BiometricDevices.find(device_id)
     if device is None or device.machine_type != "realtime":
@@ -2750,6 +2760,7 @@ def push_realtime_users(request, device_id):
     links = BiometricEmployees.objects.filter(device_id=device).select_related(
         "employee_id"
     )
+    faces = 0
     for link in links:
         queue_command(
             device,
@@ -2759,11 +2770,27 @@ def push_realtime_users(request, device_id):
                 "user_name": realtime_device_name(link.employee_id),
             },
         )
+        # Saved faces go back with SET_ENROLL_DATA, which only fills an empty
+        # slot: a face already on the device is left as it is.
+        for face in BiometricFaceData.objects.filter(
+            device_user_id=normalize_user_id(link.user_id)
+        ):
+            queue_command(
+                device,
+                "SET_ENROLL_DATA",
+                {
+                    "user_id": link.user_id,
+                    "backup_number": face.backup_number,
+                    "enroll_data": "BIN_1",
+                },
+                binary=bytes(face.data),
+            )
+            faces += 1
     messages.success(
         request,
         _(
-            "{} employees queued for the device. It picks them up on its next "
-            "polls; this takes a few minutes."
-        ).format(links.count()),
+            "{} employees and {} saved faces queued for the device. It picks "
+            "them up on its next polls; this takes a few minutes."
+        ).format(links.count(), faces),
     )
     return redirect("biometric-device-employees", device_id=device.id)

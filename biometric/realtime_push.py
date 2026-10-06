@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 DOUBLE_TAP = timedelta(minutes=2)
 COMMAND_TIMEOUT = timedelta(minutes=5)
+MAX_MESSAGE = 4 * 1024 * 1024
 
 
 def parse_body(body):
@@ -38,6 +39,24 @@ def parse_body(body):
         return json.loads(body[4 : 4 + length].decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
         return {}
+
+
+def split_blocks(body):
+    """The length-prefixed blocks of a message: [JSON, BIN_1, BIN_2, ...]."""
+    blocks, offset = [], 0
+    while offset + 4 <= len(body):
+        length = struct.unpack("<I", body[offset : offset + 4])[0]
+        offset += 4
+        if length == 0 or offset + length > len(body):
+            break
+        blocks.append(body[offset : offset + length])
+        offset += length
+    return blocks
+
+
+def normalize_user_id(user_id):
+    """Device ids arrive zero-padded ("00000022"); store them as shown ("22")."""
+    return str(user_id or "").strip().lstrip("0") or "0"
 
 
 def find_device(serial):
@@ -90,7 +109,7 @@ def apply_punch(log):
 
     # The device pushes ids zero-padded ("00000022") but shows them as "22";
     # accept a link stored either way.
-    device_user = log.user_id.lstrip("0") or "0"
+    device_user = normalize_user_id(log.user_id)
     mapping = (
         BiometricEmployees.objects.filter(
             device_id=device, user_id__in={log.user_id, device_user}
@@ -150,18 +169,88 @@ def process_pending():
         apply_punch(log)
 
 
-def frame_json(data):
-    """A command body: length-prefixed, NUL-terminated JSON (the device's own framing)."""
+def frame_json(data, binary=None):
+    """A command body: length-prefixed, NUL-terminated JSON (the device's own
+    framing), then the binary the JSON calls "BIN_1" as its own block."""
     raw = json.dumps(data).encode("utf-8") + b"\x00"
-    return struct.pack("<I", len(raw)) + raw
+    body = struct.pack("<I", len(raw)) + raw
+    if binary:
+        body += struct.pack("<I", len(binary)) + bytes(binary)
+    return body
 
 
-def queue_command(device, cmd_code, params):
+def queue_command(device, cmd_code, params, binary=None):
     from biometric.models import RealtimeDeviceCommand
 
     return RealtimeDeviceCommand.objects.create(
-        device_id=device, cmd_code=cmd_code, params=params
+        device_id=device, cmd_code=cmd_code, params=params, binary=binary
     )
+
+
+def save_enrollment(device, body):
+    """Keep the face data and photo a device sent when someone enrolled: the
+    templates go to BiometricFaceData, the photo becomes the linked employee's
+    avatar."""
+    from biometric.models import BiometricEmployees, BiometricFaceData
+
+    blocks = split_blocks(body)
+    try:
+        info = json.loads(blocks[0].rstrip(b"\x00").decode("utf-8"))
+    except (IndexError, ValueError, UnicodeDecodeError):
+        return
+
+    def binary(ref):
+        ref = str(ref or "")
+        if ref.startswith("BIN_") and ref[4:].isdigit() and int(ref[4:]) < len(blocks):
+            return blocks[int(ref[4:])]
+        return None
+
+    raw_id = str(info.get("user_id") or "").strip()
+    if not raw_id:
+        return
+    user_id = normalize_user_id(raw_id)
+    link = (
+        BiometricEmployees.objects.filter(
+            device_id=device, user_id__in={raw_id, user_id}
+        )
+        .select_related("employee_id")
+        .first()
+    )
+    employee = link.employee_id if link else None
+    for entry in info.get("enroll_data_array") or []:
+        data = binary(entry.get("enroll_data"))
+        if data is None or entry.get("backup_number") is None:
+            continue
+        BiometricFaceData.objects.update_or_create(
+            device_user_id=user_id,
+            backup_number=int(entry["backup_number"]),
+            defaults={"data": data, "employee_id": employee, "source_device": device},
+        )
+    photo = binary(info.get("user_photo"))
+    if employee and photo:
+        set_avatar(employee, photo)
+    logger.warning(
+        "Realtime push: saved enrolment of device user %s (%s)", user_id, employee
+    )
+
+
+def set_avatar(employee, photo):
+    """Use the device's enrolment photo as the employee's Horilla avatar."""
+    import io
+
+    from django.core.files.base import ContentFile
+    from PIL import Image
+
+    from employee.models import Employee
+
+    try:
+        Image.open(io.BytesIO(photo)).verify()
+    except Exception:
+        return
+    field = employee.employee_profile
+    field.save(f"biometric-{employee.pk}.jpg", ContentFile(photo), save=False)
+    # update() skips Employee.save()'s side effects; only the picture changes.
+    Employee.objects.filter(pk=employee.pk).update(employee_profile=field.name)
 
 
 def next_command(device):
@@ -183,20 +272,28 @@ def next_command(device):
     return command
 
 
-_result_blocks = {}  # (serial, trans_id) -> {blk_no: bytes}; results come in blocks N..1, then 0
+# Large messages (photos, templates) arrive in parts: blk_no 1, 2, ... then the
+# last part with blk_no 0. (serial, request_code, trans_id) -> {blk_no: bytes}
+_partial = {}
+
+
+def assemble(serial, request_code, headers, body):
+    """The whole message once its last part arrives, else None."""
+    blk_no = int(headers.get("blk_no") or 0)
+    key = (serial, request_code, headers.get("trans_id", ""))
+    if blk_no:
+        parts = _partial.setdefault(key, {})
+        if sum(map(len, parts.values())) + len(body) <= MAX_MESSAGE:
+            parts[blk_no] = body
+        return None
+    parts = _partial.pop(key, {})
+    return b"".join(parts[n] for n in sorted(parts)) + body
 
 
 def record_result(device, headers, body):
     from biometric.models import RealtimeDeviceCommand
 
     trans_id = headers.get("trans_id", "")
-    blk_no = int(headers.get("blk_no") or 0)
-    key = (device.serial_number, trans_id)
-    if blk_no:
-        _result_blocks.setdefault(key, {})[blk_no] = body
-        return
-    parts = _result_blocks.pop(key, {})
-    body = b"".join(parts[n] for n in sorted(parts)) + body
     if not trans_id.isdigit():
         return
     command = RealtimeDeviceCommand.objects.filter(
@@ -220,6 +317,10 @@ def handle_message(request_code, serial, body, headers=None):
     if device is None:
         # Acknowledge so an unregistered device doesn't flood us; nothing is stored.
         return "OK", {}, b""
+    if request_code != "receive_cmd":
+        body = assemble(serial, request_code, headers, body)
+        if body is None:
+            return "OK", {}, b""  # more parts to come
     if request_code == "receive_cmd":
         command = next_command(device)
         if command is None:
@@ -228,8 +329,11 @@ def handle_message(request_code, serial, body, headers=None):
         return (
             "OK",
             {"trans_id": str(command.pk), "cmd_code": command.cmd_code},
-            frame_json(command.params),
+            frame_json(command.params, command.binary),
         )
+    if request_code == "realtime_enroll_data":
+        save_enrollment(device, body)
+        return "OK", {}, b""
     if request_code == "send_cmd_result":
         record_result(device, headers, body)
         return "OK", {"trans_id": headers.get("trans_id", "")}, b""

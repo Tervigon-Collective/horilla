@@ -469,6 +469,7 @@ class RealtimeDeviceCommand(models.Model):
     )
     cmd_code = models.CharField(max_length=40)
     params = models.JSONField(default=dict, blank=True)
+    binary = models.BinaryField(null=True, blank=True)  # sent as the BIN_1 block
     status = models.CharField(max_length=10, choices=STATUS, default="waiting")
     return_code = models.CharField(max_length=40, blank=True, default="")
     result = models.TextField(blank=True, default="")
@@ -483,3 +484,38 @@ class RealtimeDeviceCommand(models.Model):
 
     def __str__(self):
         return f"{self.cmd_code} {self.params} ({self.status})"
+
+
+class BiometricFaceData(models.Model):
+    """
+    Enrolment data (face template etc.) a Realtime device sent when someone
+    enrolled, kept so the device can be refilled after a reset or a second
+    device set up without everyone enrolling again. Keyed by the device user
+    id without zero padding ("22"); backup_number 12 = face.
+    """
+
+    device_user_id = models.CharField(max_length=32)
+    backup_number = models.IntegerField()
+    data = models.BinaryField()
+    employee_id = models.ForeignKey(
+        Employee, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="biometric_face_data",
+    )
+    source_device = models.ForeignKey(
+        BiometricDevices, on_delete=models.SET_NULL, null=True, blank=True
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    objects = models.Manager()
+
+    class Meta:
+        verbose_name = _("Biometric Face Data")
+        verbose_name_plural = _("Biometric Face Data")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["device_user_id", "backup_number"],
+                name="unique_biometric_face_data",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.device_user_id} #{self.backup_number}"

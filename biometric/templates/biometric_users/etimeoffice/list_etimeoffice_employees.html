@@ -12,6 +12,7 @@
                 <div class="oh-sticky-table__th">{% trans "Employee" %}</div>
                 <div class="oh-sticky-table__th">{% trans "Badge ID" %}</div>
                 <div class="oh-sticky-table__th">{% if realtime %}{% trans "Device User ID" %}{% else %}{% trans "Emp Code" %}{% endif %}</div>
+                {% if realtime %}<div class="oh-sticky-table__th">{% trans "Face saved" %}</div>{% endif %}
                 <div class="oh-sticky-table__th">{% trans "Work Email" %}</div>
                 <div class="oh-sticky-table__th">{% trans "Phone" %}</div>
                 <div class="oh-sticky-table__th">{% trans "Job Position" %}</div>
@@ -38,6 +39,11 @@
                     <div class="oh-sticky-table__td">
                         {{employee.user_id}}
                     </div>
+                    {% if realtime %}
+                        <div class="oh-sticky-table__td">
+                            {% if employee.user_id in face_saved %}{% trans "Yes" %}{% else %}<span class="text-muted">{% trans "Not yet" %}</span>{% endif %}
+                        </div>
+                    {% endif %}
                     <div class="oh-sticky-table__td">
                         {{employee.employee_id.employee_work_info.email}}
                     </div>
