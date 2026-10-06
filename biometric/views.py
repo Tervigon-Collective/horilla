@@ -2770,22 +2770,9 @@ def push_realtime_users(request, device_id):
                 "user_name": realtime_device_name(link.employee_id),
             },
         )
-        # Saved faces go back with SET_ENROLL_DATA, which only fills an empty
-        # slot: a face already on the device is left as it is.
-        for face in BiometricFaceData.objects.filter(
+        faces += BiometricFaceData.objects.filter(
             device_user_id=normalize_user_id(link.user_id)
-        ):
-            queue_command(
-                device,
-                "SET_ENROLL_DATA",
-                {
-                    "user_id": link.user_id,
-                    "backup_number": face.backup_number,
-                    "enroll_data": "BIN_1",
-                },
-                binary=bytes(face.data),
-            )
-            faces += 1
+        ).count()  # sent once the device confirms the user (follow_up)
     messages.success(
         request,
         _(

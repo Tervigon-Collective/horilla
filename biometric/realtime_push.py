@@ -307,6 +307,43 @@ def record_result(device, headers, body):
     payload = parse_body(body)
     command.result = json.dumps(payload)[:20000] if payload else ""
     command.save(update_fields=["return_code", "status", "result", "updated_at"])
+    follow_up(device, command)
+
+
+def follow_up(device, command):
+    """Next step of pushing a user. SET_USER_NAME only renames on this
+    firmware, so a user the device doesn't have is created with SET_USER_INFO
+    (safe: SET_USER_INFO is only dangerous on a user who already has a face).
+    Once the user exists, saved faces are sent with SET_ENROLL_DATA, which
+    only fills an empty slot."""
+    from biometric.models import BiometricFaceData
+
+    params = command.params or {}
+    if command.cmd_code == "SET_USER_NAME" and command.return_code == "ERROR_NOT_EXIST":
+        queue_command(
+            device,
+            "SET_USER_INFO",
+            {
+                "user_id": params["user_id"],
+                "user_name": params.get("user_name", ""),
+                "user_privilege": "USER",
+                "enroll_data_array": [],
+            },
+        )
+    elif command.cmd_code in ("SET_USER_NAME", "SET_USER_INFO") and command.status == "ok":
+        for face in BiometricFaceData.objects.filter(
+            device_user_id=normalize_user_id(params.get("user_id"))
+        ):
+            queue_command(
+                device,
+                "SET_ENROLL_DATA",
+                {
+                    "user_id": params["user_id"],
+                    "backup_number": face.backup_number,
+                    "enroll_data": "BIN_1",
+                },
+                binary=bytes(face.data),
+            )
 
 
 def handle_message(request_code, serial, body, headers=None):
