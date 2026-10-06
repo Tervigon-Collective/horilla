@@ -682,7 +682,7 @@ def can_manage_subordinate(request, employee, perm):
 
 def choosesubordinatesemployeemodel(request, form, perm):
     user = request.user
-    if user.has_perm(perm):
+    if has_org_wide_perm(user, perm):
         return form
     manager = Employee.objects.filter(employee_user_id=user).first()
     queryset = Employee.objects.filter(employee_work_info__reporting_manager_id=manager)

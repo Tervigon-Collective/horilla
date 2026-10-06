@@ -2934,8 +2934,10 @@ def filtersubordinates(request, queryset, perm=None, field=None):
     """
     This method is used to filter out subordinates queryset element.
     """
+    from base.methods import has_org_wide_perm
+
     user = request.user
-    if user.has_perm(perm):
+    if has_org_wide_perm(user, perm):
         return queryset
     manager = Employee.objects.filter(employee_user_id=user).first()
     if manager:

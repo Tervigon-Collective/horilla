@@ -337,7 +337,9 @@ def _scoped_active_employee_ids(request):
     ``None`` means company-scoped (HorillaCompanyManager) — no extra filter.
     """
     user = request.user
-    if user.is_superuser or user.has_perm("employee.view_employee"):
+    from base.methods import has_org_wide_perm
+
+    if has_org_wide_perm(user, "employee.view_employee"):
         return None
     try:
         from base.methods import filtersubordinatesemployeemodel
@@ -1442,9 +1444,11 @@ def get_hr_alerts_counts(request) -> dict:
     from base.templatetags.basefilters import is_reportingmanager
 
     user = request.user
+    from base.methods import has_org_wide_perm
+
     can_view = (
-        user.is_superuser
-        or user.has_perm("employee.view_employee")
+        has_org_wide_perm(user, "employee.view_employee")
+        or user.is_superuser
         or user.has_perm("employee.change_employee")
         or user.has_perm("horilla_documents.view_document")
         or user.has_perm("horilla_documents.view_documentrequest")
@@ -1521,7 +1525,9 @@ def dashboard_turnover(request):
     Exit counts prefer shared report exit helper when available.
     """
     user = request.user
-    if not (user.has_perm("employee.view_employee") or user.is_superuser):
+    from base.methods import has_org_wide_perm
+
+    if not has_org_wide_perm(user, "employee.view_employee"):
         return JsonResponse({"no_permission": True})
 
     _from_date, to_date = _parse_period(request)

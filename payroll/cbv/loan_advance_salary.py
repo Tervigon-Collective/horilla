@@ -11,6 +11,7 @@ from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 
 from attendance.cbv.tab_shell import AttendanceTabContentShell
+from horilla.record_access import EmployeeRecordAccessMixin
 from horilla_views.cbv_methods import login_required, permission_required
 from horilla_views.generic.cbv.views import (
     HorillaDetailedView,
@@ -61,7 +62,12 @@ class LoansGenericTab(HorillaTabView):
         ]
 
     def get_context_data(self, **kwargs):
+        from base.methods import has_org_wide_perm
+
         qs = LoanAccount.objects.all()
+        if not has_org_wide_perm(self.request.user, "payroll.view_loanaccount"):
+            emp = getattr(self.request.user, "employee_get", None)
+            qs = qs.filter(employee_id=emp) if emp else LoanAccount.objects.none()
         filter_class = LoanAccountFilter
         if filter_class:
             qs = filter_class(
@@ -109,8 +115,17 @@ class LoanListView(HorillaListView):
         """
         queryset for rendering loan data only
         """
+        from base.methods import has_org_wide_perm
+
         queryset = super().get_queryset()
         queryset = queryset.filter(type="loan")
+        if not has_org_wide_perm(self.request.user, "payroll.view_loanaccount"):
+            emp = getattr(self.request.user, "employee_get", None)
+            queryset = (
+                queryset.filter(employee_id=emp)
+                if emp
+                else queryset.none()
+            )
         return queryset
 
     filter_class = LoanAccountFilter
@@ -179,6 +194,15 @@ class AdvancedSalaryList(LoanListView):
     def get_queryset(self):
         queryset = HorillaListView.get_queryset(self)
         queryset = queryset.filter(type="advanced_salary")
+        from base.methods import has_org_wide_perm
+
+        if not has_org_wide_perm(self.request.user, "payroll.view_loanaccount"):
+            emp = getattr(self.request.user, "employee_get", None)
+            queryset = (
+                queryset.filter(employee_id=emp)
+                if emp
+                else queryset.none()
+            )
         return queryset
 
 
@@ -196,6 +220,15 @@ class FinesListView(LoanListView):
     def get_queryset(self):
         queryset = HorillaListView.get_queryset(self)
         queryset = queryset.filter(type="fine")
+        from base.methods import has_org_wide_perm
+
+        if not has_org_wide_perm(self.request.user, "payroll.view_loanaccount"):
+            emp = getattr(self.request.user, "employee_get", None)
+            queryset = (
+                queryset.filter(employee_id=emp)
+                if emp
+                else queryset.none()
+            )
         return queryset
 
 
@@ -319,11 +352,13 @@ class FineTabShell(AttendanceTabContentShell):
 
 @method_decorator(login_required, name="dispatch")
 @method_decorator(permission_required("payroll.view_loanaccount"), name="dispatch")
-class LoanDetailView(HorillaDetailedView):
+class LoanDetailView(EmployeeRecordAccessMixin, HorillaDetailedView):
     """
     detail view for the loan page
     """
 
+    access_perm = "payroll.view_loanaccount"
+    employee_lookup = "employee_id"
     model = LoanAccount
     template_name = "cbv/loan/loan_detail_view.html"
 

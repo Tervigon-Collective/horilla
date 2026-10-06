@@ -128,7 +128,16 @@ def payroll_kpi_data(request):
     active_loans = 0
     loan_amount = 0
     try:
+        from base.methods import has_org_wide_perm
+
         loans = LoanAccount.objects.filter(settled=False)
+        if not has_org_wide_perm(request.user, "payroll.view_loanaccount"):
+            emp = getattr(request.user, "employee_get", None)
+            loans = (
+                loans.filter(employee_id=emp)
+                if emp
+                else LoanAccount.objects.none()
+            )
         active_loans = loans.count()
         loan_amount = loans.aggregate(
             total=Coalesce(Sum("loan_amount"), 0.0, output_field=FloatField())
@@ -139,9 +148,17 @@ def payroll_kpi_data(request):
     # Pending reimbursements
     pending_reimbursements = 0
     try:
-        pending_reimbursements = Reimbursement.objects.filter(
-            status="requested"
-        ).count()
+        from base.methods import has_org_wide_perm
+
+        reimb_qs = Reimbursement.objects.filter(status="requested")
+        if not has_org_wide_perm(request.user, "payroll.view_reimbursement"):
+            emp = getattr(request.user, "employee_get", None)
+            reimb_qs = (
+                reimb_qs.filter(employee_id=emp)
+                if emp
+                else Reimbursement.objects.none()
+            )
+        pending_reimbursements = reimb_qs.count()
     except Exception:
         pass
 

@@ -9,6 +9,8 @@ read a colleague's attendance, leave or hours by changing the number.
 
 from django.db.models import Q
 
+from base.methods import has_org_wide_perm
+
 
 def employee_scope_q(request, lookup="employee_id"):
     """Q() limiting rows to the requester and their direct reports.
@@ -26,8 +28,7 @@ def employee_scope_q(request, lookup="employee_id"):
 
 
 def can_see_all(request, perm):
-    user = request.user
-    return user.is_superuser or bool(perm and user.has_perm(perm))
+    return has_org_wide_perm(request.user, perm)
 
 
 class EmployeeRecordAccessMixin:

@@ -73,7 +73,9 @@ def permission_based_queryset(user, perm, queryset, user_obj=None):
     if not user.is_authenticated:
         return queryset.none()
 
-    if user.has_perm(perm):
+    from base.methods import has_org_wide_perm
+
+    if has_org_wide_perm(user, perm):
         return queryset
 
     employee = user.employee_get
