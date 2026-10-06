@@ -2727,7 +2727,7 @@ register_job(
 
 def realtime_device_name(employee):
     """The name shown on the device screen; this firmware keeps only 8 characters."""
-    return employee.get_full_name().strip()[:8]
+    return employee.get_full_name().strip()[:8].rstrip()
 
 
 @login_required
