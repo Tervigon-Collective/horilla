@@ -33,6 +33,12 @@ COMMAND_TIMEOUT = timedelta(minutes=5)
 MAX_MESSAGE = 4 * 1024 * 1024
 CONTACT_EVERY = timedelta(seconds=30)
 OFFLINE_AFTER = timedelta(minutes=30)
+# Web + device for the same action (check in on the phone, then the door).
+SAME_ACTION = timedelta(minutes=10)
+# A face enrolment logs a punch; its upload arrives within seconds of it.
+ENROLMENT_WINDOW = timedelta(seconds=90)
+# Punches wait this long before applying, so the enrolment upload can arrive.
+APPLY_AFTER = timedelta(seconds=30)
 
 
 def parse_body(body):
@@ -99,25 +105,92 @@ def record_punch(device, payload):
         return None  # the device re-sent a punch we already have
 
 
-def apply_punch(log):
-    """Turn a stored punch into a check-in/out. Leaves unmapped punches pending."""
-    from attendance.methods.utils import Request
-    from attendance.models import AttendanceActivity
-    from attendance.views.clock_in_out import clock_in, clock_out
-    from biometric.models import BiometricEmployees, RealtimePunchLog
+DEVICE_POINT = {
+    "ip": "132.154.65.28",
+    "address": "Office - Realtime Pro T304 Mini (132.154.65.28)",
+}
 
-    device = log.device_id
-    if log.punch_time < device.created_at:
-        log.processed, log.result = True, "history (before device go-live), stored only"
+
+def attendance_day(employee, punch_local):
+    """(attendance_date, EmployeeShiftDay, shift, minimum_hour, start_sec, end_sec)
+    for a punch. As with the web Check-in, a night shift's morning punches
+    belong to the previous day."""
+    from base.models import EmployeeShiftDay
+
+    shift = resolve_effective_shift(employee, punch_local)
+    date_today = punch_local.date()
+    day = EmployeeShiftDay.objects.filter(day=punch_local.strftime("%A").lower()).first()
+    minimum_hour, start_sec, end_sec = (
+        shift_schedule_today(day=day, shift=shift) if shift and day else ("00:00", 0, 0)
+    )
+    if start_sec > end_sec and punch_local.hour < 12:
+        yesterday = date_today - timedelta(days=1)
+        day = EmployeeShiftDay.objects.filter(day=yesterday.strftime("%A").lower()).first()
+        if day:
+            minimum_hour, start_sec, end_sec = shift_schedule_today(day=day, shift=shift)
+        date_today = yesterday
+    return date_today, day, shift, minimum_hour, start_sec, end_sec
+
+
+def _at(day, time):
+    return timezone.make_aware(datetime.combine(day, time))
+
+
+def is_enrolment_punch(log):
+    """The device logs a punch whenever someone enrolls a face (it verifies the
+    new face). Those aren't check-ins or check-outs."""
+    from biometric.models import BiometricFaceData
+
+    enrolled = BiometricFaceData.objects.filter(
+        device_user_id=normalize_user_id(log.user_id)
+    ).values_list("updated_at", flat=True)
+    return any(
+        min(abs(at - log.received_at), abs(at - log.punch_time)) <= ENROLMENT_WINDOW
+        for at in enrolled
+    )
+
+
+def tag_location(instance, key):
+    meta = dict(instance.punch_location or {})
+    meta[key] = DEVICE_POINT
+    type(instance).objects.filter(pk=instance.pk).update(punch_location=meta)
+
+
+def apply_punch(log):
+    """
+    Turn a stored punch into a check-in/out. The device doesn't say which, and
+    people also use the web Check-in button (WFH, or before reaching the
+    device), so the punch is read against the employee's last action from
+    either source:
+      - checked in less than SAME_ACTION ago, or checked out less than
+        SAME_ACTION ago -> the same action done twice (web + device): ignored;
+      - checked in (today)  -> check-out;
+      - otherwise           -> check-in (a check-in left open on an earlier
+        day is not closed at today's time).
+    Punches from face enrolment are ignored. Unmapped punches stay pending.
+    """
+    from attendance.models import Attendance, AttendanceActivity
+    from attendance.views.clock_in_out import (
+        clock_in_attendance_and_activity,
+        clock_out_attendance_and_activity,
+    )
+    from biometric.models import BiometricEmployees
+
+    def done(result):
+        log.processed, log.result = True, result[:200]
         log.save(update_fields=["processed", "result"])
         return log.result
 
+    device = log.device_id
+    if log.punch_time < device.created_at:
+        return done("history (before device go-live), stored only")
+
     # The device pushes ids zero-padded ("00000022") but shows them as "22";
     # accept a link stored either way.
-    device_user = normalize_user_id(log.user_id)
     mapping = (
         BiometricEmployees.objects.filter(
-            device_id=device, user_id__in={log.user_id, device_user}
+            device_id=device,
+            user_id__in={log.user_id, normalize_user_id(log.user_id)},
         )
         .select_related("employee_id__employee_user_id")
         .first()
@@ -126,97 +199,94 @@ def apply_punch(log):
         log.result = "pending: device user not linked to an employee"
         log.save(update_fields=["result"])
         return log.result
+    if is_enrolment_punch(log):
+        return done("ignored: face enrolment")
 
     employee = mapping.employee_id
-    previous = (
-        RealtimePunchLog.objects.filter(
-            device_id=device, user_id=log.user_id, processed=True,
-            punch_time__lt=log.punch_time,
-        )
-        .exclude(result__startswith="history")
-        .order_by("-punch_time")
+    punch = timezone.localtime(log.punch_time)
+    attendance_date, day, shift, minimum_hour, start_sec, end_sec = attendance_day(
+        employee, punch
+    )
+    hhmm = punch.strftime("%H:%M")
+
+    open_activity = (
+        AttendanceActivity.objects.filter(employee_id=employee, clock_out__isnull=True)
+        .order_by("-attendance_date", "-id")
         .first()
     )
-    if previous and log.punch_time - previous.punch_time < DOUBLE_TAP:
-        log.processed, log.result = True, "ignored: double tap"
-        log.save(update_fields=["processed", "result"])
-        return log.result
-
-    local = timezone.localtime(log.punch_time)
-    # Night-shift date boundary: same logic as web clock-in
-    # Shift day runs noon-to-noon; punches before 12:00 belong to previous day
-    punch_time_local = log.punch_time.astimezone(timezone.get_current_timezone())
-    shift = resolve_effective_shift(employee, log.punch_time)
-    mid_day_sec = 12 * 3600
-    punch_sec = punch_time_local.hour * 3600 + punch_time_local.minute * 60 + punch_time_local.second
-    if shift:
-        day_name = str(punch_time_local.strftime("%A")).lower()
-        from base.models import EmployeeShiftDay
-        try:
-            day_obj = EmployeeShiftDay.objects.get(day=day_name)
-            schedule = shift_schedule_today(day=day_obj, shift=shift)
-            if schedule[1] > schedule[2] and punch_sec < mid_day_sec:
-                # Night shift crossing midnight: attendance date is previous day
-                attendance_date = punch_time_local.date() - timedelta(days=1)
-            else:
-                attendance_date = punch_time_local.date()
-        except EmployeeShiftDay.DoesNotExist:
-            attendance_date = punch_time_local.date()
-    else:
-        attendance_date = punch_time_local.date()
-
-    request = Request(
-        user=employee.employee_user_id,
-        date=punch_time_local.date(),  # actual punch date -> clock_in_date
-        time=local.time(),
-        datetime=log.punch_time,
-    )
-    # Attach device IP so punch_point_from_request picks it up
-    request.META._remote_addr = "132.154.65.28"
-    has_open_punch = AttendanceActivity.objects.filter(
-        employee_id=employee, clock_out__isnull=True
-    ).exists()
+    if open_activity and open_activity.attendance_date < attendance_date:
+        open_activity = None  # forgotten check-out on an earlier day: leave it
     try:
-        (clock_out if has_open_punch else clock_in)(request)
-        log.result = "check-out" if has_open_punch else "check-in"
+        if open_activity:
+            opened = _at(open_activity.clock_in_date, open_activity.clock_in)
+            if timedelta(0) <= log.punch_time - opened < SAME_ACTION:
+                return done(f"ignored: already checked in at {opened:%H:%M}")
+            if log.punch_time < opened:
+                return done("ignored: older than the current check-in")
+            clock_out_attendance_and_activity(
+                employee=employee, date_today=punch.date(), now=hhmm,
+                out_datetime=punch,
+            )
+            tag_location(AttendanceActivity.objects.get(pk=open_activity.pk), "out")
+            result = "check-out"
+        else:
+            last = (
+                AttendanceActivity.objects.filter(
+                    employee_id=employee, attendance_date=attendance_date,
+                    clock_out__isnull=False,
+                )
+                .order_by("-clock_out_date", "-clock_out")
+                .first()
+            )
+            if last:
+                closed = _at(last.clock_out_date, last.clock_out)
+                if timedelta(0) <= log.punch_time - closed < SAME_ACTION:
+                    return done(f"ignored: already checked out at {closed:%H:%M}")
+                if log.punch_time < closed:
+                    return done("ignored: older than the last check-out")
+            clock_in_attendance_and_activity(
+                employee=employee, date_today=punch.date(),
+                attendance_date=attendance_date, day=day, now=hhmm, shift=shift,
+                minimum_hour=minimum_hour, start_time=start_sec, end_time=end_sec,
+                in_datetime=punch,
+            )
+            created = (
+                AttendanceActivity.objects.filter(employee_id=employee, clock_out__isnull=True)
+                .order_by("-id")
+                .first()
+            )
+            if created:
+                tag_location(created, "in")
+            result = "check-in"
+        attendance = Attendance.objects.filter(
+            employee_id=employee, attendance_date=attendance_date
+        ).first()
+        first_in = result == "check-in" and not AttendanceActivity.objects.filter(
+            employee_id=employee, attendance_date=attendance_date
+        ).exclude(clock_out__isnull=True).exists()
+        if attendance and (result == "check-out" or first_in):
+            # The day's check-in location is where the day started.
+            tag_location(attendance, "out" if result == "check-out" else "in")
     except Exception as exc:  # keep the receiver alive; the punch stays visible
         logger.exception("Realtime push: applying punch %s failed", log.pk)
-        log.result = f"error: {exc}"[:200]
-    log.processed = True
-    log.save(update_fields=["processed", "result"])
-    # Tag the just-created AttendanceActivity AND Attendance with device location
-    from attendance.models import AttendanceActivity, Attendance
-    device_point = {
-        "ip": "132.154.65.28",
-        "address": "Office - Realtime Pro T304 Mini (132.154.65.28)",
-    }
-    key = "in" if log.result == "check-in" else "out"
-    act = AttendanceActivity.objects.filter(
-        employee_id=employee, attendance_date=attendance_date
-    ).order_by("-id").first()
-    if act:
-        act.punch_location = {key: device_point}
-        act.save(update_fields=["punch_location"])
-    # Also update Attendance record
-    att = Attendance.objects.filter(
-        employee_id=employee, attendance_date=attendance_date
-    ).first()
-    if att:
-        meta = dict(att.punch_location or {})
-        meta[key] = device_point
-        att.punch_location = meta
-        att.save(update_fields=["punch_location"])
-    return log.result
+        result = f"error: {exc}"
+    return done(result)
 
 
 def process_pending():
-    """Apply punches that waited for an employee link (oldest first)."""
+    """Apply stored punches, oldest first, once they've waited APPLY_AFTER
+    (so a face enrolment's upload can arrive) -- also ones that waited for an
+    employee link."""
     from biometric.models import RealtimePunchLog
 
     close_old_connections()
-    for log in RealtimePunchLog.objects.filter(processed=False).select_related(
-        "device_id"
-    ).order_by("punch_time"):
+    for log in (
+        RealtimePunchLog.objects.filter(
+            processed=False, received_at__lte=timezone.now() - APPLY_AFTER
+        )
+        .select_related("device_id")
+        .order_by("punch_time")
+    ):
         apply_punch(log)
 
 
@@ -516,7 +586,6 @@ def handle_message(request_code, serial, body, headers=None):
         record_result(device, headers, body)
         return "OK", {"trans_id": headers.get("trans_id", "")}, b""
     if request_code == "realtime_glog":
-        log = record_punch(device, parse_body(body))
-        if log is not None:
-            apply_punch(log)
+        # Stored now, applied by process_pending after APPLY_AFTER.
+        record_punch(device, parse_body(body))
     return "OK", {}, b""

@@ -88,7 +88,7 @@ class Command(BaseCommand):
                     process_pending()
                 except Exception:
                     logger.exception("Realtime push: pending punches failed")
-                time.sleep(60)
+                time.sleep(10)
 
         threading.Thread(target=pending_loop, daemon=True).start()
         server = socket.socket()
