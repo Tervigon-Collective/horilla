@@ -87,8 +87,13 @@ def apply_punch(log):
         log.save(update_fields=["processed", "result"])
         return log.result
 
+    # The device pushes ids zero-padded ("00000022") but shows them as "22";
+    # accept a link stored either way.
+    device_user = log.user_id.lstrip("0") or "0"
     mapping = (
-        BiometricEmployees.objects.filter(device_id=device, user_id=log.user_id)
+        BiometricEmployees.objects.filter(
+            device_id=device, user_id__in={log.user_id, device_user}
+        )
         .select_related("employee_id__employee_user_id")
         .first()
     )
