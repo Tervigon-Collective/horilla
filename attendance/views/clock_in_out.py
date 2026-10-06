@@ -581,6 +581,20 @@ def clock_in(request):
                 return HorillaRedirect(request)
 
         employee, work_info = employee_exists(request)
+        if (
+            employee
+            and not request.__dict__.get("datetime")
+            and AttendanceActivity.objects.filter(
+                employee_id=employee, clock_out__isnull=True,
+                attendance_date__gte=date.today() - timedelta(days=1),
+            ).exists()
+        ):
+            # A stale button (e.g. the device already checked them in): a
+            # second check-in used to close the open session and start another.
+            messages.info(request, _("You are already checked in."))
+            return render(
+                request, "attendance/components/in_out_component.html", {"run": 1}
+            )
         datetime_now = timezone.localtime()
         if request.__dict__.get("datetime"):
             datetime_now = request.datetime
@@ -968,6 +982,12 @@ def clock_out(request):
                 .order_by("-clock_in_date", "-clock_in")
                 .first()
             )
+            if open_punch is None:
+                # A stale button (e.g. the device already checked them out).
+                messages.info(request, _("You are already checked out."))
+                return render(
+                    request, "attendance/components/in_out_component.html", {"run": 0}
+                )
             if open_punch:
                 punched_in = timezone.make_aware(
                     datetime.combine(open_punch.clock_in_date, open_punch.clock_in)
