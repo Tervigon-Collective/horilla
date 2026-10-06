@@ -30,7 +30,7 @@ DOUBLE_TAP = timedelta(minutes=2)
 COMMAND_TIMEOUT = timedelta(minutes=5)
 MAX_MESSAGE = 4 * 1024 * 1024
 CONTACT_EVERY = timedelta(seconds=30)
-OFFLINE_AFTER = timedelta(minutes=10)
+OFFLINE_AFTER = timedelta(minutes=30)
 
 
 def parse_body(body):
@@ -162,7 +162,7 @@ def apply_punch(log):
 
     request = Request(
         user=employee.employee_user_id,
-        date=attendance_date,
+        date=punch_time_local.date(),  # actual punch date -> clock_in_date
         time=local.time(),
         datetime=log.punch_time,
     )
@@ -179,19 +179,28 @@ def apply_punch(log):
         log.result = f"error: {exc}"[:200]
     log.processed = True
     log.save(update_fields=["processed", "result"])
-    # Tag the just-created AttendanceActivity with device location
-    from attendance.models import AttendanceActivity
+    # Tag the just-created AttendanceActivity AND Attendance with device location
+    from attendance.models import AttendanceActivity, Attendance
+    device_point = {
+        "ip": "132.154.65.28",
+        "address": "Office - Realtime Pro T304 Mini (132.154.65.28)",
+    }
+    key = "in" if log.result == "check-in" else "out"
     act = AttendanceActivity.objects.filter(
         employee_id=employee, attendance_date=attendance_date
     ).order_by("-id").first()
     if act:
-        act.punch_location = {
-            "in" if log.result == "check-in" else "out": {
-                "ip": "132.154.65.28",
-                "address": "Office - Realtime Pro T304 Mini (132.154.65.28)",
-            }
-        }
+        act.punch_location = {key: device_point}
         act.save(update_fields=["punch_location"])
+    # Also update Attendance record
+    att = Attendance.objects.filter(
+        employee_id=employee, attendance_date=attendance_date
+    ).first()
+    if att:
+        meta = dict(att.punch_location or {})
+        meta[key] = device_point
+        att.punch_location = meta
+        att.save(update_fields=["punch_location"])
     return log.result
 
 
@@ -218,6 +227,18 @@ def frame_json(data, binary=None):
 
 def queue_command(device, cmd_code, params, binary=None):
     from biometric.models import RealtimeDeviceCommand
+
+    # Avoid duplicate commands for same user/operation
+    user_id = str(params.get("user_id") or "")
+    if user_id:
+        exists = RealtimeDeviceCommand.objects.filter(
+            device_id=device,
+            cmd_code=cmd_code,
+            params__user_id=user_id,
+            status__in=["waiting", "sent"],
+        ).exists()
+        if exists:
+            return None
 
     return RealtimeDeviceCommand.objects.create(
         device_id=device, cmd_code=cmd_code, params=params, binary=binary
