@@ -343,6 +343,14 @@ def assemble(serial, request_code, headers, body):
         parts = _partial.setdefault(key, {})
         if sum(map(len, parts.values())) + len(body) <= MAX_MESSAGE:
             parts[blk_no] = body
+        # Cleanup stale partials (>5 min)
+        now = timezone.now()
+        stale = [k for k, v in _partial.items() if not v or
+                 (now - timezone.make_aware(
+                     datetime.fromtimestamp(int(k[2]) / 1000) if k[2].isdigit() else datetime.now()
+                 )) > timedelta(minutes=5)]
+        for k in stale:
+            _partial.pop(k, None)
         return None
     parts = _partial.pop(key, {})
     return b"".join(parts[n] for n in sorted(parts)) + body
