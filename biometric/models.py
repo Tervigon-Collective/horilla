@@ -55,6 +55,7 @@ class BiometricDevices(HorillaModel):
         ("cosec", _("Matrix COSEC Biometric")),
         ("dahua", _("Dahua Biometric")),
         ("etimeoffice", _("e-Time Office")),
+        ("realtime", _("Realtime Biometric (web push)")),
     ]
     BIO_DEVICE_DIRECTION = [
         ("in", _("In Device")),
@@ -94,6 +95,14 @@ class BiometricDevices(HorillaModel):
     )
     api_token = models.CharField(max_length=500, null=True, blank=True)
     api_expires = models.CharField(max_length=100, null=True, blank=True)
+    # Push devices (Realtime) identify themselves by serial number, not IP.
+    serial_number = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        unique=True,
+        verbose_name=_("Serial Number"),
+    )
     is_live = models.BooleanField(default=False, verbose_name=_("Is Live"))
     is_scheduler = models.BooleanField(default=False, verbose_name=_("Is Scheduled"))
     scheduler_duration = models.CharField(
@@ -328,6 +337,10 @@ class BiometricDevices(HorillaModel):
                             )
                         }
                     ) from exc
+        if self.machine_type == "realtime" and not self.serial_number:
+            required_fields["serial_number"] = _(
+                "The device serial number is required (Menu > System Info)."
+            )
         if required_fields:
             raise ValidationError(required_fields)
 
@@ -401,3 +414,37 @@ class COSECAttendanceArguments(models.Model):
 
     def __str__(self):
         return f"{self.device_id} - {self.last_fetch_roll_ovr_count} - {self.last_fetch_seq_number}"
+
+
+class RealtimePunchLog(models.Model):
+    """
+    Every punch a Realtime (web push) device sends, stored once. Punches are
+    applied to attendance as they arrive; ones from unmapped device users stay
+    unprocessed until the user is linked to an employee.
+    """
+
+    device_id = models.ForeignKey(
+        BiometricDevices, on_delete=models.CASCADE, related_name="realtime_punches"
+    )
+    user_id = models.CharField(max_length=32, verbose_name=_("Device User ID"))
+    punch_time = models.DateTimeField(verbose_name=_("Punch Time"))
+    io_mode = models.IntegerField(null=True, blank=True)
+    verify_mode = models.IntegerField(null=True, blank=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+    processed = models.BooleanField(default=False)
+    result = models.CharField(max_length=200, blank=True, default="")
+    objects = models.Manager()
+
+    class Meta:
+        verbose_name = _("Realtime Punch Log")
+        verbose_name_plural = _("Realtime Punch Logs")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["device_id", "user_id", "punch_time"],
+                name="unique_realtime_punch",
+            )
+        ]
+        indexes = [models.Index(fields=["processed", "punch_time"])]
+
+    def __str__(self):
+        return f"{self.user_id} @ {self.punch_time:%Y-%m-%d %H:%M:%S}"
