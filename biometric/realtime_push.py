@@ -21,6 +21,8 @@ import struct
 from datetime import datetime, timedelta
 
 from django.db import IntegrityError, close_old_connections
+from attendance.methods.effective_shift import resolve_effective_shift
+from attendance.methods.utils import shift_schedule_today
 from django.utils import timezone
 from django.utils.translation import gettext as _
 
@@ -148,14 +150,17 @@ def apply_punch(log):
     mid_day_sec = 12 * 3600
     punch_sec = punch_time_local.hour * 3600 + punch_time_local.minute * 60 + punch_time_local.second
     if shift:
-        schedule = shift_schedule_today(
-            day=str(punch_time_local.strftime("%A")).lower(),
-            shift=shift
-        )
-        if schedule[1] > schedule[2] and punch_sec < mid_day_sec:
-            # Night shift crossing midnight: attendance date is previous day
-            attendance_date = punch_time_local.date() - timedelta(days=1)
-        else:
+        day_name = str(punch_time_local.strftime("%A")).lower()
+        from base.models import EmployeeShiftDay
+        try:
+            day_obj = EmployeeShiftDay.objects.get(day=day_name)
+            schedule = shift_schedule_today(day=day_obj, shift=shift)
+            if schedule[1] > schedule[2] and punch_sec < mid_day_sec:
+                # Night shift crossing midnight: attendance date is previous day
+                attendance_date = punch_time_local.date() - timedelta(days=1)
+            else:
+                attendance_date = punch_time_local.date()
+        except EmployeeShiftDay.DoesNotExist:
             attendance_date = punch_time_local.date()
     else:
         attendance_date = punch_time_local.date()
