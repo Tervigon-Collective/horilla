@@ -39,6 +39,7 @@ SAME_ACTION = timedelta(minutes=10)
 ENROLMENT_WINDOW = timedelta(seconds=90)
 # Punches wait this long before applying, so the enrolment upload can arrive.
 APPLY_AFTER = timedelta(seconds=30)
+PARTIAL_TTL = timedelta(minutes=5)
 
 
 def parse_body(body):
@@ -303,17 +304,24 @@ def frame_json(data, binary=None):
 def queue_command(device, cmd_code, params, binary=None):
     from biometric.models import RealtimeDeviceCommand
 
-    # Avoid duplicate commands for same user/operation
-    user_id = str(params.get("user_id") or "")
-    if user_id:
-        exists = RealtimeDeviceCommand.objects.filter(
-            device_id=device,
-            cmd_code=cmd_code,
-            params__user_id=user_id,
+    # The same command already waiting (e.g. Push pressed twice): don't repeat
+    # it -- unless something else for that user was queued after it (rename,
+    # delete, rename again must all reach the device, in that order).
+    latest = (
+        RealtimeDeviceCommand.objects.filter(
+            device_id=device, params__user_id=params.get("user_id"),
             status__in=["waiting", "sent"],
-        ).exists()
-        if exists:
-            return None
+        )
+        .order_by("-pk")
+        .first()
+        if params.get("user_id")
+        else None
+    )
+    if (
+        latest and not binary and latest.cmd_code == cmd_code
+        and latest.params == params
+    ):
+        return None
 
     return RealtimeDeviceCommand.objects.create(
         device_id=device, cmd_code=cmd_code, params=params, binary=binary
@@ -406,7 +414,7 @@ def next_command(device):
 
 
 # Large messages (photos, templates) arrive in parts: blk_no 1, 2, ... then the
-# last part with blk_no 0. (serial, request_code, trans_id) -> {blk_no: bytes}
+# last part with blk_no 0. (serial, request_code, trans_id) -> (first seen, {blk_no: bytes})
 _partial = {}
 
 
@@ -415,19 +423,15 @@ def assemble(serial, request_code, headers, body):
     blk_no = int(headers.get("blk_no") or 0)
     key = (serial, request_code, headers.get("trans_id", ""))
     if blk_no:
-        parts = _partial.setdefault(key, {})
+        now = timezone.now()
+        # A message whose last part never came (device rebooted) is dropped.
+        for stale in [k for k, (started, _) in _partial.items() if now - started > PARTIAL_TTL]:
+            _partial.pop(stale, None)
+        started, parts = _partial.setdefault(key, (now, {}))
         if sum(map(len, parts.values())) + len(body) <= MAX_MESSAGE:
             parts[blk_no] = body
-        # Cleanup stale partials (>5 min)
-        now = timezone.now()
-        stale = [k for k, v in _partial.items() if not v or
-                 (now - timezone.make_aware(
-                     datetime.fromtimestamp(int(k[2]) / 1000) if k[2].isdigit() else datetime.now()
-                 )) > timedelta(minutes=5)]
-        for k in stale:
-            _partial.pop(k, None)
         return None
-    parts = _partial.pop(key, {})
+    _, parts = _partial.pop(key, (None, {}))
     return b"".join(parts[n] for n in sorted(parts)) + body
 
 
@@ -485,34 +489,6 @@ def follow_up(device, command):
                 },
                 binary=bytes(face.data),
             )
-
-    # If SET_USER_INFO just created a new user, attach their HRMS avatar as device thumbnail
-    if command.cmd_code == "SET_USER_INFO" and command.status == "ok":
-        from employee.models import Employee
-        from biometric.models import BiometricEmployees
-        link = BiometricEmployees.objects.filter(
-            device_id=device, user_id=params.get("user_id")
-        ).select_related("employee_id").first()
-        if link and link.employee_id and link.employee_id.employee_profile:
-            try:
-                avatar_field = link.employee_id.employee_profile
-                if avatar_field:
-                    photo = avatar_field.read()
-                    if photo:
-                        queue_command(
-                            device,
-                            "SET_USER_INFO",
-                            {
-                                "user_id": params["user_id"],
-                                "user_name": params.get("user_name", ""),
-                                "user_privilege": "USER",
-                                "enroll_data_array": [],
-                                "user_photo": "BIN_1",
-                            },
-                            binary=photo,
-                        )
-            except Exception:
-                logger.exception("Biometric: failed to send HRMS avatar to device")
 
 
 _last_noted = {}

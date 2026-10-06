@@ -24,14 +24,6 @@ from employee.models import Employee
 logger = logging.getLogger(__name__)
 
 
-def badge_user_id_from_str(badge_id):
-    """Extract numeric suffix from badge string ("PEP0031" -> "31"), or None."""
-    if not badge_id:
-        return None
-    match = re.search(r"(\d+)\s*$", badge_id)
-    return str(int(match.group(1))) if match else None
-
-
 def badge_user_id(employee):
     """Device user id from the badge number ("PEP0031" -> "31"), or None."""
     match = re.search(r"(\d+)\s*$", employee.badge_id or "")
@@ -45,14 +37,17 @@ def realtime_devices():
 
 
 def sync_employee(employee_pk, old):
-    from biometric.models import BiometricEmployees
-    from biometric.realtime_push import queue_command
+    from biometric.models import BiometricEmployees, BiometricFaceData
+    from biometric.realtime_push import normalize_user_id, queue_command
     from biometric.views import realtime_device_name
 
-    employee = Employee.objects.filter(pk=employee_pk).first()
+    # _base_manager: inside a request the default manager hides inactive
+    # employees, which made deactivations invisible here.
+    employee = Employee._base_manager.filter(pk=employee_pk).first()
     if employee is None:
         return
     name = realtime_device_name(employee)
+    user_id = badge_user_id(employee)
     for device in realtime_devices():
         link = BiometricEmployees.objects.filter(
             device_id=device, employee_id=employee
@@ -61,8 +56,23 @@ def sync_employee(employee_pk, old):
             if link and old.get("is_active"):
                 queue_command(device, "DELETE_USER", {"user_id": link.user_id})
             continue
+        if link and user_id and normalize_user_id(link.user_id) != user_id:
+            # Badge number changed: the person moves to the new device id.
+            if BiometricEmployees.objects.filter(device_id=device, user_id=user_id).exists():
+                logger.warning(
+                    "Biometric: device user %s already linked; %s keeps %s",
+                    user_id, employee, link.user_id,
+                )
+            else:
+                queue_command(device, "DELETE_USER", {"user_id": link.user_id})
+                if not BiometricFaceData.objects.filter(device_user_id=user_id).exists():
+                    BiometricFaceData.objects.filter(
+                        device_user_id=normalize_user_id(link.user_id)
+                    ).update(device_user_id=user_id)
+                link.user_id, link.ref_user_id = user_id, int(user_id)
+                link.save(update_fields=["user_id", "ref_user_id"])
+                old = {}  # recreate below
         if link is None:
-            user_id = badge_user_id(employee)
             if user_id is None:
                 continue
             if BiometricEmployees.objects.filter(device_id=device, user_id=user_id).exists():
@@ -75,43 +85,24 @@ def sync_employee(employee_pk, old):
                 device_id=device, employee_id=employee, user_id=user_id,
                 ref_user_id=int(user_id),
             )
-        elif old.get("is_active", True) and old.get("name") == name and old.get("badge_id") == employee.badge_id:
+        elif old.get("is_active") and old.get("name") == name:
             continue  # nothing the device shows has changed
-
-        # Badge ID changed -> device user ID must change
-        old_badge_id = old.get("badge_id")
-        new_user_id = badge_user_id(employee)
-        if old_badge_id and new_user_id and badge_user_id_from_str(old_badge_id) != new_user_id:
-            # Delete old device user
-            if link:
-                queue_command(device, "DELETE_USER", {"user_id": link.user_id})
-            # Create new device user with new ID
-            link = BiometricEmployees.objects.update_or_create(
-                device_id=device, employee_id=employee,
-                defaults={"user_id": new_user_id, "ref_user_id": int(new_user_id)}
-            )[0]
-            queue_command(
-                device,
-                "SET_USER_INFO",
-                {"user_id": new_user_id, "user_name": name, "user_privilege": "USER", "enroll_data_array": []},
-            )
-        # Reactivation after deactivation: device user was deleted, so use
-        # SET_USER_INFO to create (follow_up will then push saved faces).
-        elif not old.get("is_active", True) and employee.is_active:
-            queue_command(
-                device,
-                "SET_USER_INFO",
-                {"user_id": link.user_id, "user_name": name, "user_privilege": "USER", "enroll_data_array": []},
-            )
-        else:
-            queue_command(device, "SET_USER_NAME", {"user_id": link.user_id, "user_name": name})
+        # Always SET_USER_NAME first: it renames an existing user without
+        # touching their face. A user the device lacks (new, reactivated, new
+        # badge) answers ERROR_NOT_EXIST, and realtime_push.follow_up then
+        # creates them with SET_USER_INFO and sends their saved face.
+        queue_command(
+            device, "SET_USER_NAME", {"user_id": link.user_id, "user_name": name}
+        )
 
 
 @receiver(pre_save, sender=Employee)
 def remember_device_fields(sender, instance, **kwargs):
     from biometric.views import realtime_device_name
 
-    previous = Employee.objects.filter(pk=instance.pk).first() if instance.pk else None
+    previous = (
+        Employee._base_manager.filter(pk=instance.pk).first() if instance.pk else None
+    )
     instance._biometric_old = (
         {"is_active": previous.is_active, "name": realtime_device_name(previous)}
         if previous
