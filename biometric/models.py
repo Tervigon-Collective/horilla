@@ -96,6 +96,8 @@ class BiometricDevices(HorillaModel):
     api_token = models.CharField(max_length=500, null=True, blank=True)
     api_expires = models.CharField(max_length=100, null=True, blank=True)
     # Push devices (Realtime) identify themselves by serial number, not IP.
+    # Realtime devices only: when the device last called in (polls every few seconds).
+    last_contact = models.DateTimeField(null=True, blank=True, editable=False)
     serial_number = models.CharField(
         max_length=100,
         null=True,

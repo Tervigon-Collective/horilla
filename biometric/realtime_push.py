@@ -22,12 +22,15 @@ from datetime import datetime, timedelta
 
 from django.db import IntegrityError, close_old_connections
 from django.utils import timezone
+from django.utils.translation import gettext as _
 
 logger = logging.getLogger(__name__)
 
 DOUBLE_TAP = timedelta(minutes=2)
 COMMAND_TIMEOUT = timedelta(minutes=5)
 MAX_MESSAGE = 4 * 1024 * 1024
+CONTACT_EVERY = timedelta(seconds=30)
+OFFLINE_AFTER = timedelta(minutes=10)
 
 
 def parse_body(body):
@@ -346,6 +349,47 @@ def follow_up(device, command):
             )
 
 
+_last_noted = {}
+
+
+def note_contact(device):
+    """Record when the device last called in (at most every 30 s)."""
+    from biometric.models import BiometricDevices
+
+    now = timezone.now()
+    if now - _last_noted.get(device.pk, now - CONTACT_EVERY * 2) >= CONTACT_EVERY:
+        _last_noted[device.pk] = now
+        BiometricDevices._base_manager.filter(pk=device.pk).update(last_contact=now)
+
+
+def device_status(device):
+    """(online, message) for the Test Connection / Fetch Logs buttons."""
+    from biometric.models import RealtimeDeviceCommand, RealtimePunchLog
+
+    process_pending()
+    if device.last_contact is None:
+        return False, _("The device has not contacted Horilla yet. Check its Web Server URL.")
+    ago = timezone.now() - device.last_contact
+    seen = timezone.localtime(device.last_contact).strftime("%d %b %H:%M:%S")
+    today = timezone.localtime().date()
+    punches = RealtimePunchLog.objects.filter(
+        device_id=device, punch_time__date=today
+    ).count()
+    pending = RealtimeDeviceCommand.objects.filter(
+        device_id=device, status__in=["waiting", "sent"]
+    ).count()
+    unlinked = (
+        RealtimePunchLog.objects.filter(device_id=device, processed=False)
+        .values("user_id").distinct().count()
+    )
+    details = _(
+        "Last contact {seen}. Punches today: {punches}. Commands waiting: "
+        "{pending}. Unlinked device users with punches: {unlinked}. "
+        "Punches arrive automatically; nothing needs fetching."
+    ).format(seen=seen, punches=punches, pending=pending, unlinked=unlinked)
+    return ago <= OFFLINE_AFTER, details
+
+
 def handle_message(request_code, serial, body, headers=None):
     """Process one push message; returns (response_code, extra headers, body)."""
     headers = headers or {}
@@ -354,6 +398,7 @@ def handle_message(request_code, serial, body, headers=None):
     if device is None:
         # Acknowledge so an unregistered device doesn't flood us; nothing is stored.
         return "OK", {}, b""
+    note_contact(device)
     if request_code != "receive_cmd":
         body = assemble(serial, request_code, headers, body)
         if body is None:

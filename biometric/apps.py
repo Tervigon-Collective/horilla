@@ -30,5 +30,6 @@ class BiometricConfig(AppConfig):
         )
 
         from biometric import sidebar
+        from biometric import signals  # noqa: F401  (keeps Realtime devices in sync)
 
         super().ready()

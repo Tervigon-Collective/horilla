@@ -859,6 +859,8 @@ def biometric_device_test(request, device_id):
             script = test_dahua_connection(device)
         elif device.machine_type == "etimeoffice":
             script = test_etimeoffice_connection(device)
+        elif device.machine_type == "realtime":
+            script = realtime_status_response(device)
         else:
             script = render_connection_response(
                 "Connection unsuccessful",
@@ -1020,6 +1022,8 @@ def biometric_device_fetch_logs(request, device_id=None):
                 _("Double-check the provided API Url, Username, and Password"),
                 "warning",
             )
+    elif device.machine_type == "realtime":
+        script = realtime_status_response(device)
     else:
         script = render_connection_response(
             "Connection unsuccessful",
@@ -2725,6 +2729,16 @@ register_job(
     job_id="biometric.poll_devices",
     minutes=1,
 )
+
+
+def realtime_status_response(device):
+    """Realtime devices push to Horilla, so "testing" means checking they call in."""
+    from biometric.realtime_push import device_status
+
+    online, details = device_status(device)
+    if online:
+        return render_connection_response(_("Device online"), details, "success")
+    return render_connection_response(_("Device offline"), details, "warning")
 
 
 def realtime_face_users():
