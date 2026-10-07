@@ -138,17 +138,26 @@ def _at(day, time):
 
 
 def is_enrolment_punch(log):
-    """The device logs a punch whenever someone enrolls a face (it verifies the
-    new face). Those aren't check-ins or check-outs."""
-    from biometric.models import BiometricFaceData
+    """The device logs one punch whenever someone enrolls a face (it verifies
+    the new face); that punch isn't a check-in or check-out. Only the first
+    punch near an enrolment is that one: someone who enrolls and then punches
+    straight away to check out must still be checked out."""
+    from biometric.models import BiometricFaceData, RealtimePunchLog
 
     enrolled = BiometricFaceData.objects.filter(
         device_user_id=normalize_user_id(log.user_id)
     ).values_list("updated_at", flat=True)
-    return any(
-        min(abs(at - log.received_at), abs(at - log.punch_time)) <= ENROLMENT_WINDOW
-        for at in enrolled
-    )
+    for at in enrolled:
+        if min(abs(at - log.received_at), abs(at - log.punch_time)) > ENROLMENT_WINDOW:
+            continue
+        already = RealtimePunchLog.objects.filter(
+            device_id=log.device_id, user_id=log.user_id,
+            result__startswith="ignored: face enrolment",
+            received_at__gte=at - ENROLMENT_WINDOW,
+            received_at__lte=at + ENROLMENT_WINDOW,
+        ).exclude(pk=log.pk)
+        return not already.exists()
+    return False
 
 
 def tag_location(instance, key):
