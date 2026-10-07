@@ -862,9 +862,9 @@ reloadSelectedCount($('.count_msAttendance'),'selectedInstances');">
             <td class="ms-metric-cell" style="text-align:center;font-weight:600;"
                 data-url="{% url 'attendance-monthly-summary-detail' %}?employee_id={{ row.employee.pk }}&from_date={{ from_date }}&to_date={{ to_date }}&metric=absent">{{ row.absent|floatformat:"-1" }}</td>
             <td class="ms-metric-cell" style="text-align:center;font-weight:600;"
-                data-url="{% url 'attendance-monthly-summary-detail' %}?employee_id={{ row.employee.pk }}&from_date={{ from_date }}&to_date={{ to_date }}&metric=paid_leave">{{ row.paid_leave }}</td>
+                data-url="{% url 'attendance-monthly-summary-detail' %}?employee_id={{ row.employee.pk }}&from_date={{ from_date }}&to_date={{ to_date }}&metric=paid_leave">{{ row.paid_leave|floatformat:"-1" }}</td>
             <td class="ms-metric-cell" style="text-align:center;font-weight:600;"
-                data-url="{% url 'attendance-monthly-summary-detail' %}?employee_id={{ row.employee.pk }}&from_date={{ from_date }}&to_date={{ to_date }}&metric=unpaid_leave">{{ row.unpaid_leave }}</td>
+                data-url="{% url 'attendance-monthly-summary-detail' %}?employee_id={{ row.employee.pk }}&from_date={{ from_date }}&to_date={{ to_date }}&metric=unpaid_leave">{{ row.unpaid_leave|floatformat:"-1" }}</td>
             <td style="text-align:center;">{{ row.total_working }}</td>
             <td class="ms-metric-cell" style="text-align:center;font-weight:600;"
                 data-url="{% url 'attendance-monthly-summary-detail' %}?employee_id={{ row.employee.pk }}&from_date={{ from_date }}&to_date={{ to_date }}&metric=week_off">{{ row.week_off }}</td>

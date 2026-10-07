@@ -300,6 +300,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     from leave.models import LeaveRequest  # local import to avoid circular
 
     count_end_date = _summary_count_end_date(to_date)
+    _today = datetime.date.today()
 
     # -- 1. Working days (respects CompanyLeaves + public Holidays) ----------
     working_data = get_working_days(from_date, count_end_date)
@@ -378,6 +379,8 @@ def build_monthly_summary(from_date, to_date, employee_qs):
             _meta["real_punches"] = False
         if _rec.get("missing_punch_in") or _rec.get("missing_punch_out"):
             _meta["missing"] = True
+        if _rec["attendance_date"] == _today and not _rec.get("attendance_clock_out"):
+            _meta["open_today"] = True
 
     # -- 2b. Batch-load shift schedules for hours computation -----------------
     from base.models import EmployeeShiftSchedule
@@ -447,19 +450,36 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     )
     all_leaves = list(leave_qs)
 
-    # Per-employee per-date leave tracking (paid / unpaid, for conflict detection)
-    leave_dates_per_emp = defaultdict(set)
-    paid_day_dates_per_emp = defaultdict(set)  # {emp_pk: set(paid-leave dates)}
-    unpaid_day_dates_per_emp = defaultdict(set)  # {emp_pk: set(unpaid-leave dates)}
+    # Per-employee per-date leave: {emp_pk: {date: [fraction, paid, skip_off, skip_holiday]}}.
+    # A half-day leave (first/second half) takes 0.5 of its day; a leave type
+    # set to exclude company leaves / holidays doesn't take those days (they
+    # stay week off / holiday) -- applied per employee below.
+    leave_info_per_emp = defaultdict(dict)
     for _lr in all_leaves:
         _s = max(_lr.start_date, from_date)
         _e = min(_lr.end_date or count_end_date, count_end_date)
+        _lt = _lr.leave_type_id
         for _d in _iter_dates(_s, _e):
-            leave_dates_per_emp[_lr.employee_id_id].add(_d)
-            if _lr.leave_type_id.payment == "paid":
-                paid_day_dates_per_emp[_lr.employee_id_id].add(_d)
+            if _d == _lr.start_date and _lr.start_date_breakdown in ("first_half", "second_half"):
+                _frac = 0.5
+            elif (
+                _d == _lr.end_date
+                and _lr.end_date != _lr.start_date
+                and _lr.end_date_breakdown in ("first_half", "second_half")
+            ):
+                _frac = 0.5
             else:
-                unpaid_day_dates_per_emp[_lr.employee_id_id].add(_d)
+                _frac = 1.0
+            _info = leave_info_per_emp[_lr.employee_id_id].get(_d)
+            if _info:  # two half-day leaves on one day
+                _info[0] = min(1.0, _info[0] + _frac)
+            else:
+                leave_info_per_emp[_lr.employee_id_id][_d] = [
+                    _frac,
+                    _lt.payment == "paid",
+                    getattr(_lt, "exclude_company_leave", "no") == "yes",
+                    getattr(_lt, "exclude_holiday", "no") == "yes",
+                ]
 
     # -- 4. Roster-based week-off per employee (single DB hit) ---------------
     roster_qs = Roster.objects.filter(
@@ -518,13 +538,22 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     ):
         _att_vals = dict(att_date_value_map.get(emp.pk, {}))
         _att_secs = att_date_secs_map.get(emp.pk, {})
-        _paid_dates = paid_day_dates_per_emp.get(emp.pk, set())
-        _unpaid_dates = unpaid_day_dates_per_emp.get(emp.pk, set())
         _emp_off = (
             roster_off_dates.get(emp.pk, set())
             if emp.pk in roster_has
             else company_off_dates
         )
+        _leave = {}  # {date: (fraction, paid)} -- leave days this employee takes
+        for _d, (_frac, _paid, _skip_off, _skip_hol) in leave_info_per_emp.get(
+            emp.pk, {}
+        ).items():
+            if (_skip_hol and _d in holiday_dates_set) or (_skip_off and _d in _emp_off):
+                continue
+            _leave[_d] = (_frac, _paid)
+        _paid_dates = {_d for _d, (_f, _p) in _leave.items() if _p}
+        _unpaid_dates = {_d for _d, (_f, _p) in _leave.items() if not _p}
+        _work_info = getattr(emp, "employee_work_info", None)
+        _joined = getattr(_work_info, "date_joining", None)
         _resolutions = resolutions_per_emp.get(emp.pk, {})
 
         # Overtime on regular working days makes up half days (see
@@ -556,15 +585,27 @@ def build_monthly_summary(from_date, to_date, employee_qs):
         _ot_full_dates, _ot_offset_used = ot_offset_full_dates(_offset_days, grace_secs)
         for _d in _ot_full_dates:
             _att_vals[_d] = 1.0
+        # Today isn't over: someone checked in and still at work is present,
+        # not "half present, half absent" because their hours aren't in yet.
+        if _today in _att_vals and att_day_meta[(emp.pk, _today)].get("open_today"):
+            _att_vals[_today] = 1.0
         _shift_pk = emp_shift_map.get(emp.pk)
         _shift_sched = shift_day_secs.get(_shift_pk, {}) if _shift_pk else {}
         _daily_hrs = daily_manual_map.get(emp.pk, {})  # per-day manual overrides
 
         present = paid_leave = unpaid_leave = week_off = holiday_c = absent = 0.0
+        not_employed = 0.0
         hours_second = 0
 
         for d in all_dates_in_range:
             res = _resolutions.get(d)
+
+            # Before the joining date: not employed yet, not absent. (A day
+            # with attendance or an HR resolution still counts -- that means
+            # the joining date is wrong, not that they weren't working.)
+            if _joined and d < _joined and d not in _att_vals and not res:
+                not_employed += 1.0
+                continue
 
             # Direct HR override — use as-is
             bucket_info = _RES_BUCKET.get(res)
@@ -614,12 +655,22 @@ def build_monthly_summary(from_date, to_date, employee_qs):
 
             # Legacy "attendance" / "leave" — fall through to natural
             # No resolution — natural computation
+            _lv = _leave.get(d)
             if d in _att_vals:
                 val = _att_vals[d]
                 if d in holiday_dates_set:
                     holiday_c += 1.0  # HO — attendance on holiday
                 elif d in _emp_off:
                     week_off += 1.0  # WO — attendance on week-off
+                elif _lv and _lv[0] < 1.0:
+                    # Half-day leave and worked the other half.
+                    _worked = min(val, 1.0 - _lv[0])
+                    present += _worked
+                    if _lv[1]:
+                        paid_leave += _lv[0]
+                    else:
+                        unpaid_leave += _lv[0]
+                    absent += max(0.0, 1.0 - _lv[0] - _worked)
                 else:
                     present += val
                     # Half-day (0.5) or zero-hour: remaining fraction is absent
@@ -630,14 +681,19 @@ def build_monthly_summary(from_date, to_date, employee_qs):
                 hours_second += (
                     _day_manual if _day_manual is not None else _att_secs.get(d, 0)
                 )
-            elif d in _paid_dates:
-                paid_leave += 1.0
-            elif d in _unpaid_dates:
-                unpaid_leave += 1.0
+            elif _lv:
+                if _lv[1]:
+                    paid_leave += _lv[0]
+                else:
+                    unpaid_leave += _lv[0]
+                if _lv[0] < 1.0 and d not in holiday_dates_set and d not in _emp_off:
+                    absent += 1.0 - _lv[0]  # half-day leave, other half not worked
             elif d in holiday_dates_set:
                 holiday_c += 1.0
             elif d in _emp_off:
                 week_off += 1.0
+            elif d == _today:
+                pass  # today isn't over: not absent before they check in
             elif d not in off_set:
                 absent += 1.0  # working day with no activity
 
@@ -645,7 +701,8 @@ def build_monthly_summary(from_date, to_date, employee_qs):
         # holiday/week-off is normal overtime work, not a data discrepancy —
         # only attendance overlapping approved leave counts as a conflict.
         att_dates = att_dates_map.get(emp.pk, set())
-        emp_leave_dates = leave_dates_per_emp.get(emp.pk, set())
+        # A half-day leave with work in the other half is not a conflict.
+        emp_leave_dates = {_d for _d, (_f, _p) in _leave.items() if _f >= 1.0}
         conflict_date_set = att_dates & emp_leave_dates
         conflict_days = len(conflict_date_set)
 
@@ -703,9 +760,11 @@ def build_monthly_summary(from_date, to_date, employee_qs):
             {
                 "employee": emp,
                 "present": present,
-                "paid_leave": int(paid_leave),
-                "unpaid_leave": int(unpaid_leave),
+                "paid_leave": paid_leave,
+                "unpaid_leave": unpaid_leave,
                 "absent": absent,
+                # Days before the joining date: unpaid in payroll, not absent.
+                "not_employed": not_employed,
                 "total_working": total_working,
                 "week_off": int(week_off),
                 "holiday": int(holiday_c),
@@ -1745,6 +1804,9 @@ def _build_calendar_context(emp, from_date, to_date):
     # persistent amber ring — kept separate so an approved holiday/week-off
     # overtime day can still show its HO/WO badge without being rung as a
     # conflict needing attention (mirrors the table's conflict-count rule).
+    _today = datetime.date.today()
+    _joined = getattr(getattr(emp, "employee_work_info", None), "date_joining", None)
+
     def day_info(d):
         resolution = resolutions_map.get(d)
 
@@ -1761,6 +1823,8 @@ def _build_calendar_context(emp, from_date, to_date):
         }
         if resolution in _direct:
             return _direct[resolution]
+        if _joined and d < _joined and d not in att_map:
+            return "not_employed", str(_("Before joining")), None, None, False
 
         if d in att_map:
             r = att_map[d]
@@ -1781,6 +1845,8 @@ def _build_calendar_context(emp, from_date, to_date):
                     att_status = "short" if clock_out else "absent"
             else:
                 att_status = "present"
+            if d == _today and not clock_out:
+                att_status = "present"  # checked in, day not over yet
             ot_adjusted = att_status == "half_present" and d in ot_full_dates
             if ot_adjusted:
                 att_status = "present"
@@ -1851,6 +1917,8 @@ def _build_calendar_context(emp, from_date, to_date):
             return "holiday", holiday_map[d], None, None, False
         if d in week_off_dates:
             return "week_off", "", None, None, False
+        if d >= _today:
+            return "upcoming", "", None, None, False  # not absent: hasn't happened
         return "absent", "", None, None, False
 
     # -- Build month grid structures ------------------------------------------

@@ -838,6 +838,7 @@ def get_employee_attendance_summary(employees, from_date, to_date):
         row["paid_days"] = (
             row["present"] + row["paid_leave"] + row["holiday"] + row["week_off"]
         )
-        row["unpaid_days"] = row["absent"] + row["unpaid_leave"]
+        # not_employed: days before the joining date -- unpaid, not absent
+        row["unpaid_days"] = row["absent"] + row["unpaid_leave"] + row.get("not_employed", 0)
         result[row["employee"].pk] = row
     return result

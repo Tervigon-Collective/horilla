@@ -345,22 +345,26 @@ def ess_attendance_calendar(request):
     except Exception:
         pass
 
+    # Same holiday / week-off rules as attendance and payroll: recurring
+    # holidays repeat every year, and the week off is the company's (Sunday),
+    # not a hard-coded Saturday + Sunday.
+    week_off_dates = set()
     try:
-        from base.models import Holidays
+        from base.methods import get_company_leave_dates, get_holiday_dates
 
-        for h in Holidays.objects.filter(
-            Q(is_specific=False) | Q(employees=employee),
-            start_date__lte=to_date,
-            start_date__gte=from_date,
-        ):
-            cur = h.start_date
-            end = h.end_date or h.start_date
-            while cur <= end and cur <= to_date:
-                if cur >= from_date:
-                    holiday_dates.add(cur.isoformat())
-                cur += timedelta(days=1)
+        holiday_dates = {
+            d.isoformat() for d in get_holiday_dates(from_date, to_date, employee)
+        }
+        week_off_dates = {
+            d
+            for year in {from_date.year, to_date.year}
+            for d in get_company_leave_dates(year)
+        }
     except Exception:
         pass
+    work_info = getattr(employee, "employee_work_info", None)
+    joined = getattr(work_info, "date_joining", None)
+    today = date.today()
 
     days = []
     cur = from_date
@@ -368,10 +372,13 @@ def ess_attendance_calendar(request):
 
     while cur <= to_date:
         iso = cur.isoformat()
-        day_of_week = cur.weekday()  # 0=Mon, 6=Sun
-        is_weekend = day_of_week >= 5
-
-        if is_weekend:
+        if iso in attendance_map and (cur in week_off_dates or iso in holiday_dates):
+            # Worked on a week off / holiday: show the work, not a blank day.
+            status = "late" if iso in late_dates else "present"
+            if status == "late":
+                summary["late"] += 1
+            summary["present"] += 1
+        elif cur in week_off_dates:
             status = "weekend"
         elif iso in holiday_dates:
             status = "holiday"
@@ -384,10 +391,13 @@ def ess_attendance_calendar(request):
             if status == "late":
                 summary["late"] += 1
             summary["present"] += 1
-        elif cur <= date.today() and check_in_enabled:
+        elif joined and cur < joined:
+            status = "workday"  # before joining: not an absence
+        elif cur < today and check_in_enabled:
+            # Today isn't over, so not checking in yet isn't an absence.
             status = "absent"
             summary["absent"] += 1
-        elif cur <= date.today():
+        elif cur <= today:
             # No check-in/check-out means no evidence either way, so the day is
             # left blank rather than accused of being an absence.
             status = "workday"

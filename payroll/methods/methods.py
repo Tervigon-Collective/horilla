@@ -780,6 +780,7 @@ def compute_salary_on_period(
     elif wage_type == "daily":
         if month_summary:
             # For daily wage, `wage` is the per-day rate; use attendance summary for day counts
+            # not_employed: days before the joining date (unpaid, not absent)
             total_days = (
                 month_summary.get("present", 0)
                 + month_summary.get("paid_leave", 0)
@@ -787,9 +788,12 @@ def compute_salary_on_period(
                 + month_summary.get("absent", 0)
                 + month_summary.get("week_off", 0)
                 + month_summary.get("holiday", 0)
+                + month_summary.get("not_employed", 0)
             )
-            unpaid_days = month_summary.get("unpaid_leave", 0) + month_summary.get(
-                "absent", 0
+            unpaid_days = (
+                month_summary.get("unpaid_leave", 0)
+                + month_summary.get("absent", 0)
+                + month_summary.get("not_employed", 0)
             )
             if month_summary.get("unresolved_conflicts", 0):
                 unpaid_days = total_days
@@ -838,6 +842,8 @@ def compute_salary_on_period(
             data["contract"] = contract
     else:
         if month_summary:
+            # not_employed: days before the joining date -- unpaid (pro-rates a
+            # joiner's month) but not shown as absent.
             total_days = (
                 month_summary.get("week_off", 0)
                 + month_summary.get("holiday", 0)
@@ -845,9 +851,12 @@ def compute_salary_on_period(
                 + month_summary.get("present", 0)
                 + month_summary.get("paid_leave", 0)
                 + month_summary.get("unpaid_leave", 0)
+                + month_summary.get("not_employed", 0)
             )
-            unpaid_days = month_summary.get("unpaid_leave", 0) + month_summary.get(
-                "absent", 0
+            unpaid_days = (
+                month_summary.get("unpaid_leave", 0)
+                + month_summary.get("absent", 0)
+                + month_summary.get("not_employed", 0)
             )
             if month_summary.get("unresolved_conflicts", 0):
                 unpaid_days = total_days
