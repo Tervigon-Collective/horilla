@@ -25,6 +25,9 @@ class HourlyComputationTests(TestCase):
             attendance_date=day,
             at_work_second=at_work,
             overtime_second=overtime,
+            # real punches (a missing-punch day pays 0 hours until regularized)
+            missing_punch_in=False,
+            missing_punch_out=False,
         )
 
     @patch("payroll.methods.methods.get_attendance")
