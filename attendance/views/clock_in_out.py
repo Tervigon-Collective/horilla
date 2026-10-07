@@ -595,6 +595,29 @@ def clock_in(request):
             return render(
                 request, "attendance/components/in_out_component.html", {"run": 1}
             )
+        last_out = (
+            AttendanceActivity.objects.filter(
+                employee_id=employee, clock_out__isnull=False,
+                clock_out_date=date.today(),
+            )
+            .order_by("-clock_out")
+            .first()
+            if employee and not request.__dict__.get("datetime")
+            else None
+        )
+        if last_out and timezone.localtime() - timezone.make_aware(
+            datetime.combine(last_out.clock_out_date, last_out.clock_out)
+        ) < timedelta(seconds=30):
+            # Double click on Check-out: the button flips to Check-in under
+            # the second click, which re-opened the day (then auto check-out
+            # flagged it as a missing punch).
+            messages.info(
+                request,
+                _("You checked out a moment ago, so this check-in was ignored."),
+            )
+            return render(
+                request, "attendance/components/in_out_component.html", {"run": 0}
+            )
         datetime_now = timezone.localtime()
         if request.__dict__.get("datetime"):
             datetime_now = request.datetime
