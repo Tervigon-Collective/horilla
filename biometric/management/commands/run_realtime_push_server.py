@@ -13,14 +13,20 @@ import logging
 import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from django.core.management.base import BaseCommand
+from django.db import close_old_connections, connections
 
 from biometric.realtime_push import handle_message, process_pending
 
 logger = logging.getLogger(__name__)
 
 MAX_BODY = 4 * 1024 * 1024  # enroll messages carry photos; never buffer more
+# Cap concurrent request threads. Unbounded threads each open a Django DB
+# connection; without closing them, Postgres hits max_connections and the
+# dashboard starts returning intermittent 500s.
+MAX_WORKERS = 8
 
 
 def _read_request(conn):
@@ -49,6 +55,7 @@ def _read_request(conn):
 
 def _serve(conn):
     try:
+        close_old_connections()
         headers, body = _read_request(conn)
         if headers is None:
             return
@@ -72,6 +79,13 @@ def _serve(conn):
     except Exception:
         logger.exception("Realtime push: request failed")
     finally:
+        # Thread-local ORM connections survive the request unless closed.
+        # Leaving them idle is what exhausted Postgres (max_connections=200).
+        for alias in connections:
+            try:
+                connections[alias].close()
+            except Exception:
+                pass
         conn.close()
 
 
@@ -85,9 +99,16 @@ class Command(BaseCommand):
         def pending_loop():
             while True:
                 try:
+                    close_old_connections()
                     process_pending()
                 except Exception:
                     logger.exception("Realtime push: pending punches failed")
+                finally:
+                    for alias in connections:
+                        try:
+                            connections[alias].close()
+                        except Exception:
+                            pass
                 time.sleep(10)
 
         threading.Thread(target=pending_loop, daemon=True).start()
@@ -96,6 +117,7 @@ class Command(BaseCommand):
         server.bind(("0.0.0.0", port))
         server.listen(64)
         self.stdout.write(f"Realtime push receiver listening on :{port}")
-        while True:
-            conn, _ = server.accept()
-            threading.Thread(target=_serve, args=(conn,), daemon=True).start()
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            while True:
+                conn, _ = server.accept()
+                pool.submit(_serve, conn)
