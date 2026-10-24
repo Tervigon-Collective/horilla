@@ -3506,7 +3506,11 @@ def can_view_employee_leave(request, employee):
     *this* employee.
     """
     user = request.user
-    if user.has_perm("leave.view_leaverequest"):
+    from base.methods import has_org_wide_perm
+
+    # Plain view_* is held by every employee (ESS role); only an org-wide
+    # grant opens someone else's leave.
+    if has_org_wide_perm(user, "leave.view_leaverequest"):
         return True
     viewer = getattr(user, "employee_get", None)
     return bool(viewer) and (viewer == employee or check_manager(viewer, employee))
