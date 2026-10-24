@@ -37,6 +37,9 @@ def make_active_contract(employee, **overrides) -> Contract:
         deduct_leave_from_basic_pay=True,
         calculate_daily_leave_amount=True,
         deduction_for_one_leave_amount=0,
+        # Seleric deducts a working day with no attendance by default; these
+        # fixtures have no attendance and pin the engine's own arithmetic.
+        deduct_attendance_absence_from_pay=False,
     )
     defaults.update(overrides)
     return Contract.objects.create(**defaults)

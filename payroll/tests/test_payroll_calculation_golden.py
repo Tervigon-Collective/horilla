@@ -118,7 +118,16 @@ class PayrollCalculationGoldenTests(TestCase):
             data = payroll_calculation(self.employee, PERIOD_START, PERIOD_END)
         self.assertIsNotNone(data, "engine returned no payslip data")
         # json_data is what actually lands in Payslip.pay_head_data.
-        return _normalize(json.loads(data["json_data"]))
+        result = _normalize(json.loads(data["json_data"]))
+        # Keys the Seleric fork adds to the payload; the baseline predates them.
+        for key in (
+            "india_statutory",
+            "india_employer_contributions",
+            "leave_lop_days",
+            "attendance_lop_days",
+        ):
+            result.pop(key, None)
+        return result
 
     def _assert_golden(self, name):
         actual = self._run()
