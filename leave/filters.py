@@ -240,6 +240,13 @@ class LeaveRequestFilter(HorillaFilterSet):
         field_name="employee_id__employee_work_info__department_id__department",
         lookup_expr="icontains",
     )
+    # Paid/unpaid leave type, used by the leave dashboard's Paid vs Unpaid chart
+    # (matches its split: anything that is not paid counts as unpaid).
+    payment = django_filters.ChoiceFilter(
+        choices=[("paid", _("Paid")), ("unpaid", _("Unpaid"))],
+        method="filter_payment",
+        label=_("Payment"),
+    )
     # Dedicated comma-separated "Name or Badge ID" search, alongside the
     # AJAX employee_id picker below rather than instead of it -- same
     # field/behavior as EmployeeFilter.name_or_badge/AttendanceFilters.
@@ -346,6 +353,16 @@ class LeaveRequestFilter(HorillaFilterSet):
             "employee_id__employee_work_info__work_type_id",
         ]
 
+    def filter_payment(self, queryset, _name, value):
+        """
+        Paid/unpaid leave type filter
+        """
+        if value == "paid":
+            return queryset.filter(leave_type_id__payment="paid")
+        if value == "unpaid":
+            return queryset.exclude(leave_type_id__payment="paid")
+        return queryset
+
     def overall_leave_filter(self, queryset, _, value):
         """
         Overall leave custom filter method
@@ -355,26 +372,27 @@ class LeaveRequestFilter(HorillaFilterSet):
         today_leave_requests = queryset.filter(
             Q(start_date__lte=today)
             & (Q(end_date__gte=today) | Q(end_date__isnull=True))
-            & Q(status="approved")
+            & Q(status__in=["approved", "cancel_requested"])
         )
         start_of_week = today - timedelta(days=today.weekday())
         end_of_week = start_of_week + timedelta(days=6)
         weekly_leave_requests = queryset.filter(
-            status="approved", start_date__lte=end_of_week
+            status__in=["approved", "cancel_requested"],
+            start_date__lte=end_of_week,
         ).filter(Q(end_date__gte=start_of_week) | Q(end_date__isnull=True))
         start_of_month = today.replace(day=1)
         end_of_month = start_of_month.replace(day=28) + timedelta(days=4)
         if end_of_month.month != today.month:
             end_of_month = end_of_month - timedelta(days=end_of_month.day)
         monthly_leave_requests = queryset.filter(
-            status="approved",
+            status__in=["approved", "cancel_requested"],
             start_date__lte=end_of_month,
         ).filter(Q(end_date__gte=start_of_month) | Q(end_date__isnull=True))
         start_of_year = today.replace(month=1, day=1)
         end_of_year = today.replace(month=12, day=31)
         yearly_leave_requests = (
             queryset.filter(
-                status="approved",
+                status__in=["approved", "cancel_requested"],
                 start_date__lte=end_of_year,
             )
             .filter(Q(end_date__gte=start_of_year) | Q(end_date__isnull=True))

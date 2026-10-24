@@ -4,7 +4,9 @@ views.py
 This module is used to map url pattens with django views or methods
 """
 
+import calendar
 import csv
+import io
 import hmac
 import json
 import logging
@@ -117,7 +119,9 @@ from base.forms import (
     WorkTypeRequestColumnForm,
     WorkTypeRequestCommentForm,
     WorkTypeRequestForm,
+    find_reset_user,
 )
+from base.import_template_data import import_template_frame, write_import_xlsx
 from base.methods import (
     check_chart_permission,
     check_manager,
@@ -195,7 +199,7 @@ from horilla.decorators import (
     superuser_required,
 )
 from horilla.group_by import group_by_queryset
-from horilla.http.response import HorillaRedirect
+from horilla.http.response import HorillaRedirect, with_bulk_result
 from horilla.menu import get_settings_menu
 from horilla.methods import get_horilla_model_class, remove_dynamic_url
 from horilla_audit.forms import HistoryTrackingFieldsForm
@@ -327,14 +331,20 @@ DEMO_PAYROLL_RENAMED_PREFIX = "Demo Payroll - "
 
 def normalize_demo_payslips():
     """
-    Re-anchor demo payslip periods onto real calendar months.
+    Re-anchor demo payslips onto real calendar months and recompute every
+    figure through the real payroll engine, using the same attendance
+    monthly-summary path the payroll batch run uses -- not just shift the
+    dates and leave the figures whatever they originally shipped as. A demo
+    payslip whose employee has no active contract to compute against is
+    deleted rather than re-dated with numbers that no longer mean anything;
+    "22 of 30 paid days, 0 loss of pay" reading nothing like the employee's
+    actual attendance was this function only ever having moved the dates.
 
-    Demo payslips ship tagged as ``Demo Payroll M-<n>``, where ``n`` counts months
-    back from the current one. Fixture date shifting moves every date by a fixed
-    number of days, which cannot keep month-long periods aligned to month
-    boundaries, so the period, the dates embedded in ``pay_head_data`` and the batch
-    label are recomputed from that tag instead. Returns the number of payslips
-    updated.
+    Demo payslips ship tagged as ``Demo Payroll M-<n>``, where ``n`` counts
+    months back from the current one. Fixture date shifting moves every date
+    by a fixed number of days, which cannot keep month-long periods aligned
+    to month boundaries, so the period is recomputed from that tag instead.
+    Returns the number of payslips updated.
 
     A row's group_name is renamed to ``Demo Payroll - <Mon Year>`` below for a
     human-readable label -- but that also matches the seeder's own
@@ -344,15 +354,19 @@ def normalize_demo_payslips():
     dynamically-created (non-fixture) backfilled payslip would only ever
     get re-anchored once and then drift stale forever.
 
-    Also runs the app's own ``expire_contract()`` scheduled task inline:
-    fixture loaddata bypasses both Contract.save() and the scheduler, so a
-    demo Contract shipped "active" with a now-past contract_end_date (after
-    the fixture date shift) would otherwise stay contradictorily "active"
-    until the real scheduler happens to run.
+    Also runs the app's own ``expire_contract()`` scheduled task inline,
+    before any of the above: fixture loaddata bypasses both Contract.save()
+    and the scheduler, so a demo Contract shipped "active" with a now-past
+    contract_end_date (after the fixture date shift) would otherwise stay
+    contradictorily "active" -- and this function would recompute a payslip
+    against a contract that should already read as expired.
     """
     if not apps.is_installed("payroll"):
         return 0
 
+    from attendance.methods.utils import get_employee_attendance_summary
+    from payroll.methods.methods import payslip_fields, save_payslip
+    from payroll.methods.payroll_run import payroll_calculation
     from payroll.models.models import Payslip
     from payroll.scheduler import expire_contract
 
@@ -360,12 +374,19 @@ def normalize_demo_payslips():
 
     today = datetime.today().date()
     updated = 0
+    stale_pks = []
 
     # _base_manager skips the company scoping that would hide other companies' rows.
     payslips = Payslip._base_manager.filter(
         Q(group_name__startswith=DEMO_PAYROLL_GROUP_PREFIX)
         | Q(group_name__startswith=DEMO_PAYROLL_RENAMED_PREFIX)
-    )
+    ).select_related("employee_id")
+
+    # Grouped by period rather than recomputed row by row: every employee
+    # landing on the same "M-<n>" tag needs the same date range, so their
+    # attendance summaries are fetched together in one call per period
+    # instead of one query per payslip.
+    by_period = {}
     for payslip in payslips:
         if payslip.group_name.startswith(DEMO_PAYROLL_GROUP_PREFIX):
             try:
@@ -384,37 +405,63 @@ def normalize_demo_payslips():
         while month < 1:
             month += 12
             year -= 1
-        # Day 28 exists in every month, so each period stays inside its own month.
         start = datetime(year, month, 1).date()
-        end = datetime(year, month, 28).date()
+        end = datetime(year, month, calendar.monthrange(year, month)[1]).date()
+        by_period.setdefault((start, end), []).append((payslip, offset))
 
-        pay_head_data = payslip.pay_head_data
-        if isinstance(pay_head_data, dict):
-            pay_head_data["start_date"] = start.strftime("%Y-%m-%d")
-            pay_head_data["end_date"] = end.strftime("%Y-%m-%d")
-            pay_head_data["range"] = (
-                f"{start.strftime('%b %d %Y')} - {end.strftime('%b %d %Y')}"
+    for (start, end), rows in by_period.items():
+        employees = [payslip.employee_id for payslip, _offset in rows]
+        try:
+            summaries = get_employee_attendance_summary(employees, start, end)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Attendance summary unavailable while normalizing demo payslips"
             )
+            summaries = {}
 
-        status = payslip.status
-        # M-0 is the current, still-open month -- a payslip can't already be
-        # "paid" or "confirmed" for a period that hasn't closed yet.
-        if offset == 0 and status in ("paid", "confirmed"):
-            status = "review_ongoing"
+        for payslip, offset in rows:
+            employee = payslip.employee_id
+            result = payroll_calculation(
+                employee, start, end, month_summary=summaries.get(employee.pk, {})
+            )
+            if not result:
+                # No active contract to compute against (or some other
+                # engine-level refusal) -- a payslip that cannot be
+                # recomputed should not keep existing under a fake date.
+                stale_pks.append(payslip.pk)
+                continue
 
-        Payslip._base_manager.filter(pk=payslip.pk).update(
-            start_date=start,
-            end_date=end,
-            pay_head_data=pay_head_data,
-            group_name=f"{DEMO_PAYROLL_RENAMED_PREFIX}{start.strftime('%b %Y')}",
-            status=status,
-        )
-        updated += 1
+            status = payslip.status
+            # M-0 is the current month; it only exists here at all when
+            # _target_periods judged it already closed (today is its last
+            # day), so unlike before this is not blanket-downgraded --
+            # only a status the engine could not have produced itself.
+            if offset == 0 and status in ("paid", "confirmed"):
+                status = "review_ongoing"
+
+            group_name = f"{DEMO_PAYROLL_RENAMED_PREFIX}{start.strftime('%b %Y')}"
+            fields = payslip_fields(
+                result, employee, status=status, group_name=group_name
+            )
+            saved = save_payslip(**fields)
+            # save_payslip finds-or-creates by (employee, start, end): if the
+            # dates now match a different, already-existing row (the
+            # dynamic backfill's own payslip for the same period, most
+            # commonly), that row absorbs this one and the original --
+            # about to be a duplicate of it -- goes rather than doubling up.
+            if saved.pk != payslip.pk:
+                stale_pks.append(payslip.pk)
+            updated += 1
+
+    if stale_pks:
+        Payslip._base_manager.filter(pk__in=stale_pks).delete()
 
     return updated
 
 
 def load_demo_database(request):
+    from horilla_automations.signals import suspend_automations
+
     if initialize_database_condition():
         if request.method == "POST":
             if request.POST.get("load_data_password") == settings.DB_INIT_PASSWORD:
@@ -435,56 +482,62 @@ def load_demo_database(request):
                 except Exception:
                     pass
 
-                for file in data_files:
-                    file_path = path.join(settings.BASE_DIR, "load_data", file)
-                    tmp = None
+                # No mail automations while the demo loads: it creates thousands of
+                # rows, each would start a mail thread, and those threads write to the
+                # database at the same time as the load ("database is locked").
+                with suspend_automations():
+                    for file in data_files:
+                        file_path = path.join(settings.BASE_DIR, "load_data", file)
+                        tmp = None
+                        try:
+                            reset_backfilled_rows_before_reload(file)
+                            shifted = _shift_fixture_dates(file_path)
+                            if shifted is not None:
+                                suffix = path.splitext(file)[1]
+                                with tempfile.NamedTemporaryFile(
+                                    mode="w",
+                                    suffix=suffix,
+                                    delete=False,
+                                    encoding="utf-8",
+                                ) as tmp_f:
+                                    tmp_f.write(shifted)
+                                    tmp = tmp_f.name
+                                call_command("loaddata", tmp)
+                            else:
+                                call_command("loaddata", file_path)
+                        except Exception as e:
+                            messages.error(
+                                request, _("An error occurred : %(e)s") % {"e": e}
+                            )
+                        finally:
+                            if tmp and path.exists(tmp):
+                                os.remove(tmp)
+
                     try:
-                        reset_backfilled_rows_before_reload(file)
-                        shifted = _shift_fixture_dates(file_path)
-                        if shifted is not None:
-                            suffix = path.splitext(file)[1]
-                            with tempfile.NamedTemporaryFile(
-                                mode="w",
-                                suffix=suffix,
-                                delete=False,
-                                encoding="utf-8",
-                            ) as tmp_f:
-                                tmp_f.write(shifted)
-                                tmp = tmp_f.name
-                            call_command("loaddata", tmp)
-                        else:
-                            call_command("loaddata", file_path)
-                    except Exception as e:
-                        messages.error(
-                            request, _("An error occurred : %(e)s") % {"e": e}
+                        from base.demo_data import run_enterprise_demo_seeder
+
+                        run_enterprise_demo_seeder(
+                            load_dir=load_dir_path,
+                            copy_media=False,
+                            scrub_side_files=True,
                         )
-                    finally:
-                        if tmp and path.exists(tmp):
-                            os.remove(tmp)
+                    except Exception as e:
+                        # The seeder is one long sequence of ~25 steps -- an
+                        # exception here could come from any of them, and every
+                        # step after the failing one silently never runs. Log
+                        # the full traceback so whoever reloads the demo can
+                        # actually find which step broke, instead of only ever
+                        # seeing this generic toast.
+                        logger.exception(
+                            "Enterprise demo seeder failed partway through"
+                        )
+                        messages.warning(
+                            request,
+                            _("Enterprise demo seeder could not finish: %(error)s")
+                            % {"error": e},
+                        )
 
-                try:
-                    from base.demo_data import run_enterprise_demo_seeder
-
-                    run_enterprise_demo_seeder(
-                        load_dir=load_dir_path,
-                        copy_media=False,
-                        scrub_side_files=True,
-                    )
-                except Exception as e:
-                    # The seeder is one long sequence of ~25 steps -- an
-                    # exception here could come from any of them, and every
-                    # step after the failing one silently never runs. Log
-                    # the full traceback so whoever reloads the demo can
-                    # actually find which step broke, instead of only ever
-                    # seeing this generic toast.
-                    logger.exception("Enterprise demo seeder failed partway through")
-                    messages.warning(
-                        request,
-                        _("Enterprise demo seeder could not finish: %(error)s")
-                        % {"error": e},
-                    )
-
-                normalize_demo_payslips()
+                    normalize_demo_payslips()
 
                 messages.success(request, _("Database loaded successfully."))
                 try:
@@ -880,6 +933,14 @@ def include_employee_instance(request, form):
     return form
 
 
+def mask_email(email):
+    """j***@acme.com: the first character of the name and the whole domain."""
+    name, _sep, domain = email.partition("@")
+    if not domain:
+        return email
+    return f"{name[:1]}***@{domain}"
+
+
 def reset_send_success(request):
     return render(request, "reset_send.html")
 
@@ -917,6 +978,9 @@ class HorillaPasswordResetView(PasswordResetView):
     template_name = "forgot_password.html"
     form_class = PassWordResetForm
     success_url = reverse_lazy("reset-send-success")
+    subject_template_name = "base/mail_templates/password_reset_subject.txt"
+    email_template_name = "base/mail_templates/password_reset_email.txt"
+    html_email_template_name = "base/mail_templates/password_reset_email.html"
 
     def form_valid(self, form):
         email_backend, _is_default_backend = _password_reset_mail_configured()
@@ -924,34 +988,49 @@ class HorillaPasswordResetView(PasswordResetView):
             messages.error(self.request, _("Primary mail server is not configured"))
             return redirect("forgot-password")
 
-        user = resolve_password_reset_user(form.cleaned_data["email"])
-        if user:
-            try:
-                sent = form.save(**_password_reset_email_opts(self.request, self, email_backend))
-            except Exception:
-                logger.exception("Password reset email failed for user %s", user.pk)
-                messages.error(
-                    self.request,
-                    _("Failed to send password reset email. Please contact your administrator."),
-                )
-                return redirect("forgot-password")
+        user = find_reset_user(form.cleaned_data["email"])
+        if not user:
+            messages.error(
+                self.request,
+                _(
+                    "No account found with this username or email. "
+                    "Check it and try again."
+                ),
+            )
+            return redirect("forgot-password")
+        try:
+            sent = form.save(
+                **_password_reset_email_opts(self.request, self, email_backend)
+            )
+        except Exception:
+            logger.exception("Password reset email failed for user %s", user.pk)
+            messages.error(
+                self.request,
+                _("Failed to send password reset email. Please contact your administrator."),
+            )
+            return redirect("forgot-password")
+        if not sent or not form.sent_to_email:
+            messages.error(
+                self.request,
+                _("This account has no email address to send the reset link to."),
+            )
+            return redirect("forgot-password")
+        # Masked (j***@acme.com): this page is reached without logging in, so
+        # the full address of whoever owns the username is not shown.
+        messages.success(
+            self.request,
+            _("Password reset link sent to %(email)s")
+            % {"email": mask_email(form.sent_to_email)},
+        )
+        if self.request.user.is_authenticated:
+            return HorillaRedirect(self.request)
 
-            if not sent:
-                messages.error(
-                    self.request,
-                    _("No email address is registered for this account."),
-                )
-                return redirect("forgot-password")
-
-            if self.request.user.is_authenticated:
-                messages.success(
-                    self.request, _("Password reset link sent successfully")
-                )
-                return HorillaRedirect(self.request)
+        return redirect(reverse_lazy("reset-send-success"))
 
         return redirect(reverse_lazy("reset-send-success"))
 
 
+@method_decorator(login_required, name="dispatch")
 class EmployeePasswordResetView(PasswordResetView):
     """
     Horilla View for Employee Reset Password
@@ -959,6 +1038,9 @@ class EmployeePasswordResetView(PasswordResetView):
 
     template_name = "forgot_password.html"
     form_class = PassWordResetForm
+    subject_template_name = "base/mail_templates/password_reset_subject.txt"
+    email_template_name = "base/mail_templates/password_reset_email.txt"
+    html_email_template_name = "base/mail_templates/password_reset_email.html"
 
     @method_decorator(login_required)
     def dispatch(self, *args, **kwargs):
@@ -971,19 +1053,36 @@ class EmployeePasswordResetView(PasswordResetView):
                 messages.error(self.request, _("Primary mail server is not configured"))
                 return HorillaRedirect(self.request)
 
-            user = resolve_password_reset_user(form.cleaned_data["email"])
+            user = find_reset_user(form.cleaned_data["email"])
             if not user:
                 messages.error(self.request, _("User not found for this employee"))
                 return HorillaRedirect(self.request)
 
-            sent = form.save(**_password_reset_email_opts(self.request, self, email_backend))
+            # Only the employee themselves, someone who manages them, or a user
+            # who can add employees may trigger this: the menu item is hidden
+            # client-side, which alone never stopped a direct POST.
+            target_employee = Employee.objects.filter(employee_user_id=user).first()
+            authorized = target_employee is not None and (
+                self.request.user.has_perm("employee.add_employee")
+                or check_manager(self.request.user.employee_get, target_employee)
+                or self.request.user == user
+            )
+            if not authorized:
+                messages.error(
+                    self.request,
+                    _("You don't have permission to reset this user's password."),
+                )
+                return HorillaRedirect(self.request)
+
+            sent = form.save(
+                **_password_reset_email_opts(self.request, self, email_backend)
+            )
             if not sent:
                 messages.error(
                     self.request,
                     _("No email address is registered for this account."),
                 )
                 return HorillaRedirect(self.request)
-
             messages.success(
                 self.request,
                 _("Password reset link sent successfully"),
@@ -3068,37 +3167,27 @@ def rotating_work_type_assign_bulk_archive(request):
     if request.GET.get("is_active") == "False":
         is_active = False
         message = _("archived")
-    count = 0
+    done = failed = 0
 
     for id in ids:
-        rwork_type_assign = RotatingWorkTypeAssign.objects.get(id=id)
-        employees_rwork_type_assign = RotatingWorkTypeAssign.objects.filter(
-            is_active=True, employee_id=rwork_type_assign.employee_id
-        )
+        rwork_type_assign = RotatingWorkTypeAssign.objects.filter(id=id).first()
+        if rwork_type_assign is None:
+            failed += 1
+            continue
+        # An employee can only have one active rotating work type assign.
+        if (
+            is_active
+            and RotatingWorkTypeAssign.objects.filter(
+                is_active=True, employee_id=rwork_type_assign.employee_id
+            ).exists()
+        ):
+            failed += 1
+            continue
+        rwork_type_assign.is_active = is_active
+        rwork_type_assign.save()
+        done += 1
 
-        if is_active and employees_rwork_type_assign.exists():
-            messages.error(
-                request,
-                _("Rotating work type for {employee_id} already exists").format(
-                    employee_id=rwork_type_assign.employee_id,
-                ),
-            )
-        else:
-            rwork_type_assign.is_active = is_active
-            rwork_type_assign.save()
-            count += 1
-
-    if count > 0:
-        messages.success(
-            request,
-            _("Rotating work type for {count} employees is {message}").format(
-                count=count, message=message
-            ),
-        )
-
-        return JsonResponse({"message": "Success"})
-
-    return rotating_work_type_assign_redirect(request)
+    return with_bulk_result(JsonResponse({"message": "Success"}), done, failed)
 
 
 @login_required
@@ -3936,41 +4025,26 @@ def rotating_shift_assign_bulk_archive(request):
             request, message=_("No rotatingshift found matching the query.")
         )
     ids = json.loads(ids)
-    is_active = True
-    message = _("un-archived")
-    if request.GET.get("is_active") == "False":
-        is_active = False
-        message = _("archived")
+    is_active = request.GET.get("is_active") != "False"
+    done = failed = 0
     for id in ids:
-        # check permission right here...
-        rshift_assign = RotatingShiftAssign.objects.get(id=id)
-        employees_rshift_assign = RotatingShiftAssign.objects.filter(
-            is_active=True, employee_id=rshift_assign.employee_id
-        )
-        flag = True
-        if is_active:
-            if len(employees_rshift_assign) < 1:
-                flag = False
-                rshift_assign.is_active = is_active
-        else:
-            flag = False
-            rshift_assign.is_active = is_active
+        rshift_assign = RotatingShiftAssign.objects.filter(id=id).first()
+        if rshift_assign is None:
+            failed += 1
+            continue
+        # An employee can only have one active rotating shift assign.
+        if is_active and (
+            rshift_assign.is_active
+            or RotatingShiftAssign.objects.filter(
+                is_active=True, employee_id=rshift_assign.employee_id
+            ).exists()
+        ):
+            failed += 1
+            continue
+        rshift_assign.is_active = is_active
         rshift_assign.save()
-        if not flag:
-            messages.success(
-                request,
-                _("Rotating shift for {employee} is {message}").format(
-                    employee=rshift_assign.employee_id, message=message
-                ),
-            )
-        else:
-            messages.error(
-                request,
-                _("Rotating shift for {employee} is already exists").format(
-                    employee=rshift_assign.employee_id
-                ),
-            )
-    return JsonResponse({"message": "Success"})
+        done += 1
+    return with_bulk_result(JsonResponse({"message": "Success"}), done, failed)
 
 
 @login_required
@@ -4588,14 +4662,18 @@ def work_type_request_bulk_cancel(request):
             request, message=_("No worktype request found matching the query.")
         )
     ids = json.loads(ids)
-    result = False
+    done = failed = 0
     for id in ids:
-        work_type_request = WorkTypeRequest.objects.get(id=id)
+        work_type_request = WorkTypeRequest.objects.filter(id=id).first()
         if (
-            is_reportingmanger(request, work_type_request)
-            or request.user.has_perm("base.cancel_worktyperequest")
-            or work_type_request.employee_id == request.user.employee_get
-            and work_type_request.approved == False
+            work_type_request is not None
+            and not work_type_request.canceled
+            and (
+                is_reportingmanger(request, work_type_request)
+                or request.user.has_perm("base.cancel_worktyperequest")
+                or work_type_request.employee_id == request.user.employee_get
+                and work_type_request.approved == False
+            )
         ):
             work_type_request.canceled = True
             work_type_request.approved = False
@@ -4613,8 +4691,10 @@ def work_type_request_bulk_cancel(request):
                 + f"?id={work_type_request.id}",
                 icon="close",
             )
-            result = True
-    return JsonResponse({"result": result})
+            done += 1
+        else:
+            failed += 1
+    return with_bulk_result(JsonResponse({"result": done > 0}), done, failed)
 
 
 @login_required
@@ -4683,24 +4763,30 @@ def work_type_request_bulk_approve(request):
             request, message=_("No worktype request found matching the query.")
         )
     ids = json.loads(ids)
-    result = False
+    done = failed = 0
     for id in ids:
-        work_type_request = WorkTypeRequest.objects.get(id=id)
+        work_type_request = WorkTypeRequest.objects.filter(id=id).first()
+        # A rejected (canceled) request stays rejected: bulk approve skips it.
         if (
-            work_type_request.employee_id == request.user.employee_get
+            work_type_request is not None
+            and work_type_request.employee_id == request.user.employee_get
             and not request.user.is_superuser
         ):
             continue
         if (
-            is_reportingmanger(request, work_type_request)
-            or request.user.has_perm("base.approve_worktyperequest")
-            or request.user.has_perm("base.change_worktyperequest")
-        ) and not work_type_request.approved:
+            work_type_request is not None
+            and (
+                is_reportingmanger(request, work_type_request)
+                or request.user.has_perm("base.approve_worktyperequest")
+                or request.user.has_perm("base.change_worktyperequest")
+            )
+            and not work_type_request.approved
+            and not work_type_request.canceled
+        ):
             # """
             # Here the request will be approved, can send mail right here
             # """
             work_type_request.approved = True
-            work_type_request.canceled = False
             employee_work_info = work_type_request.employee_id.employee_work_info
             employee_work_info.work_type_id = work_type_request.work_type_id
             employee_work_info.save()
@@ -4714,8 +4800,10 @@ def work_type_request_bulk_approve(request):
                 + f"?id={work_type_request.id}",
                 icon="checkmark",
             )
-            result = True
-    return JsonResponse({"result": result})
+            done += 1
+        else:
+            failed += 1
+    return with_bulk_result(JsonResponse({"result": done > 0}), done, failed)
 
 
 @login_required
@@ -4898,6 +4986,17 @@ def work_type_request_bulk_delete(request):
     return JsonResponse({"result": result})
 
 
+def shift_requests_url(shift_request):
+    """
+    Notification link to the Requests page, opened on the tab matching the
+    shift request: "Shift Allocations" for reallocations, else "Shift Requests".
+    """
+    tab = "shift-inbox" if shift_request.reallocate_to_id else "shift-request"
+    return (
+        reverse("requests-view") + "?" + urlencode({"tab": tab, "id": shift_request.id})
+    )
+
+
 @login_required
 @hx_request_required
 def shift_request(request):
@@ -4933,7 +5032,7 @@ def shift_request(request):
                     ),
                     verb_params={"employee": str(instance.employee_id)},
                     icon="information",
-                    redirect=reverse("shift-request-view") + f"?id={instance.id}",
+                    redirect=shift_requests_url(instance),
                 )
             except Exception as e:
                 pass
@@ -5000,7 +5099,7 @@ def shift_request_allocation(request):
                     ),
                     verb_params={"employee": str(instance.employee_id)},
                     icon="information",
-                    redirect=reverse("shift-request-view") + f"?id={instance.id}",
+                    redirect=shift_requests_url(instance),
                 )
             except Exception as e:
                 pass
@@ -5014,7 +5113,7 @@ def shift_request_allocation(request):
                     ),
                     verb_params={"employee": str(instance.employee_id)},
                     icon="information",
-                    redirect=reverse("shift-request-view") + f"?id={instance.id}",
+                    redirect=shift_requests_url(instance),
                 )
             except Exception as e:
                 pass
@@ -5360,7 +5459,7 @@ def shift_allocation_request_update(request, shift_request_id):
                     ),
                     verb_params={"employee": str(instance.employee_id)},
                     icon="information",
-                    redirect=reverse("shift-request-view") + f"?id={instance.id}",
+                    redirect=shift_requests_url(instance),
                 )
             except Exception as e:
                 pass
@@ -5374,7 +5473,7 @@ def shift_allocation_request_update(request, shift_request_id):
                     ),
                     verb_params={"employee": str(instance.employee_id)},
                     icon="information",
-                    redirect=reverse("shift-request-view") + f"?id={instance.id}",
+                    redirect=shift_requests_url(instance),
                 )
             except Exception as e:
                 pass
@@ -5440,7 +5539,7 @@ def shift_request_cancel(request, id):
         request.user.employee_get,
         recipient=shift_request.employee_id.employee_user_id,
         verb=gettext_noop("Your shift request has been canceled."),
-        redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
+        redirect=shift_requests_url(shift_request),
         icon="close",
     )
     if shift_request.reallocate_to:
@@ -5448,7 +5547,7 @@ def shift_request_cancel(request, id):
             request.user.employee_get,
             recipient=shift_request.reallocate_to.employee_user_id,
             verb=gettext_noop("Your shift request has been rejected."),
-            redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
+            redirect=shift_requests_url(shift_request),
             icon="close",
         )
     return JsonResponse({"result": True}) if is_ajax else HorillaRedirect(request)
@@ -5485,7 +5584,7 @@ def shift_allocation_request_cancel(request, id):
         request.user.employee_get,
         recipient=shift_request.employee_id.employee_user_id,
         verb=gettext_noop("Your shift request has been canceled."),
-        redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
+        redirect=shift_requests_url(shift_request),
         icon="close",
     )
 
@@ -5501,14 +5600,18 @@ def shift_request_bulk_cancel(request):
     """
     ids = request.POST["ids"]
     ids = json.loads(ids)
-    result = False
+    done = failed = 0
     for id in ids:
-        shift_request = ShiftRequest.objects.get(id=id)
+        shift_request = ShiftRequest.objects.filter(id=id).first()
         if (
-            is_reportingmanger(request, shift_request)
-            or request.user.has_perm("base.cancel_shiftrequest")
-            or shift_request.employee_id == request.user.employee_get
-            and shift_request.approved == False
+            shift_request is not None
+            and not shift_request.canceled
+            and (
+                is_reportingmanger(request, shift_request)
+                or request.user.has_perm("base.cancel_shiftrequest")
+                or shift_request.employee_id == request.user.employee_get
+                and shift_request.approved == False
+            )
         ):
             shift_request.canceled = True
             shift_request.approved = False
@@ -5529,7 +5632,7 @@ def shift_request_bulk_cancel(request):
                 request.user.employee_get,
                 recipient=shift_request.employee_id.employee_user_id,
                 verb=gettext_noop("Your shift request has been canceled."),
-                redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
+                redirect=shift_requests_url(shift_request),
                 icon="close",
             )
             if shift_request.reallocate_to:
@@ -5537,11 +5640,13 @@ def shift_request_bulk_cancel(request):
                     request.user.employee_get,
                     recipient=shift_request.employee_id.employee_user_id,
                     verb=gettext_noop("Your shift request has been canceled."),
-                    redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
+                    redirect=shift_requests_url(shift_request),
                     icon="close",
                 )
-            result = True
-    return JsonResponse({"result": result})
+            done += 1
+        else:
+            failed += 1
+    return with_bulk_result(JsonResponse({"result": done > 0}), done, failed)
 
 
 @login_required
@@ -5612,7 +5717,7 @@ def shift_request_approve(request, id):
             user.employee_get,
             recipient=recipient,
             verb=gettext_noop("Your shift request has been approved."),
-            redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
+            redirect=shift_requests_url(shift_request),
             icon="checkmark",
         )
 
@@ -5655,7 +5760,7 @@ def shift_allocation_request_approve(request, id):
             recipient=shift_request.employee_id.employee_user_id,
             verb=gettext_noop("%(employee_get)s is available for shift reallocation."),
             verb_params={"employee_get": str(request.user.employee_get)},
-            redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
+            redirect=shift_requests_url(shift_request),
             icon="checkmark",
         )
         return HorillaRedirect(request)
@@ -5672,28 +5777,36 @@ def shift_allocation_request_approve(request, id):
 @manager_can_enter("base.change_shiftrequest")
 def shift_request_bulk_approve(request):
     """
-    This method is used to approve a bunch of shift request
+    This method is used to approve a bunch of shift request.
+
+    Rejected (canceled) and already approved requests are skipped, not
+    approved: a rejection is a decision, bulk approve must not undo it.
     """
     ids = request.POST["ids"]
     ids = json.loads(ids)
-    result = False
+    done = failed = 0
     for id in ids:
-        shift_request = ShiftRequest.objects.get(id=id)
+        shift_request = ShiftRequest.objects.filter(id=id).first()
         if (
-            shift_request.employee_id == request.user.employee_get
+            shift_request is not None
+            and shift_request.employee_id == request.user.employee_get
             and not request.user.is_superuser
         ):
             continue
         if (
-            is_reportingmanger(request, shift_request)
-            or request.user.has_perm("base.approve_shiftrequest")
-            or request.user.has_perm("base.change_shiftrequest")
-        ) and not shift_request.approved:
+            shift_request is not None
+            and (
+                is_reportingmanger(request, shift_request)
+                or request.user.has_perm("base.approve_shiftrequest")
+                or request.user.has_perm("base.change_shiftrequest")
+            )
+            and not shift_request.approved
+            and not shift_request.canceled
+        ):
             """
             here the request will be approved, can send mail right here
             """
             shift_request.approved = True
-            shift_request.canceled = False
 
             if shift_request.reallocate_to:
                 shift_request.reallocate_to.employee_work_info.shift_id = (
@@ -5710,11 +5823,13 @@ def shift_request_bulk_approve(request):
                 request.user.employee_get,
                 recipient=shift_request.employee_id.employee_user_id,
                 verb=gettext_noop("Your shift request has been approved."),
-                redirect=reverse("shift-request-view") + f"?id={shift_request.id}",
+                redirect=shift_requests_url(shift_request),
                 icon="checkmark",
             )
-        result = True
-    return JsonResponse({"result": result})
+            done += 1
+        else:
+            failed += 1
+    return with_bulk_result(JsonResponse({"result": done > 0}), done, failed)
 
 
 @login_required
@@ -5762,7 +5877,7 @@ def shift_request_delete(request, id):
         messages.error(request, _("You cannot delete this shift request."))
 
     hx_target = request.META.get("HTTP_HX_TARGET", None)
-    path = request.META.get("HTTP_HX_CURRENT_URL", None)
+    path = request.META.get("HTTP_HX_CURRENT_URL", "")
     parsed_url = urlparse(path)
     parsed_path = parsed_url.path.lstrip("/")
     if hx_target and hx_target == "shift-container":
@@ -6003,10 +6118,13 @@ def _system_preferences_context(request):
         )
         from payroll.forms.component_forms import PayrollSettingsForm
 
-        currency_instance, _created = PayrollSettings.objects.get_or_create(
-            company_id=tracking_company
-        )
-        currency_form = PayrollSettingsForm(instance=currency_instance)
+        try:
+            currency_instance, _created = PayrollSettings.objects.get_or_create(
+                company_id=tracking_company
+            )
+            currency_form = PayrollSettingsForm(instance=currency_instance)
+        except Exception as e:
+            currency_form = None
     else:
         currency_form = None
 
@@ -7304,7 +7422,7 @@ def create_shiftrequest_comment(request, shift_id):
                                 "%(employee)s's shift request has received a comment."
                             ),
                             verb_params={"employee": str(shift.employee_id)},
-                            redirect=reverse("shift-request-view") + f"?id={shift.id}",
+                            redirect=shift_requests_url(shift),
                             icon="chatbox-ellipses",
                         )
                     elif (
@@ -7318,7 +7436,7 @@ def create_shiftrequest_comment(request, shift_id):
                             verb=gettext_noop(
                                 "Your shift request has received a comment."
                             ),
-                            redirect=reverse("shift-request-view") + f"?id={shift.id}",
+                            redirect=shift_requests_url(shift),
                             icon="chatbox-ellipses",
                         )
                     else:
@@ -7333,7 +7451,7 @@ def create_shiftrequest_comment(request, shift_id):
                                 "%(employee)s's shift request has received a comment."
                             ),
                             verb_params={"employee": str(shift.employee_id)},
-                            redirect=reverse("shift-request-view") + f"?id={shift.id}",
+                            redirect=shift_requests_url(shift),
                             icon="chatbox-ellipses",
                         )
                 else:
@@ -7342,7 +7460,7 @@ def create_shiftrequest_comment(request, shift_id):
                         request.user.employee_get,
                         recipient=rec,
                         verb=gettext_noop("Your shift request has received a comment."),
-                        redirect=reverse("shift-request-view") + f"?id={shift.id}",
+                        redirect=shift_requests_url(shift),
                         icon="chatbox-ellipses",
                     )
             return render(
@@ -7991,18 +8109,8 @@ def generate_error_report(error_list, error_data, file_name):
     data_frame = pd.DataFrame(error_data, columns=error_data.keys())
     response = HttpResponse(content_type="application/ms-excel")
     response["Content-Disposition"] = f'attachment; filename="{file_name}"'
-    writer = pd.ExcelWriter(response, engine="xlsxwriter")
-    try:
-        styled_data_frame = data_frame.style.map(
-            lambda x: "text-align: center", subset=pd.IndexSlice[:, :]
-        )
-        styled_data_frame.to_excel(writer, index=False, sheet_name="Sheet1")
-    except Exception:
-        data_frame.to_excel(writer, index=False, sheet_name="Sheet1")
-
-    worksheet = writer.sheets["Sheet1"]
-    worksheet.set_column("A:Z", 30)
-    writer.close()
+    # Same plain .xlsx layout as the "Download Template" files
+    write_import_xlsx(data_frame, response)
 
     def get_error_sheet(request):
         remove_dynamic_url(path_info)
@@ -8069,24 +8177,74 @@ def holiday_creation(request):
 @login_required
 def holidays_excel_template(request):
     try:
-        columns = [
-            "Holiday Name",
-            "Start Date",
-            "End Date",
-            "Recurring",
-        ]
-        data_frame = pd.DataFrame(columns=columns)
+        data_frame = import_template_frame("holiday")
         response = HttpResponse(content_type="application/ms-excel")
         response["Content-Disposition"] = (
-            'attachment; filename="holidays_template.xlsx"'
+            'attachment; filename="holidays_excel_template.xlsx"'
         )
-        data_frame.to_excel(response, index=False)
+        write_import_xlsx(data_frame, response)
         return response
     except Exception as exception:
         return HttpResponse(exception)
 
 
-def csv_holiday_import(file):
+def _resolve_holiday_company(value, selected_company=None):
+    """
+    Validate the "Company" import column (same rules as the employee import).
+
+    - `selected_company` (a Company instance): the row must name that company;
+      a blank Company is rejected.
+    - None ("All Company"/no selection): the row may name any existing
+      company, or leave it blank (company_id=None, applies to all companies).
+    Returns ``(company, error_message)``.
+    """
+    name = None if value is None or pd.isna(value) else str(value).strip() or None
+    if selected_company and not name:
+        return None, _(
+            "Company is required and must match the selected company '{}'."
+        ).format(selected_company.company)
+    if not name:
+        return None, None
+    company = Company.objects.filter(company__iexact=name).first()
+    if company is None:
+        return None, _("Company '{}' does not exist.").format(name)
+    if selected_company and company.pk != selected_company.pk:
+        return None, _("Company '{}' does not match the selected company.").format(name)
+    return company, None
+
+
+def _bulk_create_unique_holidays(holidays, error_list):
+    """
+    Bulk create imported holidays, skipping any whose date range already
+    exists for the same company (or for all companies when blank) or repeats
+    earlier in the same file. Skipped rows are appended to ``error_list``.
+    """
+    seen = set(
+        Holidays.objects.entire().values_list("company_id_id", "start_date", "end_date")
+    )
+    unique = []
+    for holiday in holidays:
+        key = (holiday.company_id_id, holiday.start_date, holiday.end_date)
+        if key in seen:
+            error_list.append(
+                {
+                    "Holiday Name": holiday.name,
+                    "Start Date": holiday.start_date,
+                    "End Date": holiday.end_date,
+                    "Company": holiday.company_id.company if holiday.company_id else "",
+                    "Duplicate Error": _(
+                        "A holiday already exists for this date range."
+                    ),
+                }
+            )
+            continue
+        seen.add(key)
+        unique.append(holiday)
+    if unique:
+        Holidays.objects.bulk_create(unique)
+
+
+def csv_holiday_import(file, selected_company=None):
     """
     Imports holiday data from a CSV file.
 
@@ -8098,68 +8256,77 @@ def csv_holiday_import(file):
     - "Start Date": Start date of the holiday (date string in a recognized format)
     - "End Date": End date of the holiday (date string in a recognized format)
     - "Recurring": Indicates whether the holiday recurs ("yes" or "no")
+    - "Company": Optional company name; blank applies the holiday to all companies
     """
     holiday_list, error_list = [], []
-    import io
-    content = file.read().decode("utf-8", errors="ignore")
-    csv_file = io.StringIO(content)
-    reader = csv.reader(csv_file)
-    next(reader)
-    total_rows = 0
 
-    for total_rows, row in enumerate(reader, start=1):
-        try:
-            name, start_date, end_date, recurring = row
-            holiday_dict = {
-                "Holiday Name": name,
-                "Start Date": start_date,
-                "End Date": end_date,
-                "Recurring": recurring,
-            }
+    with io.StringIO(file.read().decode("utf-8", errors="ignore")) as csv_file:
+        reader = csv.reader(csv_file)
+        next(reader)
+
+        for total_rows, row in enumerate(reader, start=1):
             save = True
-
             try:
-                start_date = format_date(start_date)
-            except (ValueError, TypeError):
-                save = False
-                holiday_dict["Start Date Error"] = _("Invalid start date format.")
-                error_list.append(holiday_dict)
+                name, start_date, end_date, recurring, *rest = row
+                company_name = rest[0] if rest else ""
+                holiday_dict = {
+                    "Holiday Name": name,
+                    "Start Date": start_date,
+                    "End Date": end_date,
+                    "Recurring": recurring,
+                    "Company": company_name,
+                }
 
-            try:
-                end_date = format_date(end_date)
-            except (ValueError, TypeError):
-                save = False
-                holiday_dict["End Date Error"] = _("Invalid end date format.")
-                error_list.append(holiday_dict)
-
-            if recurring.lower() not in ["yes", "no"]:
-                save = False
-                holiday_dict["Recurring Field Error"] = _(
-                    "Recurring must be yes or no."
+                company, company_error = _resolve_holiday_company(
+                    company_name, selected_company
                 )
-                error_list.append(holiday_dict)
+                if company_error:
+                    save = False
+                    holiday_dict["Company Error"] = company_error
+                    error_list.append(holiday_dict)
 
-            if save:
-                holiday_list.append(
-                    Holidays(
-                        name=name,
-                        start_date=start_date,
-                        end_date=end_date,
-                        recurring=recurring.lower() == "yes",
+                try:
+                    start_date = format_date(start_date)
+                except:
+                    save = False
+                    holiday_dict["Start Date Error"] = _("Invalid start date format.")
+                    error_list.append(holiday_dict)
+
+                try:
+                    end_date = format_date(end_date)
+                except:
+                    save = False
+                    holiday_dict["End Date Error"] = _("Invalid end date format.")
+                    error_list.append(holiday_dict)
+
+                if recurring.lower() not in ["yes", "no"]:
+                    save = False
+                    holiday_dict["Recurring Field Error"] = _(
+                        "Recurring must be yes or no."
                     )
-                )
+                    error_list.append(holiday_dict)
 
-        except Exception as e:
-            holiday_dict = {"Other Errors": str(e)}
-            error_list.append(holiday_dict)
+                if save:
+                    holiday_list.append(
+                        Holidays(
+                            name=name,
+                            start_date=start_date,
+                            end_date=end_date,
+                            recurring=recurring.lower() == "yes",
+                            company_id=company,
+                        )
+                    )
 
-    if holiday_list:
-        Holidays.objects.bulk_create(holiday_list)
+            except Exception as e:
+                holiday_dict["Other Errors"] = str(e)
+                error_list.append(holiday_dict)
+
+    _bulk_create_unique_holidays(holiday_list, error_list)
 
     return (error_list, total_rows)
 
 
-def excel_holiday_import(file):
+def excel_holiday_import(file, selected_company=None):
     """
     Imports holiday data from an Excel file.
 
@@ -8171,6 +8338,7 @@ def excel_holiday_import(file):
     - "Start Date": Start date of the holiday (date string in a recognized format)
     - "End Date": End date of the holiday (date string in a recognized format)
     - "Recurring": Indicates whether the holiday recurs ("yes" or "no")
+    - "Company": Optional company name; blank applies the holiday to all companies
 
     """
     error_list = []
@@ -8182,6 +8350,13 @@ def excel_holiday_import(file):
         save = True
         try:
             name = holiday["Holiday Name"]
+
+            company, company_error = _resolve_holiday_company(
+                holiday.get("Company"), selected_company
+            )
+            if company_error:
+                save = False
+                holiday["Company Error"] = company_error
 
             try:
                 start_date = pd.to_datetime(holiday["Start Date"]).date()
@@ -8214,6 +8389,7 @@ def excel_holiday_import(file):
                     start_date=start_date,
                     end_date=end_date,
                     recurring=recurring,
+                    company_id=company,
                 )
                 valid_holidays.append(holiday_instance)
             else:
@@ -8223,8 +8399,7 @@ def excel_holiday_import(file):
             holiday["Other errors"] = str(e)
             error_list.append(holiday)
 
-    if valid_holidays:
-        Holidays.objects.bulk_create(valid_holidays)
+    _bulk_create_unique_holidays(valid_holidays, error_list)
 
     return error_list, len(holiday_dicts)
 
@@ -8241,9 +8416,12 @@ def holidays_info_import(request):
         "Start Date": [],
         "End Date": [],
         "Recurring": [],
+        "Company": [],
+        "Company Error": [],
         "Start Date Error": [],
         "End Date Error": [],
         "Recurring Field Error": [],
+        "Duplicate Error": [],
         "Other Errors": [],
     }
 
@@ -8254,14 +8432,18 @@ def holidays_info_import(request):
         if file:
             content_type = file.content_type
             if content_type == "text/csv":
-                error_list, total_count = csv_holiday_import(file)
+                error_list, total_count = csv_holiday_import(
+                    file, get_session_company(request)
+                )
                 if error_list:
                     path_info = generate_error_report(error_list, error_data, file_name)
             elif (
                 content_type
                 == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ):
-                error_list, total_count = excel_holiday_import(file)
+                error_list, total_count = excel_holiday_import(
+                    file, get_session_company(request)
+                )
                 if error_list:
                     path_info = generate_error_report(error_list, error_data, file_name)
             else:
@@ -8439,11 +8621,22 @@ def bulk_holiday_delete(request):
     Deletes multiple holidays based on IDs passed in the POST request.
     """
     ids = request.POST.getlist("ids")
+    if len(ids) == 1 and ids[0].lstrip().startswith("["):
+        # The list view posts the ids as one JSON array string.
+        try:
+            ids = json.loads(ids[0])
+        except ValueError:
+            ids = []
     deleted_count = Holidays.objects.filter(id__in=ids).delete()[0]
     messages.success(
         request, _("{} Holidays have been successfully deleted.".format(deleted_count))
     )
-    return redirect("holiday-filter")
+    if request.headers.get("HX-Request"):
+        return redirect("holiday-filter")
+    # The list view posts via ajax and refreshes itself. Redirecting here made the
+    # ajax call follow the redirect with a GET to "holiday-filter" (405), so the
+    # page's success callback never ran and the list kept the deleted rows.
+    return JsonResponse({"message": "Success"})
 
 
 @login_required

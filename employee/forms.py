@@ -384,6 +384,11 @@ class EmployeeWorkInformationForm(ModelForm):
             self.fields[field].widget.attrs["placeholder"] = self.fields[field].label
             if disable:
                 self.fields[field].disabled = True
+        # Pay is kept on the contract. A disabled field ignores what is posted and
+        # keeps the stored value, so saving this form never changes the old copy.
+        for name in ("basic_salary", "salary_hour"):
+            if name in self.fields:
+                self.fields[name].disabled = True
         field_names = {
             "Department": "department",
             "Job Position": "job_position",
@@ -586,7 +591,7 @@ excel_columns = [
     ("zip", _("Zip Code")),
     ("marital_status", _("Marital Status")),
     ("children", _("Children")),
-    ("is_active", _("Is active")),
+    ("is_active", _("Active")),
     ("emergency_contact", _("Emergency Contact")),
     ("emergency_contact_name", _("Emergency Contact Name")),
     ("emergency_contact_relation", _("Emergency Contact Relation")),
@@ -774,27 +779,54 @@ class PolicyForm(ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["attachment"] = MultipleFileField(
-            label="Attachements", required=False
+            label="Attachments", required=False
         )
-        # Re-insert at the end so it renders after the attachment field.
-        self.fields["is_visible_to_all"] = self.fields.pop("is_visible_to_all")
+
+        self.order_fields(
+            [
+                "title",
+                "body",
+                "attachment",
+                "is_visible_to_all",
+                "employees",
+                "department",
+                "job_position",
+                "company_id",
+            ]
+        )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if not cleaned_data.get("is_visible_to_all"):
+            employees = cleaned_data.get("employees")
+            department = cleaned_data.get("department")
+            job_position = cleaned_data.get("job_position")
+            if not employees and not department and not job_position:
+                message = _(
+                    "Select at least one of Employees, Department or Job "
+                    "Position when Publish to all is disabled."
+                )
+                self.add_error("employees", message)
+                self.add_error("department", message)
+                self.add_error("job_position", message)
+        return cleaned_data
 
     def save(self, *args, commit=True, **kwargs):
-        attachemnt = []
+        attachment = []
         multiple_attachment_ids = []
-        attachemnts = None
+        attachments = None
         if self.files.getlist("attachment"):
-            attachemnts = self.files.getlist("attachment")
+            attachments = self.files.getlist("attachment")
             multiple_attachment_ids = []
-            for attachemnt in attachemnts:
+            for attachment in attachments:
                 file_instance = PolicyMultipleFile()
-                file_instance.attachment = attachemnt
+                file_instance.attachment = attachment
                 file_instance.save()
                 multiple_attachment_ids.append(file_instance.pk)
         instance = super().save(commit)
         if commit:
             instance.attachments.add(*multiple_attachment_ids)
-        return instance, attachemnts
+        return instance, attachments
 
 
 class BonusPointAddForm(ModelForm):
@@ -875,6 +907,11 @@ class DisciplinaryActionForm(ModelForm):
             if not employee_data.exists():
                 self.add_error("employee_id", _("This field is required."))
             cleaned_data["employee_id"] = employee_data
+
+        if cleaned_data.get("unit_in") == "hours" and not (
+            cleaned_data.get("hours") or ""
+        ).strip("0:"):
+            self.add_error("hours", _("This field is required."))
 
         return cleaned_data
 

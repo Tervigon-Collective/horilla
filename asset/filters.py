@@ -15,7 +15,14 @@ from base.methods import reload_queryset
 from employee.models import Employee
 from horilla.filters import HorillaFilterSet, filter_name_or_badge_terms
 
-from .models import Asset, AssetAssignment, AssetCategory, AssetLot, AssetRequest
+from .models import (
+    Asset,
+    AssetAssignment,
+    AssetCategory,
+    AssetLot,
+    AssetRequest,
+    AssetServiceRequest,
+)
 
 
 class CustomFilterSet(HorillaFilterSet):
@@ -340,6 +347,7 @@ class AssetRequestFilter(CustomFilterSet):
     """
 
     search = django_filters.CharFilter(method="search_method")
+    search_field = django_filters.CharFilter(method="search_in")
     # Dedicated comma-separated "Name or Badge ID" search, alongside the
     # AJAX requested_employee_id picker below rather than instead of it --
     # same field/behavior as every other modernized panel this session;
@@ -376,6 +384,8 @@ class AssetRequestFilter(CustomFilterSet):
         """
         This method is used to search employees
         """
+        if self.data.get("search_field"):
+            return queryset
         values = value.split(" ")
         empty = queryset.model.objects.none()
         for split in values:
@@ -470,12 +480,63 @@ class AssetRequestFilter(CustomFilterSet):
         )
 
 
+class AssetServiceRequestFilter(CustomFilterSet):
+    """
+    Custom filter set for AssetServiceRequest instances.
+    """
+
+    search = django_filters.CharFilter(method="search_method")
+
+    ajax_fields = {
+        "requested_employee_id": {
+            "key": "asset-service-request-employee",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+    }
+
+    def search_method(self, queryset, _, value: str):
+        """
+        This method is used to search employees and assets
+        """
+        values = value.split(" ")
+        empty = queryset.model.objects.none()
+        for split in values:
+            empty = empty | (
+                queryset.filter(
+                    requested_employee_id__employee_first_name__icontains=split
+                )
+                | queryset.filter(
+                    requested_employee_id__employee_last_name__icontains=split
+                )
+                | queryset.filter(issue_description__icontains=split)
+                | queryset.filter(assignment_id__asset_id__asset_name__icontains=split)
+            )
+        return empty.distinct()
+
+    class Meta:
+        """
+        Specifies the model and fields to be used for filtering AssetServiceRequest instances.
+        """
+
+        model = AssetServiceRequest
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for visible in self.form.visible_fields():
+            visible.field.widget.attrs["id"] = str(uuid.uuid4())
+
+
 class AssetAllocationFilter(CustomFilterSet):
     """
     Custom filter set for AssetAllocation instances.
     """
 
     search = django_filters.CharFilter(method="search_method")
+    search_field = django_filters.CharFilter(method="search_in")
 
     # Meta.fields = "__all__" below only auto-generates filters for
     # AssetAssignment's own direct fields -- it doesn't reach through
@@ -487,6 +548,14 @@ class AssetAllocationFilter(CustomFilterSet):
             field_name="assigned_to_employee_id__employee_work_info__department_id"
         )
     )
+
+    # Assets still out, not yet returned. The Assets by Department chart counts exactly
+    # these, so its click-through asks for them; without it the list also showed returned
+    # assignments and ran higher than the bar it was opened from.
+    held = django_filters.BooleanFilter(method="filter_held", label=_("Currently held"))
+
+    def filter_held(self, queryset, _name, value):
+        return queryset.filter(return_status__isnull=True) if value else queryset
 
     # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism)
     # -- Allocated User, Asset, and Allocated By opt into AJAX-searched
@@ -523,6 +592,8 @@ class AssetAllocationFilter(CustomFilterSet):
         """
         This method is used to search employees and assets
         """
+        if self.data.get("search_field"):
+            return queryset
         values = value.split(" ")
         empty = queryset.model.objects.none()
         for split in values:

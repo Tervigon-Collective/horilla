@@ -176,6 +176,13 @@ class MyAttendanceList(MyAttendancesListView):
 
     row_status_class = "validated-{attendance_validated}  requested-{is_validate_request} approved-request-{is_validate_request_approved}"
 
+    show_quick_date_filters = True
+    quick_date_fields = (
+        "attendance_date",
+        "attendance_date__gte",
+        "attendance_date__lte",
+    )
+
     def get_queryset(self):
         queryset = super().get_queryset()
         employee = self.request.user.employee_get

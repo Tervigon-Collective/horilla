@@ -83,6 +83,11 @@ class RosterNavView(HorillaNavView):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.search_in = [
+            ("employee", _("Employee")),
+            ("shift", _("Shift")),
+            ("department", _("Department")),
+        ]
         self.actions = [
             {
                 "action": _("Import Roster"),

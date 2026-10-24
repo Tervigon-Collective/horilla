@@ -1,6 +1,5 @@
 from typing import Any
 
-from django import forms
 from django.contrib import messages
 from django.db.models import Q
 from django.http import HttpResponse
@@ -20,12 +19,13 @@ from horilla_views.generic.cbv.views import (
     HorillaFormView,
     HorillaListView,
     HorillaNavView,
+    HorillaTabContentShell,
     HorillaTabView,
     TemplateView,
 )
 from notifications.signals import notify
 from pms.cbv.key_result import KeyResultFormView
-from pms.filters import ActualObjectiveFilter, KeyResultFilter, ObjectiveFilter
+from pms.filters import ActualObjectiveFilter, KeyResultFilter
 from pms.forms import (
     AddAssigneesForm,
     EmployeeKeyResultForm,
@@ -124,8 +124,8 @@ class ObjectivesList(HorillaListView):
         ("title", _("Title")),
         ("duration_unit", _("Duration Unit")),
         ("duration", _("Duration")),
-        ("is_template", _("Is Template")),
-        ("archive", _("Is Archived")),
+        ("is_template", _("Template")),
+        ("archive", _("Archived")),
         ("company_id", _("Company")),
     ]
 
@@ -275,7 +275,7 @@ class ObjectivesTab(HorillaTabView):
             return f"{url}?{query_string}" if query_string else url
 
         all_objectives_tab = {
-            "title": _("All objectives"),
+            "title": _("All Objectives"),
             "url": with_query(reverse("all-objectives-tab-shell")),
             "badge": all_objectives_count,
         }
@@ -285,7 +285,7 @@ class ObjectivesTab(HorillaTabView):
         else:
             self.tabs = [
                 {
-                    "title": _("My objective"),
+                    "title": _("My Objectives"),
                     "url": with_query(reverse("my-objectives-tab-shell")),
                     "badge": assigned_objectives_count,
                 },
@@ -332,8 +332,8 @@ class _ObjectivesTabNavBase(HorillaNavView):
         ("title", _("Title")),
         ("duration_unit", _("Duration Unit")),
         ("duration", _("Duration")),
-        ("is_template", _("Is Template")),
-        ("archive", _("Is Archived")),
+        ("is_template", _("Template")),
+        ("archive", _("Archived")),
         ("company_id", _("Company")),
     ]
 
@@ -343,6 +343,8 @@ class MyObjectivesNav(_ObjectivesTabNavBase):
     """
     Independent Nav for the My Objectives tab.
     """
+
+    nav_title = _("My Objectives")
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -356,19 +358,21 @@ class AllObjectivesNav(_ObjectivesTabNavBase):
     Independent Nav for the All Objectives tab.
     """
 
+    nav_title = _("All Objectives")
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.search_url = reverse("all-objectives-view-tab")
         self.search_swap_target = "#allObjectivesListContainer"
 
 
-class MyObjectivesTabShell(AttendanceTabContentShell):
+class MyObjectivesTabShell(HorillaTabContentShell):
     nav_url_name = "my-objectives-nav"
     container_id = "myObjectivesListContainer"
     tabs_root_id = "objContainer"
 
 
-class AllObjectivesTabShell(AttendanceTabContentShell):
+class AllObjectivesTabShell(HorillaTabContentShell):
     nav_url_name = "all-objectives-nav"
     container_id = "allObjectivesListContainer"
     tabs_root_id = "objContainer"
@@ -877,10 +881,30 @@ class EmployeeObjectiveKeyResultDetailListView(HorillaListView):
             pk=self.request.GET.get("employee_objective_id")
         ).first()
 
+        # Row actions, in this order: History, Edit, Delete.
         self.actions = []
         managers = []
         if emp_objective and emp_objective.objective_id:
             managers = list(emp_objective.objective_id.managers.all())
+        if (
+            emp_objective
+            and self.request.user.employee_get
+            in emp_objective.objective_id.managers.all()
+            or self.request.user.has_perm("pms.view_employeekeyresult")
+        ):
+            self.actions.append(
+                {
+                    "action": _("History"),
+                    "icon": "time-outline",
+                    "attrs": """
+                hx-get='{get_history_url}'
+                hx-target="#genericOffCanvas"
+                data-target='#genericSidebar'
+                class="oh-btn oh-btn--light-bkg oh-btn--sq-sm oh-activity-sidebar__open"
+                style="cursor: pointer;"
+                """,
+                }
+            )
         if (
             self.request.user.has_perm("pms.change_objective")
             or self.request.user.has_perm("pms.change_employeeobjective")
@@ -915,26 +939,6 @@ class EmployeeObjectiveKeyResultDetailListView(HorillaListView):
                         hx-on-htmx-after-request= "window.location.reload();"
                         style="cursor: pointer;"
                     """,
-                }
-            )
-
-        if (
-            emp_objective
-            and self.request.user.employee_get
-            in emp_objective.objective_id.managers.all()
-            or self.request.user.has_perm("pms.view_employeekeyresult")
-        ):
-            self.actions.append(
-                {
-                    "action": _("History"),
-                    "icon": "time-outline",
-                    "attrs": """
-                hx-get='{get_history_url}'
-                hx-target="#genericOffCanvas"
-                data-target='#genericSidebar'
-                class="oh-btn oh-btn--light-bkg oh-btn--sq-sm oh-activity-sidebar__open"
-                style="cursor: pointer;"
-                """,
                 }
             )
 
@@ -980,6 +984,11 @@ class EKRTab(EmployeeRecordAccessDispatchMixin, EmployeeObjectiveKeyResultDetail
     EKR tab
     """
 
+    # The parent's compact "no key results for this objective" line suits a row
+    # of an objective accordion, not a whole tab: use the usual empty-page look.
+    custom_empty_template = "cbv/objectives/tab_empty.html"
+
+    show_saved_filters = False
     columns = [
         (_("Title"), "title_col"),
         (_("Objective"), "employee_objective_id__objective_id__title"),
@@ -1016,14 +1025,3 @@ class EKRTab(EmployeeRecordAccessDispatchMixin, EmployeeObjectiveKeyResultDetail
         context = super().get_context_data(**kwargs)
         context["compact_group_pagination"] = True
         return context
-
-
-EmployeeProfileView.add_tab(
-    tabs=[
-        {
-            "title": _("Key Results"),
-            "view": EKRTab.as_view(),
-            "accessibility": "pms.cbv.accessibility.performance_accessibility",
-        },
-    ]
-)

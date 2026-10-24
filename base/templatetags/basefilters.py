@@ -81,7 +81,9 @@ _ALLOWED_CSS_PROPERTIES = [
 
 
 class _StrictCSSSanitizer(CSSSanitizer):
-    """Reject declarations whose value contains a CSS function call.
+    """Reject declarations whose value contains a CSS function call, except
+    the handful of numeric-only colour functions a rich-text editor's own
+    colour picker actually emits.
 
     bleach validates the property NAME against the allow-list but does not
     look at the VALUE, so `color: expression(alert(1))` passes its filter
@@ -90,12 +92,21 @@ class _StrictCSSSanitizer(CSSSanitizer):
     is not doing its job, and restricting the property list does not help
     because the payload rides on whichever property is allowed.
 
-    None of _ALLOWED_CSS_PROPERTIES needs a function value, so dropping any
-    declaration containing one costs nothing and closes the whole class --
-    expression(), url(), image-set() and anything added later.
+    Dropping any declaration containing a function call closes that whole
+    class -- expression(), url(), image-set() and anything added later --
+    but Summernote's colour picker writes `color`/`background-color` as
+    rgb()/rgba() (not hex), so the blanket rule was silently discarding
+    every colour a user picked while leaving bold/underline/etc. untouched.
+    _SAFE_COLOR_FUNCTION carves out exactly rgb()/rgba()/hsl()/hsla() with
+    purely numeric/percentage arguments -- nothing nested, no url()/var(),
+    so it can't smuggle the thing this class exists to block.
     """
 
     _FUNCTION_CALL = re.compile(r"[a-z-]+\s*\(", re.IGNORECASE)
+    _SAFE_COLOR_FUNCTION = re.compile(
+        r"^(rgb|rgba|hsl|hsla)\(\s*[\d.]+%?\s*(?:[,\s/]\s*[\d.]+%?\s*){1,3}\)$",
+        re.IGNORECASE,
+    )
 
     def sanitize_css(self, style):
         declarations = []
@@ -103,7 +114,10 @@ class _StrictCSSSanitizer(CSSSanitizer):
             if not declaration.strip():
                 continue
             _, _, value = declaration.partition(":")
-            if self._FUNCTION_CALL.search(value):
+            value = value.strip()
+            if self._FUNCTION_CALL.search(
+                value
+            ) and not self._SAFE_COLOR_FUNCTION.match(value):
                 continue
             declarations.append(declaration.strip())
         return "; ".join(declarations) + (";" if declarations else "")
@@ -235,6 +249,31 @@ def filtersubordinates(user):
     return employee_manages.exists()
 
 
+@register.filter(name="tag_label")
+def tag_label(field, labels):
+    """Filter-tag label: the display-ready one from humanize_filter_tags if
+    it has one, else the generic key-derived label."""
+    if labels and field in labels:
+        return labels[field]
+    return filter_field(field)
+
+
+@register.filter(name="tag_value")
+def tag_value(value):
+    """Filter-tag value: leave display-ready text (FriendlyTagText) as is."""
+    from base.methods import FriendlyTagText
+
+    if isinstance(value, FriendlyTagText):
+        return str(value)
+    return filter_field(value)
+
+
+@register.filter(name="tag_extra")
+def tag_extra(field, extras):
+    """Extra query key(s) a merged tag's clear (x) must also clear."""
+    return (extras or {}).get(field, "")
+
+
 @register.filter(name="filter_field")
 def filter_field(value):
     if value.endswith("_id"):
@@ -242,6 +281,14 @@ def filter_field(value):
     if value.endswith("_ids"):
         value = value[:-4]
     splitted = value.split("__")
+    if splitted[-1] == "is_active":
+        # Filter tags read "Active: True", also for related lookups such as
+        # employee_id__is_active.
+        return "Active"
+    if splitted[-1] in ("gte", "lte", "gt", "lt") and len(splitted) > 1:
+        # never surface the lookup operator itself as the label
+        suffix = {"gte": "From", "gt": "From", "lte": "To", "lt": "To"}[splitted[-1]]
+        return f"{splitted[-2].replace('_', ' ').capitalize()} ({suffix})"
 
     return splitted[-1].replace("_", " ").capitalize()
 

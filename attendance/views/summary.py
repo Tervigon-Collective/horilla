@@ -25,7 +25,12 @@ from django.utils.translation import gettext_lazy as _
 from horilla.payroll_cycle import cycle_bounds
 from xlsxwriter.utility import xl_range
 
-from attendance.models import Attendance, AttendanceDailyHours, AttendanceSummaryHours
+from attendance.models import (
+    Attendance,
+    AttendanceDailyHours,
+    AttendanceSummaryHours,
+    AttendanceSummaryOverride,
+)
 from base.methods import (
     filtersubordinatesemployeemodel,
     get_company_leave_dates,
@@ -83,6 +88,228 @@ def _holiday_names_in_range(from_date, to_date):
             for d in _iter_dates(span_start, span_end):
                 info[d] = h.name
     return info
+
+
+# ------------------------------------------------------------------ split days
+# A day cut in two, each half being present, absent, paid leave or unpaid leave.
+# It is kept in the resolution field itself ("split:P+A"), so no column is added.
+SPLIT_PREFIX = "split:"
+SPLIT_HALVES = {
+    # code: (summary bucket, label, colour on the calendar -- the same as its button)
+    "P": ("present", _("Present"), "#86efac"),
+    "A": ("absent", _("Absent"), "#fca5a5"),
+    "PL": ("paid_leave", _("Paid Leave"), "#93c5fd"),
+    "UL": ("unpaid_leave", _("Unpaid Leave"), "#fdba74"),
+    # Only worked out from the clock: the half of a day that fell short. Unpaid, like absence.
+    "SH": ("absent", _("Short Hours"), "#f9a8d4"),
+}
+
+
+def parse_split(resolution):
+    """("P", "A") for "split:P+A"; None for anything that is not a valid split."""
+    if not isinstance(resolution, str) or not resolution.startswith(SPLIT_PREFIX):
+        return None
+    halves = resolution[len(SPLIT_PREFIX) :].split("+")
+    if len(halves) == 2 and all(code in SPLIT_HALVES for code in halves):
+        return tuple(halves)
+    return None
+
+
+# Soft backgrounds for the status pills, one per half.
+SPLIT_TINTS = {
+    "P": "#d1fae5",
+    "A": "#fee2e2",
+    "PL": "#dbeafe",
+    "UL": "#ffedd5",
+    "SH": "#fce7f3",
+}
+
+
+def split_pill_bg(halves):
+    """Two-colour pill background for a split day."""
+    return f"linear-gradient(90deg,{SPLIT_TINTS[halves[0]]} 50%,{SPLIT_TINTS[halves[1]]} 50%)"
+
+
+def split_label(resolution):
+    """ "Half Present + Half Absent", for the banner and the history."""
+    halves = parse_split(resolution)
+    if not halves:
+        return str(resolution)
+    return " + ".join(f"{_('Half')} {SPLIT_HALVES[code][1]}" for code in halves)
+
+
+def regularizes(resolution):
+    """Does the resolution say the day was worked, so a holiday or week off is not all overtime?"""
+    halves = parse_split(resolution)
+    return resolution in ("full_present", "half_present", "half_absent") or bool(
+        halves and "P" in halves
+    )
+
+
+def leave_day_fractions(leave, from_date, to_date):
+    """{date: (fraction, lead)} for one leave request, from its start/end breakdown.
+
+    A date is 0.5 when it is a start/end date taken as a first or second half. lead says
+    which half of the day the leave covers ("first" or "second").
+    """
+    start = leave.start_date
+    end = leave.end_date or start
+    out = {}
+    for d in _iter_dates(max(start, from_date), min(end, to_date)):
+        breakdown = "full_day"
+        if d == start:
+            breakdown = leave.start_date_breakdown
+        elif d == end:
+            breakdown = leave.end_date_breakdown
+        if breakdown in ("first_half", "second_half"):
+            out[d] = (0.5, "first" if breakdown == "first_half" else "second")
+        else:
+            out[d] = (1.0, "first")
+    return out
+
+
+def partial_leave_days(leaves, from_date, to_date):
+    """Add up the leave on each date: ({date: (paid, unpaid, lead, name)}, full paid, full unpaid).
+
+    A date is "partial" when neither kind of leave covers all of it. The two sets hold the
+    dates a leave covers completely.
+    """
+    slots = {}
+    for lr in leaves:
+        kind = "paid" if lr.leave_type_id.payment == "paid" else "unpaid"
+        for d, (frac, lead) in leave_day_fractions(lr, from_date, to_date).items():
+            slot = slots.setdefault(
+                d, {"paid": 0.0, "unpaid": 0.0, "lead": lead, "name": ""}
+            )
+            slot[kind] += frac
+            slot["name"] = slot["name"] or lr.leave_type_id.name
+            if frac < 1:
+                slot["lead"] = lead
+    partial, paid_full, unpaid_full = {}, set(), set()
+    for d, slot in slots.items():
+        paid, unpaid = min(slot["paid"], 1.0), min(slot["unpaid"], 1.0)
+        if paid >= 1:
+            paid_full.add(d)
+        if unpaid >= 1:
+            unpaid_full.add(d)
+        if paid < 1 and unpaid < 1:
+            partial[d] = (paid, min(unpaid, 1.0 - paid), slot["lead"], slot["name"])
+    return partial, paid_full, unpaid_full
+
+
+def natural_halves(partial, got_attendance):
+    """The two halves of a day with half-day leave: ("PL", "A"), ("P", "UL"), ("PL", "UL") ...
+
+    The leave covers its half; the other half is present when attendance was found for
+    it, otherwise absent. Paid leave comes first when both kinds are taken.
+    """
+    paid, unpaid, lead, _name = partial
+    leave = ["PL"] * int(round(paid * 2)) + ["UL"] * int(round(unpaid * 2))
+    if len(leave) >= 2:
+        return tuple(leave[:2])
+    other = "P" if got_attendance else "A"
+    return (leave[0], other) if lead == "first" else (other, leave[0])
+
+
+MAX_DAY_SECONDS = 24 * 3600
+
+
+def day_history(employee, date, status_pill):
+    """
+    Every change made to one day, newest first, from the audit trail.
+
+    status_pill(value) -> (label, background, foreground) for a saved status.
+    Entries: {kind, icon, title, was, now, by, at}; was/now are pills (or None).
+    """
+    from auditlog.models import LogEntry
+    from django.contrib.contenttypes.models import ContentType
+
+    from attendance.models import AttendanceConflictResolution, AttendanceDailyHours
+
+    def actor_name(entry):
+        user = entry.actor
+        if user is None:
+            return ""
+        try:
+            person = user.employee_get
+            return f"{person.employee_first_name} {person.employee_last_name or ''}".strip()
+        except Exception:
+            return user.get_username()
+
+    def hours_text(value):
+        try:
+            secs = int(float(value))
+        except (TypeError, ValueError):
+            return str(value)
+        return f"{secs // 3600}h {(secs % 3600) // 60:02d}m"
+
+    def pill(value):
+        label, bg, fg = status_pill(value)
+        return {"label": label, "bg": bg, "fg": fg}
+
+    entries = []
+    for model in (AttendanceConflictResolution, AttendanceDailyHours):
+        logs = LogEntry.objects.filter(
+            content_type=ContentType.objects.get_for_model(model),
+            serialized_data__fields__employee_id=employee.pk,
+            serialized_data__fields__date=date.isoformat(),
+        ).select_related("actor")
+        for entry in logs:
+            fields = (entry.serialized_data or {}).get("fields", {})
+            changes = entry.changes or {}
+            item = {
+                "at": entry.timestamp,
+                "by": actor_name(entry),
+                "was": None,
+                "now": None,
+            }
+            if model is AttendanceConflictResolution:
+                old, new = (
+                    changes.get("resolution") or [None, fields.get("resolution")]
+                )[:2]
+                item["kind"] = "status"
+                if entry.action == LogEntry.Action.DELETE:
+                    item.update(
+                        icon="refresh-outline",
+                        title=_("Override cleared"),
+                        was=pill(fields.get("resolution")),
+                    )
+                elif entry.action == LogEntry.Action.CREATE or old in (
+                    None,
+                    "None",
+                    "",
+                ):
+                    item.update(
+                        icon="checkmark-circle-outline",
+                        title=_("Regularized as"),
+                        now=pill(new),
+                    )
+                elif "resolution" in changes:
+                    item.update(
+                        icon="swap-horizontal-outline",
+                        title=_("Changed"),
+                        was=pill(old),
+                        now=pill(new),
+                    )
+                else:
+                    continue
+            else:
+                item["kind"] = "hours"
+                new = (
+                    changes.get("hours_second") or [None, fields.get("hours_second")]
+                )[1]
+                if entry.action == LogEntry.Action.DELETE:
+                    item.update(icon="pencil-outline", title=_("Hours edit removed"))
+                elif new in (None, "None") and "is_manually_edited" not in changes:
+                    continue
+                else:
+                    item.update(
+                        icon="pencil-outline",
+                        title=_("Hours set to") + " " + hours_text(new),
+                    )
+            entries.append(item)
+    entries.sort(key=lambda e: e["at"], reverse=True)
+    return entries
 
 
 def _secs_to_label(secs):
@@ -442,7 +669,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     leave_qs = (
         LeaveRequest.objects.filter(
             employee_id__in=emp_pks,
-            status="approved",
+            status__in=["approved", "cancel_requested"],
             start_date__lte=count_end_date,
         )
         .filter(Q(end_date__gte=from_date) | Q(end_date__isnull=True))
@@ -522,6 +749,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     _RES_BUCKET = {
         "full_present": ("present", 1.0),
         "half_present": ("present", 0.5),
+        "half_absent": ("present", 0.5),
         "absent": ("absent", 1.0),
         "paid_leave": ("paid_leave", 1.0),
         "unpaid_leave": ("unpaid_leave", 1.0),
@@ -608,6 +836,30 @@ def build_monthly_summary(from_date, to_date, employee_qs):
                 continue
 
             # Direct HR override — use as-is
+            # A day cut in two: each half goes to its own bucket.
+            halves = parse_split(res)
+            if halves:
+                for code in halves:
+                    bucket = SPLIT_HALVES[code][0]
+                    if bucket == "present":
+                        present += 0.5
+                    elif bucket == "absent":
+                        absent += 0.5
+                    elif bucket == "paid_leave":
+                        paid_leave += 0.5
+                    else:
+                        unpaid_leave += 0.5
+                if "P" in halves:
+                    _day_name = _DAY_NAMES[d.weekday()]
+                    _full_secs = _shift_sched.get(_day_name, 0) or 28800
+                    _day_manual = _daily_hrs.get(d)
+                    hours_second += (
+                        _day_manual
+                        if _day_manual is not None
+                        else int(_full_secs * 0.5 * halves.count("P"))
+                    )
+                continue
+
             bucket_info = _RES_BUCKET.get(res)
             if bucket_info is not None:
                 bucket, val = bucket_info
@@ -623,6 +875,24 @@ def build_monthly_summary(from_date, to_date, employee_qs):
                     holiday_c += val
                 elif bucket == "week_off":
                     week_off += val
+
+                # A regularised half day is half a day present and half a day
+                # absent, the same as a half day that came from the clock. The
+                # absent half was missing here, so the day counted 0.5 paid and
+                # 0.5 nothing -- paid plus unpaid fell short of the month, and
+                # the missing half was never deducted from pay.
+                if (
+                    bucket == "present"
+                    and val < 1.0
+                    and d not in off_set
+                    and d not in holiday_dates_set
+                    and d not in _emp_off
+                ):
+                    # Half Day: the other half is paid leave. Half Absent: it is absent.
+                    if res == "half_present":
+                        paid_leave += 1.0 - val
+                    else:
+                        absent += 1.0 - val
 
                 # Hours for regularized present days (per-day manual override wins)
                 if bucket == "present":
@@ -673,7 +943,8 @@ def build_monthly_summary(from_date, to_date, employee_qs):
                     absent += max(0.0, 1.0 - _lv[0] - _worked)
                 else:
                     present += val
-                    # Half-day (0.5) or zero-hour: remaining fraction is absent
+                    # Half the shift or more but not all of it: the other half fell
+                    # short, so it is unpaid. Hours too low to count: absent.
                     if val < 1.0:
                         absent += 1.0 - val
                 # Actual hours (per-day manual override wins)
@@ -743,7 +1014,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
             # week-off classification (Full Present / Half Day) — treat the
             # hours like a normal working day (regular + capped OT) instead
             # of counting them entirely as holiday/week-off overtime.
-            _regularized = _resolutions.get(_d) in ("full_present", "half_present")
+            _regularized = regularizes(_resolutions.get(_d))
             if _d in holiday_dates_set and not _regularized:
                 ot_holiday_seconds += _wsec
             elif _d in _emp_off and not _regularized:
@@ -760,17 +1031,32 @@ def build_monthly_summary(from_date, to_date, employee_qs):
             {
                 "employee": emp,
                 "present": present,
-                "paid_leave": paid_leave,
-                "unpaid_leave": unpaid_leave,
+                # Whole days stay whole numbers; half a day of leave (a split day) shows as .5.
+                "paid_leave": paid_leave if paid_leave % 1 else int(paid_leave),
+                "unpaid_leave": unpaid_leave if unpaid_leave % 1 else int(unpaid_leave),
                 "absent": absent,
                 # Days before the joining date: unpaid in payroll, not absent.
                 "not_employed": not_employed,
                 "total_working": total_working,
                 "week_off": int(week_off),
                 "holiday": int(holiday_c),
+                # Working days for THIS employee, as the day loop above
+                # actually attributed them. total_working beside it is
+                # company-wide -- get_working_days() is called without an
+                # employee -- so on anyone whose roster differs from the
+                # default the two disagree, and a row that does not reconcile
+                # with itself is unreadable. Derived from the same buckets, so
+                # by construction it always adds up.
+                "working_days": present + paid_leave + unpaid_leave + absent,
                 "conflict_days": conflict_days,
                 "resolved_conflicts": resolved_conflicts,
                 "unresolved_conflicts": conflict_days - resolved_conflicts,
+                # The actual days still awaiting a decision, not just how many.
+                # A bulk regularisation template is only useful if it can be
+                # handed back pre-filled with the rows that need answering.
+                "unresolved_conflict_dates": sorted(
+                    conflict_date_set - emp_resolved_dates
+                ),
                 "hours_second": final_hours,
                 "hours_label": hours_label,
                 "is_hours_edited": is_hours_edited,
@@ -805,6 +1091,30 @@ def build_monthly_summary(from_date, to_date, employee_qs):
             unique_fields=["employee_id", "from_date", "to_date"],
             update_fields=["hours_second"],
         )
+
+    # Stated totals win over counted ones. Applied last, over the finished
+    # rows, so everything derived from the counts -- paid_days, the conflict
+    # figures, the fleet totals below -- is computed from what HR actually
+    # stated rather than from figures it has already replaced.
+    overrides = {
+        o.employee_id_id: o
+        for o in AttendanceSummaryOverride.objects.filter(
+            employee_id__in=[r["employee"].pk for r in rows],
+            from_date=from_date,
+            to_date=to_date,
+        )
+    }
+    if overrides:
+        for row in rows:
+            override = overrides.get(row["employee"].pk)
+            if override is not None:
+                override.applied_to(row)
+
+        total_present = sum(r["present"] for r in rows)
+        total_absent = sum(r["absent"] for r in rows)
+        total_paid = sum(r["paid_leave"] for r in rows)
+        total_unpaid = sum(r["unpaid_leave"] for r in rows)
+        total_conflicts = sum(r["unresolved_conflicts"] for r in rows)
 
     summary_totals = {
         "total_employees": len(rows),
@@ -852,6 +1162,14 @@ def attendance_monthly_summary(request):
     context = {
         "from_date": request.GET.get("from_date", from_date_default.isoformat()),
         "to_date": request.GET.get("to_date", to_date_default.isoformat()),
+        # Bound to the request the same way from_date/to_date/is_active
+        # already are -- without an explicit value= of their own, these two
+        # had nothing telling the browser what to show on a fresh render, so
+        # a plain reload (Clear All's own mechanism) could still show
+        # whatever the browser last had typed into that field, independent
+        # of the page the server just sent back with no filter applied.
+        "search": request.GET.get("search", ""),
+        "name_or_badge": request.GET.get("name_or_badge", ""),
         "selected_employees": Employee.objects.filter(
             pk__in=request.GET.getlist("employee_id")
         ),
@@ -885,6 +1203,33 @@ def attendance_monthly_summary(request):
         "is_active": request.GET.get("is_active", ""),
         "pd": request.GET.urlencode(),
     }
+    # Same fields msRenderFilterTags() (monthly_summary.html) counts as "an
+    # extra filter is on" -- not from_date/to_date, which always carry a
+    # value and so would show the Filter button as permanently active. Set
+    # here too, not only by that script, so the button's accent border and
+    # count badge are right from the very first response rather than only
+    # after the page's own JS runs.
+    # One count per FIELD, not per selected value -- three employees picked
+    # is one active filter ("Employee"), the same as the chip row shows,
+    # not three.
+    active_filter_count = sum(
+        1
+        for present in (
+            request.GET.get("search"),
+            request.GET.get("name_or_badge"),
+            request.GET.get("is_active"),
+            request.GET.getlist("employee_id"),
+            request.GET.getlist("department_id"),
+            request.GET.getlist("job_position_id"),
+            request.GET.getlist("shift_id"),
+            request.GET.getlist("work_type_id"),
+            request.GET.getlist("employee_work_info__company_id"),
+            request.GET.getlist("employee_work_info__reporting_manager_id"),
+            request.GET.getlist("employee_work_info__tags"),
+        )
+        if present
+    )
+    context["active_filter_count"] = active_filter_count
     return render(request, "attendance/monthly_summary/monthly_summary.html", context)
 
 
@@ -1313,7 +1658,10 @@ def attendance_monthly_summary_detail(request):
         # (build_monthly_summary counts these via AttendanceConflictResolution).
         _att_dates = {_r["attendance_date"] for _r in raw}
         for _d, _res in sorted(resolution_map.items()):
-            if _res in ("full_present", "half_present") and _d not in _att_dates:
+            if (
+                _res in ("full_present", "half_present", "half_absent")
+                and _d not in _att_dates
+            ):
                 raw.append(
                     {
                         "attendance_date": _d,
@@ -1337,7 +1685,7 @@ def attendance_monthly_summary_detail(request):
         records = list(
             LeaveRequest.objects.filter(
                 employee_id=emp,
-                status__in=["approved", "requested"],
+                status__in=["approved", "cancel_requested", "requested"],
                 leave_type_id__payment=payment,
                 start_date__lte=to_date,
                 end_date__isnull=False,
@@ -1346,14 +1694,19 @@ def attendance_monthly_summary_detail(request):
         ) + list(
             LeaveRequest.objects.filter(
                 employee_id=emp,
-                status__in=["approved", "requested"],
+                status__in=["approved", "cancel_requested", "requested"],
                 leave_type_id__payment=payment,
                 start_date__range=(from_date, to_date),
                 end_date__isnull=True,
             ).select_related("leave_type_id")
         )
         # Sort: approved first, then requested; within each group by start_date
-        records.sort(key=lambda r: (0 if r.status == "approved" else 1, r.start_date))
+        records.sort(
+            key=lambda r: (
+                0 if r.status in ("approved", "cancel_requested") else 1,
+                r.start_date,
+            )
+        )
         # Add resolution-only entries (days overridden to this leave type without a leave request)
         _res_target = "paid_leave" if metric == "paid_leave" else "unpaid_leave"
         _leave_dates = set()
@@ -1383,27 +1736,35 @@ def attendance_monthly_summary_detail(request):
                 attendance_clock_in__isnull=False,
             ).values_list("attendance_date", flat=True)
         )
-        leave_dates = set()
-        for lr in LeaveRequest.objects.filter(
-            employee_id=emp,
-            status="approved",
-            start_date__lte=to_date,
-            end_date__isnull=False,
-            end_date__gte=from_date,
-        ):
-            for d in _iter_dates(
-                max(lr.start_date, from_date), min(lr.end_date, to_date)
-            ):
-                if d not in off_set:
-                    leave_dates.add(d)
-        for lr in LeaveRequest.objects.filter(
-            employee_id=emp,
-            status="approved",
-            start_date__range=(from_date, to_date),
-            end_date__isnull=True,
-        ):
-            if lr.start_date not in off_set:
-                leave_dates.add(lr.start_date)
+        _leaves = list(
+            LeaveRequest.objects.filter(
+                employee_id=emp,
+                status__in=["approved", "cancel_requested"],
+                start_date__lte=to_date,
+                end_date__isnull=False,
+                end_date__gte=from_date,
+            ).select_related("leave_type_id")
+        ) + list(
+            LeaveRequest.objects.filter(
+                employee_id=emp,
+                status__in=["approved", "cancel_requested"],
+                start_date__range=(from_date, to_date),
+                end_date__isnull=True,
+            ).select_related("leave_type_id")
+        )
+        _part, _paid_full, _unpaid_full = partial_leave_days(
+            _leaves, from_date, to_date
+        )
+        leave_dates = {d for d in (_paid_full | _unpaid_full) if d not in off_set}
+        # Half-day leave with no attendance for the rest of the day: that half is absent.
+        _half_absent_days = {
+            d
+            for d, p in _part.items()
+            if p[0] + p[1] < 1
+            and d not in off_set
+            and d not in present_dates
+            and d <= datetime.date.today()
+        }
 
         # Base absent set: working days with no attendance and no approved leave
         _absent_set = working_dates - present_dates - leave_dates
@@ -1415,6 +1776,7 @@ def attendance_monthly_summary_detail(request):
         _res_non_absent = {
             "full_present",
             "half_present",
+            "half_absent",
             "partial_hours",
             "paid_leave",
             "unpaid_leave",
@@ -1422,11 +1784,18 @@ def attendance_monthly_summary_detail(request):
             "week_off",
         }
         _absent_set -= {
-            _d for _d, _res in resolution_map.items() if _res in _res_non_absent
+            _d
+            for _d, _res in resolution_map.items()
+            if _res in _res_non_absent or parse_split(_res)
         }
+        _half_absent_days -= {d for d in _half_absent_days if d in resolution_map}
         context["records"] = [
-            {"date": d, "is_regularized": d in resolution_map}
-            for d in sorted(_absent_set)
+            {
+                "date": d,
+                "is_regularized": d in resolution_map,
+                "half": d in _half_absent_days,
+            }
+            for d in sorted(_absent_set | _half_absent_days)
         ]
 
     elif metric == "conflict":
@@ -1459,7 +1828,7 @@ def attendance_monthly_summary_detail(request):
         leave_date_info = {}
         for _lr in _LR.objects.filter(
             employee_id=emp,
-            status="approved",
+            status__in=["approved", "cancel_requested"],
             start_date__lte=to_date,
         ).filter(Q(end_date__gte=from_date) | Q(end_date__isnull=True)).select_related(
             "leave_type_id"
@@ -1468,6 +1837,16 @@ def attendance_monthly_summary_detail(request):
                 max(_lr.start_date, from_date),
                 min(_lr.end_date or to_date, to_date),
             ):
+                # Half a day of leave leaves the other half free for attendance.
+                if (
+                    _d == _lr.start_date
+                    and _lr.start_date_breakdown in ("first_half", "second_half")
+                ) or (
+                    _d == _lr.end_date
+                    and _lr.end_date != _lr.start_date
+                    and _lr.end_date_breakdown in ("first_half", "second_half")
+                ):
+                    continue
                 leave_date_info[_d] = (
                     _lr.leave_type_id.name,
                     _lr.leave_type_id.payment,
@@ -1503,7 +1882,7 @@ def attendance_monthly_summary_detail(request):
                 _eff = max(0, _min_secs - _grace)
                 if _worked >= _eff:
                     day_type = "full"
-                elif _worked >= _min_secs / 2:
+                elif _worked >= _eff / 2:
                     day_type = "half"
                 else:
                     if not r["attendance_clock_in"]:
@@ -1623,9 +2002,12 @@ def attendance_monthly_summary_detail(request):
     return render(request, "attendance/monthly_summary/detail_popover.html", context)
 
 
-def _build_calendar_context(emp, from_date, to_date):
+def _build_calendar_context(emp, from_date, to_date, show_future_leave=False):
     """
     Build the full context dict for the calendar modal template.
+    With show_future_leave, approved leave, holidays and week-offs dated after
+    today (up to the end of the month of to_date) are drawn on the grid too;
+    every other future day stays blank, so nothing reads as a false Absent.
     Shared by the calendar view and the conflict-resolve POST handler.
     Loads existing AttendanceConflictResolution records and applies them
     so that resolved days are counted in the correct bucket.
@@ -1662,31 +2044,44 @@ def _build_calendar_context(emp, from_date, to_date):
     # -- Leave date maps ------------------------------------------------------
     paid_map = {}
     unpaid_map = {}
+    leave_to = to_date
+    if show_future_leave:
+        leave_to = to_date.replace(
+            day=calendar.monthrange(to_date.year, to_date.month)[1]
+        )
     qs_range = LeaveRequest.objects.filter(
         employee_id=emp,
-        status="approved",
-        start_date__lte=to_date,
-    ).filter(Q(end_date__gte=from_date) | Q(end_date__isnull=True)).select_related(
-        "leave_type_id"
-    )
-    for lr in qs_range:
-        s = max(lr.start_date, from_date)
-        e = min(lr.end_date or to_date, to_date)
+        status__in=["approved", "cancel_requested"],
+        start_date__lte=leave_to,
+        end_date__isnull=False,
+        end_date__gte=from_date,
+    ).select_related("leave_type_id")
+    qs_single = LeaveRequest.objects.filter(
+        employee_id=emp,
+        status__in=["approved", "cancel_requested"],
+        start_date__range=(from_date, leave_to),
+        end_date__isnull=True,
+    ).select_related("leave_type_id")
+    leaves = list(chain(qs_range, qs_single))
+    part_leave, paid_full, unpaid_full = partial_leave_days(leaves, from_date, leave_to)
+    for lr in leaves:
         name = lr.leave_type_id.name
-        for d in _iter_dates(s, e):
-            if lr.leave_type_id.payment == "paid":
+        for d in leave_day_fractions(lr, from_date, leave_to):
+            if d in paid_full and lr.leave_type_id.payment == "paid":
                 paid_map[d] = name
-            else:
+            elif d in unpaid_full and lr.leave_type_id.payment != "paid":
                 unpaid_map[d] = name
+    # The halves of a day that is part leave, filled in by day_info below.
+    part_day_halves = {}
 
     # -- Holiday dates --------------------------------------------------------
-    holiday_map = _holiday_names_in_range(from_date, to_date)
+    holiday_map = _holiday_names_in_range(from_date, leave_to)
 
     # -- Week-off dates -------------------------------------------------------
     roster_entries = list(
-        Roster.objects.filter(employee_id=emp, date__range=(from_date, to_date)).values(
-            "date", "is_off"
-        )
+        Roster.objects.filter(
+            employee_id=emp, date__range=(from_date, leave_to)
+        ).values("date", "is_off")
     )
     if roster_entries:
         week_off_dates = {e["date"] for e in roster_entries if e["is_off"]}
@@ -1694,10 +2089,10 @@ def _build_calendar_context(emp, from_date, to_date):
         raw_cl = list(
             set(
                 get_company_leave_dates(from_date.year)
-                + get_company_leave_dates(to_date.year)
+                + get_company_leave_dates(leave_to.year)
             )
         )
-        week_off_dates = {d for d in raw_cl if from_date <= d <= to_date}
+        week_off_dates = {d for d in raw_cl if from_date <= d <= leave_to}
 
     # -- Existing resolutions {date: "attendance"|"leave"} -------------------
     resolutions_map = {
@@ -1749,7 +2144,7 @@ def _build_calendar_context(emp, from_date, to_date):
     for _d, _r in att_map.items():
         _wsec = _r["at_work_second"] or 0
         cal_worked_seconds += _wsec
-        _regularized = resolutions_map.get(_d) in ("full_present", "half_present")
+        _regularized = regularizes(resolutions_map.get(_d))
         if _d in holiday_map and not _regularized:
             cal_ot_holiday_seconds += _wsec
         elif _d in week_off_dates and not _regularized:
@@ -1810,10 +2205,15 @@ def _build_calendar_context(emp, from_date, to_date):
     def day_info(d):
         resolution = resolutions_map.get(d)
 
+        # A day cut in two keeps one status and is coloured by its two halves.
+        if parse_split(resolution):
+            return ("split", "", None, "resolved_attendance", False)
+
         # Direct manual override — bypasses all computed logic
         _direct = {
             "full_present": ("present", "", None, "resolved_attendance", False),
             "half_present": ("half_present", "", None, "resolved_attendance", False),
+            "half_absent": ("half_absent", "", None, "resolved_attendance", False),
             "partial_hours": ("partial_hours", "", None, "resolved_attendance", False),
             "absent": ("absent", "", None, "resolved_attendance", False),
             "paid_leave": ("paid_leave", "", None, "resolved_leave", False),
@@ -1839,7 +2239,7 @@ def _build_calendar_context(emp, from_date, to_date):
                 effective_min = max(0, min_secs - grace_secs)
                 if worked >= effective_min:
                     att_status = "present"
-                elif worked >= min_secs / 2:
+                elif worked >= effective_min / 2:
                     att_status = "half_present"
                 else:
                     att_status = "short" if clock_out else "absent"
@@ -1876,6 +2276,15 @@ def _build_calendar_context(emp, from_date, to_date):
             elif d in week_off_dates:
                 raw_conflict = "week_off_ot"  # attendance on week-off → WO OT
 
+            # Half-day leave with attendance for the rest of the day is not a clash.
+            _pl = part_leave.get(d)
+            if _pl and not raw_conflict and _pl[0] + _pl[1] < 1:
+                _halves_pl = natural_halves(
+                    _pl, att_status in ("present", "half_present")
+                )
+                part_day_halves[d] = _halves_pl
+                return ("split", detail, None, None, False)
+
             if raw_conflict in ("holiday_ot", "week_off_ot"):
                 # Attendance on a holiday/week-off is normal overtime work,
                 # not a data discrepancy — counts in the holiday/week_off
@@ -1902,6 +2311,18 @@ def _build_calendar_context(emp, from_date, to_date):
                 else:
                     return att_status, detail, raw_conflict, None, True
 
+            # Worked at least half the shift but not all of it: half present, and
+            # the other half short on hours.
+            if att_status == "half_present":
+                part_day_halves[d] = ("P", "SH")
+                return (
+                    "split",
+                    detail,
+                    ("regular_ot" if r.get("overtime_second") else None),
+                    None,
+                    False,
+                )
+
             # Overtime worked on a normal scheduled working day (not a
             # holiday/week-off — those get the HO/WO badge above instead).
             if r.get("overtime_second"):
@@ -1913,6 +2334,19 @@ def _build_calendar_context(emp, from_date, to_date):
             return "paid_leave", paid_map[d], None, None, False
         if d in unpaid_map:
             return "unpaid_leave", unpaid_map[d], None, None, False
+        _pl = part_leave.get(d)
+        if _pl and d not in holiday_map and d not in week_off_dates:
+            if d > datetime.date.today():
+                # Nothing to judge the other half by yet: show the leave, not an absence.
+                return (
+                    ("paid_leave" if _pl[0] else "unpaid_leave"),
+                    _pl[3],
+                    None,
+                    None,
+                    False,
+                )
+            part_day_halves[d] = natural_halves(_pl, False)
+            return ("split", "", None, None, False)
         if d in holiday_map:
             return "holiday", holiday_map[d], None, None, False
         if d in week_off_dates:
@@ -1923,8 +2357,9 @@ def _build_calendar_context(emp, from_date, to_date):
 
     # -- Build month grid structures ------------------------------------------
     months = []
+    today = datetime.date.today()
     cur = from_date.replace(day=1)
-    last = to_date.replace(day=1)
+    last = leave_to.replace(day=1)
     while cur <= last:
         yr, mo = cur.year, cur.month
         weeks = []
@@ -1935,7 +2370,18 @@ def _build_calendar_context(emp, from_date, to_date):
                     cells.append(None)
                 else:
                     d = datetime.date(yr, mo, n)
-                    if d < from_date or d > to_date:
+                    future_leave = (
+                        show_future_leave
+                        and d > to_date
+                        and d > today
+                        and (
+                            d in paid_map
+                            or d in unpaid_map
+                            or d in holiday_map
+                            or d in week_off_dates
+                        )
+                    )
+                    if d < from_date or (d > to_date and not future_leave):
                         cells.append(
                             {
                                 "day": n,
@@ -1951,14 +2397,28 @@ def _build_calendar_context(emp, from_date, to_date):
                         status, detail, conflict_with, resolution_badge, is_conflict = (
                             day_info(d)
                         )
+                        # A day that has not happened yet with nothing on it is not
+                        # absence: it is drawn greyed out and left out of the counts.
+                        # Leave, holidays and week-offs dated ahead keep their colour.
+                        if status == "absent" and d > today:
+                            status, detail = "future", ""
 
                         # Per-day hours computation
+                        _halves = (
+                            (
+                                parse_split(resolutions_map.get(d))
+                                or part_day_halves.get(d)
+                            )
+                            if status == "split"
+                            else None
+                        )
                         _show_hours = status in (
                             "present",
                             "half_present",
+                            "half_absent",
                             "short",
                             "partial_hours",
-                        )
+                        ) or bool(_halves and "P" in _halves)
                         _cell_sec = 0
                         _cell_edited = False
                         if _show_hours:
@@ -1967,7 +2427,22 @@ def _build_calendar_context(emp, from_date, to_date):
                                 _cell_sec, _cell_edited = _manual
                             else:
                                 _res = resolutions_map.get(d)
-                                if _res in ("full_present", "half_present"):
+                                if (
+                                    _halves
+                                    and "P" in _halves
+                                    and d in part_day_halves
+                                    and d in att_map
+                                ):
+                                    _cell_sec = att_map[d].get("at_work_second") or 0
+                                elif _halves and "P" in _halves:
+                                    _dn = _CAL_DAY_NAMES[d.weekday()]
+                                    _full = cal_shift_secs.get(_dn, 0) or 28800
+                                    _cell_sec = int(_full * 0.5 * _halves.count("P"))
+                                elif _res in (
+                                    "full_present",
+                                    "half_present",
+                                    "half_absent",
+                                ):
                                     _dn = _CAL_DAY_NAMES[d.weekday()]
                                     _full = cal_shift_secs.get(_dn, 0) or 28800
                                     _cell_sec = int(
@@ -1991,6 +2466,18 @@ def _build_calendar_context(emp, from_date, to_date):
                                 "hours_label": _hlabel,
                                 "show_hours": _show_hours,
                                 "is_hours_edited": _cell_edited,
+                                # The two halves' colours, so the cell shows what it is made of.
+                                "split_style": (
+                                    f"--h1:{SPLIT_HALVES[_halves[0]][2]};--h2:{SPLIT_HALVES[_halves[1]][2]}"
+                                    if status == "split" and _halves
+                                    else ""
+                                ),
+                                "halves": _halves or (),
+                                "split_label": (
+                                    split_label(SPLIT_PREFIX + "+".join(_halves))
+                                    if status == "split" and _halves
+                                    else ""
+                                ),
                             }
                         )
             weeks.append(cells)
@@ -2004,8 +2491,11 @@ def _build_calendar_context(emp, from_date, to_date):
     cal_summary = {
         "full_present": 0,
         "half_present": 0,
+        "half_absent": 0,
+        "split": 0,
         "short": 0,
         "absent": 0,
+        "present": 0,
         "paid_leave": 0,
         "unpaid_leave": 0,
         "week_off": 0,
@@ -2024,6 +2514,9 @@ def _build_calendar_context(emp, from_date, to_date):
     for _m in months:
         for _w in _m["weeks"]:
             for _c in _w:
+                # Cells past to_date are only ever the scheduled leave, holiday
+                # and week-off days drawn by show_future_leave, so they count
+                # in those buckets while present/absent stay limited to the range.
                 if _c is None or _c["status"] == "out_of_range":
                     continue
                 _s = _c["status"]
@@ -2035,6 +2528,30 @@ def _build_calendar_context(emp, from_date, to_date):
                     cal_summary[_s] += 1
                 if _c.get("conflict_with") in ("paid_leave", "unpaid_leave"):
                     cal_summary["conflict"] += 1
+                # Half a day counts towards its own tile: a split day's halves, and
+                # the unpaid half of a Half Absent.
+                # Half Absent: half present, half absent. Half Day: half present, half paid leave.
+                if _s == "present":
+                    cal_summary["present"] += 1
+                elif _s == "half_absent":
+                    cal_summary["present"] += 0.5
+                    cal_summary["absent"] += 0.5
+                elif _s == "half_present":
+                    cal_summary["present"] += 0.5
+                    cal_summary["paid_leave"] += 0.5
+                elif _s == "split":
+                    for _code in _c.get("halves") or ():
+                        _bucket = SPLIT_HALVES[_code][0]
+                        if _code == "SH":
+                            cal_summary["short"] += 0.5
+                        elif _bucket == "present":
+                            cal_summary["present"] += 0.5
+                        else:
+                            cal_summary[_bucket] += 0.5
+    # Whole numbers stay whole; half days show as .5.
+    for _k in ("present", "short", "absent", "paid_leave", "unpaid_leave"):
+        if not cal_summary[_k] % 1:
+            cal_summary[_k] = int(cal_summary[_k])
 
     total_days = (to_date - from_date).days + 1
 
@@ -2120,6 +2637,7 @@ def attendance_monthly_summary_conflict_resolve(request):
         _valid = {
             "full_present",
             "half_present",
+            "half_absent",
             "partial_hours",
             "absent",
             "paid_leave",
@@ -2130,7 +2648,7 @@ def attendance_monthly_summary_conflict_resolve(request):
             "attendance",
             "leave",  # legacy kept for existing records
         }
-        if resolution in _valid:
+        if resolution in _valid or parse_split(resolution):
             AttendanceConflictResolution._base_manager.update_or_create(
                 employee_id=emp,
                 date=date,
@@ -2203,7 +2721,7 @@ def attendance_monthly_summary_conflict_resolve(request):
             _eff = max(0, _min_secs - _grace)
             if _worked >= _eff:
                 day_type = "full"
-            elif _worked >= _min_secs / 2:
+            elif _worked >= _eff / 2:
                 day_type = "half"
             else:
                 if not att_row["attendance_clock_in"]:
@@ -2226,18 +2744,24 @@ def attendance_monthly_summary_conflict_resolve(request):
     # Determine what else is on this day (leave, holiday, week-off)
     conflict_type = ""
     conflict_label = ""
-    for _lr in LeaveRequest.objects.filter(
-        employee_id=emp,
-        status="approved",
-        start_date__lte=date,
-    ).filter(Q(end_date__gte=date) | Q(end_date__isnull=True)).select_related(
-        "leave_type_id"
-    ):
-        conflict_type = (
-            "paid_leave" if _lr.leave_type_id.payment == "paid" else "unpaid_leave"
+    _day_leaves = list(
+        LeaveRequest.objects.filter(
+            employee_id=emp,
+            status__in=["approved", "cancel_requested"],
+            start_date__lte=date,
         )
-        conflict_label = _lr.leave_type_id.name
-        break
+        .filter(Q(end_date__gte=date) | Q(end_date__isnull=True))
+        .select_related("leave_type_id")
+    )
+    _part_map, _paid_full, _unpaid_full = partial_leave_days(_day_leaves, date, date)
+    # Half a day of leave is not a clash: the rest of the day is judged by attendance.
+    part_leave_day = _part_map.get(date)
+    for _lr in _day_leaves:
+        _paid = _lr.leave_type_id.payment == "paid"
+        if (_paid and date in _paid_full) or (not _paid and date in _unpaid_full):
+            conflict_type = "paid_leave" if _paid else "unpaid_leave"
+            conflict_label = _lr.leave_type_id.name
+            break
     if not conflict_type:
         _h = is_holiday(date)
         if _h:
@@ -2257,7 +2781,23 @@ def attendance_monthly_summary_conflict_resolve(request):
     # any AttendanceConflictResolution, so it always reflects the "natural"
     # (pre-override) status. Used as the "from" side of the from → to
     # transition shown when a day has been regularized.
-    if att_row:
+    natural_halves_day = None
+    if part_leave_day and conflict_type not in (
+        "holiday",
+        "holiday_ot",
+        "week_off",
+        "week_off_ot",
+    ):
+        natural_halves_day = natural_halves(
+            part_leave_day, day_type in ("full", "half")
+        )
+    elif day_type == "half" and conflict_type == "":
+        # Half the shift or more, not all of it: half present, half short on hours.
+        natural_halves_day = ("P", "SH")
+
+    if natural_halves_day:
+        day_status = "split_natural"
+    elif att_row:
         day_status = day_type
     elif conflict_type in ("paid_leave", "unpaid_leave"):
         day_status = conflict_type
@@ -2275,6 +2815,7 @@ def attendance_monthly_summary_conflict_resolve(request):
         "full_present": _("Full Present"),
         "half": _("Half Day"),
         "half_present": _("Half Day"),
+        "half_absent": _("Half Absent"),
         "short": _("Short Hours"),
         "mo": _("Missing Clock-out"),
         "mi": _("Missing Clock-in"),
@@ -2295,7 +2836,9 @@ def attendance_monthly_summary_conflict_resolve(request):
         "full": ("#d1fae5", "#065f46"),
         "full_present": ("#d1fae5", "#065f46"),
         "half": ("#fef9c3", "#854d0e"),
-        "half_present": ("#fef9c3", "#854d0e"),
+        # Two-colour pills, the same halves as the calendar cell and the button.
+        "half_present": ("linear-gradient(90deg,#d1fae5 50%,#dbeafe 50%)", "#1e3a8a"),
+        "half_absent": ("linear-gradient(90deg,#fee2e2 50%,#d1fae5 50%)", "#7f1d1d"),
         "short": ("#ede9fe", "#3730a3"),
         "mo": ("#fee2e2", "#991b1b"),
         "mi": ("#fee2e2", "#991b1b"),
@@ -2315,6 +2858,12 @@ def attendance_monthly_summary_conflict_resolve(request):
     natural_status_bg, natural_status_fg = _STATUS_PILL_COLORS.get(
         day_status, ("#f1f5f9", "#475569")
     )
+    if natural_halves_day:
+        natural_status_label = split_label(SPLIT_PREFIX + "+".join(natural_halves_day))
+        natural_status_bg, natural_status_fg = (
+            split_pill_bg(natural_halves_day),
+            "#1f2937",
+        )
 
     existing = (
         AttendanceConflictResolution.objects.filter(employee_id=emp, date=date)
@@ -2334,7 +2883,13 @@ def attendance_monthly_summary_conflict_resolve(request):
     else:
         if att_row:
             panel_hours_sec = att_row.get("at_work_second") or 0
-        elif existing and existing.resolution in ("full_present", "half_present"):
+        elif existing and (
+            existing.resolution in ("full_present", "half_present", "half_absent")
+            or (
+                parse_split(existing.resolution)
+                and "P" in parse_split(existing.resolution)
+            )
+        ):
             from attendance.methods.utils import strtime_seconds as _ss2
             from base.models import EmployeeShiftSchedule as _ESS
             from employee.models import EmployeeWorkInformation as _EWI2
@@ -2360,7 +2915,12 @@ def attendance_monthly_summary_conflict_resolve(request):
                 )
                 if _ss2r and _ss2r["minimum_working_hour"]:
                     _full2 = _ss2(_ss2r["minimum_working_hour"])
-            _val2 = 1.0 if existing.resolution == "full_present" else 0.5
+            _halves2 = parse_split(existing.resolution)
+            _val2 = (
+                1.0
+                if existing.resolution == "full_present"
+                else 0.5 * (_halves2.count("P") if _halves2 else 1)
+            )
             panel_hours_sec = int(_full2 * _val2)
         else:
             panel_hours_sec = 0
@@ -2374,10 +2934,61 @@ def attendance_monthly_summary_conflict_resolve(request):
     if resolution_value == "partial_hours":
         override_status_label = f"{_('Partial Hours')} ({panel_hours_label})"
     else:
-        override_status_label = _STATUS_LABELS.get(resolution_value, resolution_value)
+        override_status_label = (
+            split_label(resolution_value)
+            if parse_split(resolution_value)
+            else _STATUS_LABELS.get(resolution_value, resolution_value)
+        )
     override_status_bg, override_status_fg = _STATUS_PILL_COLORS.get(
         resolution_value, ("#f1f5f9", "#475569")
     )
+    if parse_split(resolution_value):
+        override_status_bg, override_status_fg = (
+            split_pill_bg(parse_split(resolution_value)),
+            "#1f2937",
+        )
+
+    # What the status choice opens on: the saved override, otherwise what the day
+    # actually is (leave, a worked day, a holiday ...), so the usual case needs no click.
+    initial_halves = ("P", "A")
+    if existing:
+        # A Half Day / Half Absent saved before splits existed is a split too: show its halves.
+        _saved_halves = parse_split(existing.resolution) or {
+            "half_present": ("P", "PL"),
+            "half_absent": ("P", "A"),
+        }.get(existing.resolution)
+        choice_initial = "split" if _saved_halves else existing.resolution
+        initial_halves = _saved_halves or initial_halves
+    elif natural_halves_day:
+        choice_initial = "split"
+        # The short half is unpaid, like an absent one, and the choice has no short option.
+        initial_halves = tuple(
+            "A" if code == "SH" else code for code in natural_halves_day
+        )
+    elif conflict_type in ("holiday", "holiday_ot"):
+        choice_initial = "holiday"
+    elif conflict_type in ("week_off", "week_off_ot"):
+        choice_initial = "week_off"
+    else:
+        choice_initial = {
+            "full": "full_present",
+            "short": "absent",
+            "mo": "absent",
+            "paid_leave": "paid_leave",
+            "unpaid_leave": "unpaid_leave",
+            "weekend": "week_off",
+            "absent": "absent",
+        }.get(day_status, "")
+
+    def _status_pill(value):
+        halves = parse_split(value)
+        if halves:
+            return split_label(value), split_pill_bg(halves), "#1f2937"
+        label = _STATUS_LABELS.get(value, value)
+        bg, fg = _STATUS_PILL_COLORS.get(value, ("#f1f5f9", "#475569"))
+        return label, bg, fg
+
+    history_entries = day_history(emp, date, _status_pill)
 
     # OT display formula:
     #   effective_min = shift minimum, or 8h (28800s) when no shift configured
@@ -2387,14 +2998,53 @@ def attendance_monthly_summary_conflict_resolve(request):
     _ot_cutoff_sec = (
         _ss(_cond.overtime_cutoff) if _cond and _cond.overtime_cutoff else 0
     )
-    _effective_min = _shift_min_secs if _shift_min_secs > 0 else 28800  # 8h default
+    # The shift the minimum comes from. The attendance record carries the minimum it was
+    # created with; a day without a record falls back to the employee's shift schedule for
+    # that weekday, and only then to 8h.
+    from base.models import EmployeeShiftSchedule as _ESS_cap
+    from employee.models import EmployeeWorkInformation as _EWI_cap
+
+    _work_info = (
+        _EWI_cap.objects.filter(employee_id=emp).select_related("shift_id").first()
+    )
+    shift_name = (
+        _work_info.shift_id.employee_shift if _work_info and _work_info.shift_id else ""
+    )
+    _schedule_min = 0
+    if _work_info and _work_info.shift_id_id:
+        _row = (
+            _ESS_cap.objects.filter(
+                shift_id=_work_info.shift_id_id,
+                day__day=[
+                    "monday",
+                    "tuesday",
+                    "wednesday",
+                    "thursday",
+                    "friday",
+                    "saturday",
+                    "sunday",
+                ][date.weekday()],
+            )
+            .values("minimum_working_hour")
+            .first()
+        )
+        if _row and _row["minimum_working_hour"]:
+            _schedule_min = _ss(_row["minimum_working_hour"])
+    if _shift_min_secs > 0:
+        min_source = "record"
+    elif _schedule_min > 0:
+        min_source = "schedule"
+    else:
+        min_source = "default"
+    _effective_min = _shift_min_secs or _schedule_min or 28800  # 8h default
+
+    def _hm(secs):
+        return f"{secs // 3600}:{(secs % 3600) // 60:02d}"
+
     # A holiday/week-off day that HR has regularized (Full Present/Half Day)
     # is no longer treated as 100% overtime — it gets the normal
     # regular/OT split, same as build_monthly_summary and the calendar totals.
-    _regularized_day = existing is not None and existing.resolution in (
-        "full_present",
-        "half_present",
-    )
+    _regularized_day = existing is not None and regularizes(existing.resolution)
     _is_ot_day = (
         conflict_type in ("holiday_ot", "week_off_ot", "holiday", "week_off")
         and not _regularized_day
@@ -2433,6 +3083,7 @@ def attendance_monthly_summary_conflict_resolve(request):
         "day_type": day_type,
         "day_status": day_status,
         "natural_status_label": natural_status_label,
+        "natural_split": bool(natural_halves_day),
         "natural_status_bg": natural_status_bg,
         "natural_status_fg": natural_status_fg,
         "override_status_label": override_status_label,
@@ -2449,6 +3100,16 @@ def attendance_monthly_summary_conflict_resolve(request):
         "conflict_type": conflict_type,
         "conflict_label": conflict_label,
         "existing_resolution": existing.resolution if existing else None,
+        # A day cut in two: what each half is now, for the selects, and its name for the history.
+        "split_a": initial_halves[0],
+        "split_b": initial_halves[1],
+        "choice_initial": choice_initial,
+        "history_entries": history_entries,
+        "existing_split_label": (
+            split_label(existing.resolution)
+            if existing and parse_split(existing.resolution)
+            else ""
+        ),
         "existing_obj": existing,
         "panel_hours_sec": panel_hours_sec,
         "panel_hours_label": panel_hours_label,
@@ -2461,6 +3122,14 @@ def attendance_monthly_summary_conflict_resolve(request):
         "att_ot_sec": _att_ot_sec,
         "att_ot_approved": att_ot_approved,
         "effective_min_secs": _effective_min,
+        "shift_name": shift_name,
+        "min_source": min_source,
+        "min_required_label": _hm(_effective_min),
+        "ot_cutoff_label": _hm(_ot_cutoff_sec) if _ot_cutoff_sec else "",
+        "ot_holiday_cap_label": (
+            _hm(_effective_min + _ot_cutoff_sec) if _ot_cutoff_sec else ""
+        ),
+        "grace_label": _hm(_grace) if _grace else "",
         "ot_cutoff_sec": _ot_cutoff_sec,
         "is_ot_day": _is_ot_day,
         "excess_h": excess_h,
@@ -2498,6 +3167,88 @@ def attendance_monthly_summary_conflict_resolve(request):
 
 @login_required
 @manager_can_enter("attendance.change_attendance")
+@hx_request_required
+def attendance_monthly_summary_conflict_bulk_resolve(request):
+    """
+    HTMX view for regularising a multi-day selection at once — the calendar's
+    cells support Ctrl/Shift-click multi-select; once the modifier key is
+    released, this backs the "mark all selected days as" popover.
+
+    GET  → renders the bulk panel for the given `dates`.
+    POST → applies the chosen resolution to every one of them and re-renders
+           the full calendar, same as the single-day conflict-resolve view.
+    """
+    from attendance.models import AttendanceConflictResolution
+
+    emp_id = request.POST.get("employee_id") or request.GET.get("employee_id")
+    from_date = _parse_date(
+        request.POST.get("from_date") or request.GET.get("from_date"),
+        datetime.date.today().replace(day=1),
+    )
+    to_date = _parse_date(
+        request.POST.get("to_date") or request.GET.get("to_date"), datetime.date.today()
+    )
+
+    try:
+        emp = Employee.objects.get(pk=emp_id)
+    except Employee.DoesNotExist:
+        return HttpResponse(
+            "<p style='padding:12px;color:#6c757d;'>Employee not found.</p>"
+        )
+
+    raw_dates = request.POST.getlist("dates") or request.GET.getlist("dates")
+    dates = sorted(
+        {d for d in (_parse_date(v, None) for v in raw_dates) if d is not None}
+    )
+    if not dates:
+        return HttpResponse(
+            "<p style='padding:12px;color:#6c757d;'>No days selected.</p>"
+        )
+
+    if request.method == "POST":
+        resolution = request.POST.get("resolution")
+        # Deliberately narrower than the single-day view's set: "partial_hours"
+        # needs a specific target duration per day (not meaningful across a
+        # heterogeneous selection), and "clear" isn't exposed as a bulk action.
+        _valid = {
+            "full_present",
+            "half_present",
+            "half_absent",
+            "absent",
+            "paid_leave",
+            "unpaid_leave",
+            "holiday",
+            "week_off",
+            "approve_ot",
+        }
+        if resolution in _valid or parse_split(resolution):
+            for d in dates:
+                AttendanceConflictResolution._base_manager.update_or_create(
+                    employee_id=emp,
+                    date=d,
+                    defaults={"resolution": resolution, "conflict_type": ""},
+                )
+            if resolution == "approve_ot":
+                Attendance.objects.filter(
+                    employee_id=emp, attendance_date__in=dates
+                ).update(attendance_overtime_approve=True)
+
+        # Re-render the full calendar so counts and dots update immediately,
+        # same as the single-day path.
+        context = _build_calendar_context(emp, from_date, to_date)
+        return render(
+            request, "attendance/monthly_summary/calendar_modal.html", context
+        )
+
+    # ── GET: render the "mark all as" panel for the selected dates ──────────
+    context = {"employee": emp, "dates": dates}
+    return render(
+        request, "attendance/monthly_summary/bulk_resolve_panel.html", context
+    )
+
+
+@login_required
+@manager_can_enter("attendance.change_attendance")
 def attendance_monthly_summary_bulk_override(request):
     """
     Bulk-apply an attendance override for multiple employees over a date range.
@@ -2522,6 +3273,7 @@ def attendance_monthly_summary_bulk_override(request):
     _valid = {
         "full_present",
         "half_present",
+        "half_absent",
         "partial_hours",
         "absent",
         "paid_leave",
@@ -2530,7 +3282,12 @@ def attendance_monthly_summary_bulk_override(request):
         "week_off",
     }
 
-    if not emp_ids or not from_date or not to_date or resolution not in _valid:
+    if (
+        not emp_ids
+        or not from_date
+        or not to_date
+        or (resolution not in _valid and not parse_split(resolution))
+    ):
         return JsonResponse({"error": "Invalid parameters"}, status=400)
 
     if from_date > to_date:
@@ -2647,12 +3404,20 @@ def attendance_monthly_summary_daily_hours_edit(request):
         try:
             if ":" in raw:
                 parts = raw.split(":")
+                if int(parts[1]) >= 60:
+                    raise ValueError("minutes")
                 total_sec = int(parts[0]) * 3600 + int(parts[1]) * 60
             else:
                 total_sec = int(float(raw) * 3600)
-            total_sec = max(0, total_sec)
         except (ValueError, IndexError):
-            total_sec = existing.hours_second if existing else 0
+            return HttpResponse(
+                _("Enter the hours as H:MM, for example 8:30."), status=400
+            )
+        if total_sec < 0:
+            return HttpResponse(_("Hours cannot be negative."), status=400)
+        # A day only has 24 hours; the page asks for confirmation above 15.
+        if total_sec > MAX_DAY_SECONDS:
+            return HttpResponse(_("A day cannot have more than 24 hours."), status=400)
 
         if existing:
             existing.hours_second = total_sec

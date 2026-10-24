@@ -24,6 +24,8 @@ from horilla_views.generic.cbv.views import (
     HorillaFormView,
     HorillaListView,
     HorillaNavView,
+    HorillaTabContentShell,
+    HorillaTabView,
     TemplateView,
 )
 from project.cbv.cbv_decorators import is_projectmanager_or_member_or_perms
@@ -43,34 +45,49 @@ class TimeSheetView(TemplateView):
 
     template_name = "cbv/timesheet/timesheet.html"
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
+
+@method_decorator(login_required, name="dispatch")
+class TimeSheetTabView(HorillaTabView):
+    """My Timesheets / All Timesheets tabs."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.view_id = "timesheetTabContainer"
+        self.tabs = [
+            {
+                "title": _("My Timesheets"),
+                "url": reverse("my-time-sheet-tab-shell"),
+            },
+        ]
         user = self.request.user
-        context["can_view_all_timesheets"] = (
+        if (
             user.has_perm("project.view_timesheet")
             or any_project_manager(user)
             or any_task_manager(user)
             or any_task_member(user)
-        )
-        return context
+        ):
+            self.tabs.append(
+                {
+                    "title": _("All Timesheets"),
+                    "url": reverse("time-sheet-tab-shell"),
+                }
+            )
 
 
-@method_decorator(login_required, name="dispatch")
-class TimeSheetTabShell(TemplateView):
-    """
-    All Timesheets tab pane
-    """
+class TimeSheetTabShell(HorillaTabContentShell):
+    """All Timesheets tab pane."""
 
-    template_name = "cbv/timesheet/all_timesheet_tab.html"
+    nav_url_name = "time-sheet-nav"
+    container_id = "listContainer"
+    tabs_root_id = "timesheetTabContainer"
 
 
-@method_decorator(login_required, name="dispatch")
-class MyTimeSheetTabShell(TemplateView):
-    """
-    My Timesheets tab pane
-    """
+class MyTimeSheetTabShell(HorillaTabContentShell):
+    """My Timesheets tab pane."""
 
-    template_name = "cbv/timesheet/my_timesheet_tab.html"
+    nav_url_name = "my-time-sheet-nav"
+    container_id = "myListContainer"
+    tabs_root_id = "timesheetTabContainer"
 
 
 @method_decorator(login_required, name="dispatch")
@@ -85,12 +102,7 @@ class TimeSheetNavView(HorillaNavView):
     filter_form_context_name = "form"
     filter_instance = TimeSheetFilter()
     search_swap_target = "#listContainer"
-    template_name = "cbv/timesheet/timesheet_nav.html"
     filter_body_template = "cbv/timesheet/filter.html"
-    # Modern slide-over filter panel (generic/horilla_nav.html's own
-    # {% if modern_filter %} branch) -- same treatment as every other
-    # panel this session. TimeSheetFilter.ajax_fields carries the
-    # AJAX-loaded comboboxes this needs.
     modern_filter = True
     group_by_fields = [
         "employee_id",
@@ -104,9 +116,7 @@ class TimeSheetNavView(HorillaNavView):
         "employee_id__employee_work_info__company_id",
     ]
 
-    # Mirrors TimeSheetList.nested_group_by_fields below -- List and Nav
-    # are separate classes/templates (see employee/cbv/employees.py's
-    # EmployeesList/EmployeeNav for the same split).
+    # Mirrors TimeSheetList.nested_group_by_fields below
     nested_group_by_fields = [
         "employee_id",
         "project_id",
@@ -123,6 +133,11 @@ class TimeSheetNavView(HorillaNavView):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.search_url = reverse("time-sheet-list")
+        self.search_in = [
+            ("employee_id", _("Employee")),
+            ("project_id", _("Project")),
+            ("task_id", _("Task")),
+        ]
         self.actions = [
             {
                 "action": _("Delete"),
@@ -188,7 +203,6 @@ class MyTimeSheetNavView(HorillaNavView):
     filter_form_context_name = "form"
     filter_instance = TimeSheetFilter()
     search_swap_target = "#myListContainer"
-    template_name = "cbv/timesheet/timesheet_nav.html"
     filter_body_template = "cbv/timesheet/filter.html"
     modern_filter = True
     group_by_fields = [
@@ -220,6 +234,10 @@ class MyTimeSheetNavView(HorillaNavView):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.search_url = reverse("my-time-sheet-list")
+        self.search_in = [
+            ("project_id", _("Project")),
+            ("task_id", _("Task")),
+        ]
         self.actions = [
             {
                 "action": _("Delete"),
@@ -322,6 +340,9 @@ class TimeSheetList(HorillaListView):
             """,
         ),
     ]
+    show_quick_date_filters = True
+    quick_date_fields = ("date", "start_from", "end_till")
+
     row_attrs = """
                 hx-get='{detail_view}?instance_ids={ordered_ids}'
                 hx-target="#genericModalBody"
@@ -418,6 +439,9 @@ class MyTimeSheetList(HorillaListView):
             """,
         ),
     ]
+    show_quick_date_filters = True
+    quick_date_fields = ("date", "start_from", "end_till")
+
     row_attrs = """
                 hx-get='{detail_view}?instance_ids={ordered_ids}'
                 hx-target="#genericModalBody"
@@ -449,6 +473,7 @@ class TaskTimeSheet(TimeSheetList):
 
     row_attrs = ""
     row_status_indications = False
+    show_quick_date_filters = False
     bulk_select_option = False
 
     def __init__(self, **kwargs: Any) -> None:
@@ -748,6 +773,8 @@ class TimeSheetCardView(HorillaCardView):
             """,
         ),
     ]
+    show_quick_date_filters = True
+    quick_date_fields = ("date", "start_from", "end_till")
 
     card_attrs = """
                 hx-get='{detail_view}?instance_ids={ordered_ids}'

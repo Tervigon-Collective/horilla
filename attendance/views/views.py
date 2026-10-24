@@ -14,7 +14,8 @@ provide the main entry points for interacting with the application's functionali
 import logging
 import uuid
 
-from horilla.http.response import HorillaRedirect
+from base.import_template_data import import_template_frame, write_import_xlsx
+from horilla.http.response import HorillaRedirect, with_bulk_result
 from horilla.methods import remove_dynamic_url
 
 logger = logging.getLogger(__name__)
@@ -137,19 +138,21 @@ from notifications.signals import notify
 
 def attendance_validate(attendance):
     """
-    This method is is used to check condition for at work in AttendanceValidationCondition
-    model instance it return true if at work is smaller than condition
-    args:
-        attendance : attendance object
+    Return True when the at work lies within the auto validate range of the attendance shift's condition.
     """
 
-    conditions = AttendanceValidationCondition.objects.all()
-    # Set the default condition for 'at work' to 9:00 AM
-    condition_for_at_work = strtime_seconds("09:00")
-    if conditions.exists():
-        condition_for_at_work = strtime_seconds(conditions[0].validation_at_work)
+    condition = AttendanceValidationCondition.for_shift(attendance.shift_id)
+    minimum_at_work = 0
+    maximum_at_work = strtime_seconds("09:00")
+    if condition is not None:
+        minimum_at_work = strtime_seconds(
+            condition.minimum_at_work_to_validate or "00:00"
+        )
+        maximum_at_work = strtime_seconds(condition.validation_at_work)
     at_work = strtime_seconds(attendance.attendance_worked_hour)
-    return at_work >= condition_for_at_work
+    return at_work <= maximum_at_work and (
+        minimum_at_work == 0 or at_work >= minimum_at_work
+    )
 
 
 @login_required
@@ -250,22 +253,10 @@ def attendance_excel(_request):
         HttpResponse: An HTTP response containing an empty Excel template with predefined columns.
     """
     try:
-        columns = [
-            "Badge ID",
-            "Shift",
-            "Work type",
-            "Attendance date",
-            "Check-in date",
-            "Check-in",
-            "Check-out date",
-            "Check-out",
-            "Worked hour",
-            "Minimum hour",
-        ]
-        data_frame = pd.DataFrame(columns=columns)
+        data_frame = import_template_frame("attendance")
         response = HttpResponse(content_type="application/ms-excel")
         response["Content-Disposition"] = 'attachment; filename="my_excel_file.xlsx"'
-        data_frame.to_excel(response, index=False)
+        write_import_xlsx(data_frame, response)
         return response
     except Exception as exception:
         return HttpResponse(exception)
@@ -297,6 +288,33 @@ def attendance_import(request):
             data_frame = (
                 pd.read_csv(file) if file_extension == "csv" else pd.read_excel(file)
             )
+            required_columns = [
+                "Badge ID",
+                "Shift",
+                "Work type",
+                "Attendance date",
+                "Check-in date",
+                "Check-in",
+                "Check-out date",
+                "Check-out",
+                "Worked hour",
+                "Minimum hour",
+            ]
+            missing_columns = [
+                c for c in required_columns if c not in data_frame.columns
+            ]
+            if missing_columns:
+                message = _(
+                    "These required headers are missing in the uploaded file: "
+                ) + ", ".join(missing_columns)
+                response = render(
+                    request,
+                    "attendance/attendance/import_error_alert.html",
+                    {"error_message": message},
+                )
+                response["HX-Retarget"] = "#attendanceImportError"
+                response["HX-Reswap"] = "innerHTML"
+                return response
             attendance_dicts = data_frame.to_dict("records")
             attendance_import = process_attendance_data(attendance_dicts)
             if attendance_import:
@@ -314,7 +332,6 @@ def attendance_import(request):
 
 
 @login_required
-@hx_request_required
 def attendance_export(request):
     resolver_match = request.resolver_match
     if (
@@ -322,6 +339,11 @@ def attendance_export(request):
         and resolver_match.url_name
         and resolver_match.url_name == "attendance-info-export-form"
     ):
+        # Only the filter form is an htmx fragment. The export itself is a
+        # plain form GET (a file download, e.g. from the employee list's
+        # "Export Individual Data"), so it must not require HX-Request.
+        if "HTTP_HX_REQUEST" not in request.META:
+            return render(request, "405.html", status=405)
         return render(
             request,
             "attendance/attendance/export_filter.html",
@@ -1069,7 +1091,7 @@ def handle_activity_import_error(error_data):
     # Create an HTTP response with an Excel attachment
     response = HttpResponse(content_type="application/ms-excel")
     response["Content-Disposition"] = 'attachment; filename="ImportError.xlsx"'
-    data_frame.to_excel(response, index=False)
+    write_import_xlsx(data_frame, response)
 
     def get_activity_error_sheet(request):
         remove_dynamic_url(path_info)
@@ -1126,22 +1148,12 @@ def attendance_activity_import(request):
 @require_http_methods(["GET"])
 def attendance_activity_import_excel(request):
     if request.method == "GET":
-        data_frame = pd.DataFrame(
-            columns=[
-                "Badge ID",
-                "Employee",
-                "Attendance Date",
-                "In Date",
-                "Check In",
-                "Check Out",
-                "Out Date",
-            ]
-        )
+        data_frame = import_template_frame("attendance_activity")
         response = HttpResponse(
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         response["Content-Disposition"] = 'attachment; filename="activity_excel.xlsx"'
-        data_frame.to_excel(response, index=False)
+        write_import_xlsx(data_frame, response)
         return response
 
 
@@ -1435,7 +1447,13 @@ def validate_bulk_attendance(request):
         else:
             messages.error(request, msg)
 
-    return JsonResponse({"message": "success"})
+    # Everything selected that wasn't validated (missing, own record, pending
+    # update request) counts as failed. The browser shows these counts in a
+    # result dialog instead of the toasts above.
+    failed = max(len(set(map(str, ids))) - validate_req_count, 0)
+    return with_bulk_result(
+        JsonResponse({"message": "success"}), validate_req_count, failed
+    )
 
 
 @login_required
@@ -1607,6 +1625,8 @@ def approve_bulk_overtime(request):
     for attendance_id in filtered_ids:
         try:
             attendance = Attendance.objects.get(id=attendance_id)
+            if attendance.attendance_overtime_approve:
+                continue  # already approved: nothing to do, counted as skipped
             from attendance.methods.overtime_approval import apply_overtime_approval
 
             try:
@@ -1636,7 +1656,12 @@ def approve_bulk_overtime(request):
     if otapprove_ids:
         messages.success(request, _(" {} Overtime approved".format(len(otapprove_ids))))
 
-    return JsonResponse({"message": "Success"})
+    # Selected but not approved (missing, own record, already approved) = failed.
+    # The browser shows these counts in a result dialog instead of the toasts.
+    failed = max(len(set(map(str, ids))) - len(otapprove_ids), 0)
+    return with_bulk_result(
+        JsonResponse({"message": "Success"}), len(otapprove_ids), failed
+    )
 
 
 @login_required
@@ -2711,7 +2736,7 @@ _FILTER_LABELS = {
     "employee_work_info__work_type_id": "Work Type",
     "working_today": "Currently Working",
     "employee_user_id__groups": "Groups",
-    "is_active": "Is Active",
+    "is_active": "Active",
     "employee_user_id__user_permissions": "Permissions",
 }
 

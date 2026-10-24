@@ -215,7 +215,7 @@ class OnboardingCandidatesNav(HorillaNavView):
                                 """
         self.filter_instance = CandidateFilter()
 
-    nav_title = _("Hired Candidates")
+    nav_title = _("Shortlisted Candidates")
     filter_body_template = "cbv/onboarding_candidates/filter.html"
     filter_form_context_name = "form"
     search_swap_target = "#listContainer"

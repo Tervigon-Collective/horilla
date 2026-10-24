@@ -5,6 +5,7 @@ horilla/cbv_methods.py
 import json
 import types
 import uuid
+from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Any
 from urllib.parse import urlencode
@@ -278,6 +279,26 @@ def owner_can_enter(
 
 
 @decorator_with_arguments
+def allocation_manager_can_enter(function):
+    """
+    Decorator for allocation manager accessibility
+    """
+    from employee.cbv.accessibility import allocation_accessibility
+    from employee.models import Employee
+
+    def _function(request, *args, **kwargs):
+        instance_id = request.GET.get("instance_id") or request.POST.get("instance_id")
+        employee = (
+            Employee.objects.filter(pk=instance_id).first() if instance_id else None
+        )
+        if not allocation_accessibility(request, employee):
+            return handle_no_permission(request)
+        return function(request, *args, **kwargs)
+
+    return _function
+
+
+@decorator_with_arguments
 def check_feature_enabled(function, feature_name, model_class: models.Model):
     """
     Decorator for check feature enabled in singlton model
@@ -390,6 +411,46 @@ def paginator_qry(qryset, page_number, records_per_page=50):
     paginator = Paginator(qryset, records_per_page)
     qryset = paginator.get_page(page_number)
     return qryset
+
+
+def get_quick_date_filters(ranges, fields):
+    """Build (label, onclick attrs) pairs from (label, start_offset, end_offset) ranges and (exact, from, to) fields."""
+    exact_field, from_field, to_field = fields
+    today = datetime.now().date()
+
+    def setter(name, value):
+        return (
+            f"$('#applyFilter').closest('form').find('[name={name}]').val('{value}');"
+        )
+
+    filters = []
+    for label, start_offset, end_offset in ranges:
+        start = today + timedelta(days=start_offset)
+        end = None if end_offset is None else today + timedelta(days=end_offset)
+        steps = []
+        if end is None and exact_field:
+            steps += [setter(from_field, ""), setter(to_field, "")]
+            steps.append(setter(exact_field, start))
+        else:
+            if exact_field:
+                steps.append(setter(exact_field, ""))
+            steps.append(setter(from_field, start))
+            steps.append(setter(to_field, end or start))
+        steps.append("$('#applyFilter').click();")
+        filters.append((label, 'onclick="' + " ".join(steps) + '"'))
+    return filters
+
+
+SINGLE_VALUE_QUERY_PARAMS = {"page", "view_id", "filter_applied", "sortby"}
+
+
+def dedupe_single_value_params(query_dict):
+    """Copy of query_dict keeping only the last value of single-value params."""
+    cleaned = query_dict.copy()
+    for key in list(cleaned.keys()):
+        if key in SINGLE_VALUE_QUERY_PARAMS or key.startswith("dynamic_page"):
+            cleaned[key] = cleaned.getlist(key)[-1]
+    return cleaned
 
 
 def saved_filter_path_query(request):
@@ -514,10 +575,17 @@ def sortby(
             none_ids.append(object.pk)
         elif isinstance(result, models.Model):
             result = str(result)
+        if isinstance(result, str):
+            result = result.lower()
         return result
 
     order = not reverse
-    current_page = query_dict.get(page)
+    page_params = [query_dict.get(page)] + [
+        f"{key}={query_dict.get(key)}"
+        for key in sorted(query_dict)
+        if key.startswith("dynamic_page")
+    ]
+    current_page = "|".join(filter(None, page_params)) or None
     if current_page or is_first_sort:
         order = not order
         if reverse_object.page == current_page and not is_first_sort:

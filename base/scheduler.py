@@ -1,12 +1,16 @@
 import calendar
+import logging
 from datetime import date, datetime, timedelta
 
+from django.db import IntegrityError
 from django.urls import reverse
 from django.utils.translation import gettext_noop
 
 from horilla.db import scheduled_job
 from horilla.scheduling import register_job
 from notifications.signals import notify
+
+logger = logging.getLogger(__name__)
 
 
 def next_monthly_date(today, rotate_every):
@@ -227,19 +231,16 @@ def rotate_shift():
     rotating_shifts = RotatingShiftAssign.objects.filter(is_active=True)
     today = datetime.now().date()
     r_shifts = rotating_shifts.filter(start_date__lte=today)
-    # Start from all active assignments (it was None, so the job crashed on
-    # days with nothing to deactivate) and accumulate exclusions per employee.
-    rotating_shifts_modified = rotating_shifts
     for r_shift in r_shifts:
         emp_shift = rotating_shifts.filter(
             employee_id=r_shift.employee_id, start_date__lte=today
         ).exclude(id=r_shift.id)
-        rotating_shifts_modified = rotating_shifts_modified.exclude(
-            id__in=emp_shift.values_list("id", flat=True)
-        )
         emp_shift.update(is_active=False)
 
-    for rotating_shift in rotating_shifts_modified:
+    # Re-read the active assignments: the superseded ones were just
+    # deactivated. (A variable only set inside the loop above left nothing to
+    # iterate when no assignment had started, raising TypeError every run.)
+    for rotating_shift in rotating_shifts:
         based_on = rotating_shift.based_on
         # after day condition
         if based_on == "after":
@@ -425,7 +426,15 @@ def recurring_holiday():
         elif end_date == (today - timedelta(days=1)).date():
             recurring_holiday.start_date = new_start_date
             recurring_holiday.end_date = new_end_date
-        recurring_holiday.save()
+        try:
+            recurring_holiday.save()
+        except IntegrityError:
+            # Another holiday already occupies the rolled-over date range
+            # for this company; keep this one unchanged.
+            logger.warning(
+                "Recurring holiday %s not rolled over: duplicate date range",
+                recurring_holiday.pk,
+            )
 
 
 @scheduled_job

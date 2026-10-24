@@ -45,6 +45,8 @@ class MailLogTabList(HorillaListView):
     list view for mail log  tab
     """
 
+    show_saved_filters = False
+
     model = EmailLog
     filter_class = MailLogFilter
 
@@ -89,7 +91,7 @@ class MailLogTabList(HorillaListView):
         return queryset
 
     columns = [
-        (_("Subject"), "subject"),
+        (_("Subject"), "subject_display"),
         (_("Date"), "created_at"),
         (_("Status"), "status_display"),
     ]

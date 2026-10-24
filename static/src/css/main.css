@@ -12896,6 +12896,11 @@ span.oh-activity-sidebar__a img {
           align-items: center;
   color: hsl(0, 0%, 27%);
 }
+.oh-timeoff-modal__download-link ion-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
 .oh-timeoff-modal__download-link:hover, .oh-timeoff-modal__download-link:focus, .oh-timeoff-modal__download-link:focus-visible {
   text-decoration: none;
   background-color: hsl(213, 22%, 84%);

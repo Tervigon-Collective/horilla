@@ -196,17 +196,56 @@ class RecruitmentTabView(HorillaTabView):
             is_active=True
         )
         view_type = self.request.GET.get("view", "list")
+        # Carry over any other query params (e.g. ?task_status=stuck from the
+        # dashboard's Stuck Tasks tile) down into each tab's shell, which in
+        # turn forwards them to the actual board content request -- "view"
+        # is excluded since it's already handled by the view_type/url logic
+        # below, not meant to be a board-content filter itself.
+        extra_params = self.request.GET.copy()
+        extra_params.pop("view", None)
+        extra_qs = extra_params.urlencode()
         self.tabs = []
+        # Candidates on each job's board (one stage row per candidate), not
+        # how many stages it has.
+        candidate_stage_qs = onboarding_models.CandidateStage.objects.filter(
+            onboarding_stage_id__recruitment_id__in=recruitments.values_list(
+                "pk", flat=True
+            ),
+            onboarding_stage_id__is_active=True,
+        )
+        # The card/kanban board sets records_count_in_tab = False precisely so
+        # this tab badge counts candidates, not columns -- but unlike the list
+        # board's own stage badges (CandidatePipeline.get_queryset), nothing
+        # ever patches this one from the client side, so a task_status filter
+        # left unapplied here stuck permanently at the unfiltered total: the
+        # dashboard's Stuck Tasks tile landed on a tab badge that kept showing
+        # every candidate, never the stuck ones, no matter what the board
+        # underneath it correctly rendered.
+        task_status = self.request.GET.get("task_status")
+        if task_status:
+            candidate_stage_qs = candidate_stage_qs.filter(
+                candidate_id__candidate_task__status=task_status
+            )
+        candidate_counts = dict(
+            candidate_stage_qs.values("onboarding_stage_id__recruitment_id")
+            .annotate(total=Count("candidate_id", distinct=True))
+            .values_list("onboarding_stage_id__recruitment_id", "total")
+        )
         for rec in recruitments:
             tab = {}
             tab["title"] = rec
             url = reverse("onboarding-pipeline-shell", kwargs={"rec_id": rec.pk})
+            query_parts = []
             if view_type != "list":
-                url += f"?view={view_type}"
+                query_parts.append(f"view={view_type}")
+            if extra_qs:
+                query_parts.append(extra_qs)
+            if query_parts:
+                url += "?" + "&".join(query_parts)
             tab["url"] = url
 
-            tab["badge_label"] = _("Stages")
-            tab["badge"] = rec.onboarding_stage.filter(is_active=True).count()
+            tab["badge_label"] = _("Candidates")
+            tab["badge"] = candidate_counts.get(rec.pk, 0)
             self.tabs.append(tab)
 
 
@@ -337,6 +376,14 @@ class RecruitmentPipelineContentShell(TemplateView):
             content_url = reverse(
                 "candidate-card-cbv-onboarding", kwargs={"pk": rec.pk}
             )
+        # Forward any extra query params (e.g. ?task_status=stuck) through to
+        # the actual board content request -- "view" is excluded since it
+        # only picks which endpoint above, not a board-content filter itself.
+        extra_params = self.request.GET.copy()
+        extra_params.pop("view", None)
+        extra_qs = extra_params.urlencode()
+        if extra_qs:
+            content_url += f"?{extra_qs}"
         context["content_url"] = content_url
         context["rec_id"] = rec.pk
         context["nav_url"] = (
@@ -444,7 +491,24 @@ class CandidatePipeline(Pipeline):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        queryset = queryset.annotate(candidate_count=Count("candidate", distinct=True))
+        # OnboardingStageFilter (this grouper's own field_filter_class) has no
+        # task_status field, so a deep link like the dashboard's Stuck Tasks
+        # tile (?task_status=stuck) never touched this count: every stage kept
+        # showing its total candidate count regardless, and a stage with zero
+        # *matching* candidates stayed expanded instead of auto-collapsing,
+        # since that decision reads this same number. The nested candidate
+        # list a few lines of HTML down does filter correctly (via
+        # PipelineCandidateFilter), so the badge looked wrong only until its
+        # own JS later patched it from that list's real count.
+        task_status = self.request.GET.get("task_status")
+        count_filter = (
+            Q(candidate__candidate_id__candidate_task__status=task_status)
+            if task_status
+            else Q()
+        )
+        queryset = queryset.annotate(
+            candidate_count=Count("candidate", filter=count_filter, distinct=True)
+        )
         self.queryset = queryset.order_by("sequence")
         return self.queryset
 
@@ -763,8 +827,12 @@ class CandidateList(HorillaListView):
         # request-local and never leaks between requests.
         dynamic_columns = []
         dynamic_toggle_labels = {}
+        dynamic_header_attrs = {}
         for task in tasks:
-            dynamic_toggle_labels[f"get_{task.pk}_task"] = task.task_title
+            col_key = f"get_{task.pk}_task"
+            dynamic_toggle_labels[col_key] = task.task_title
+            col_width = max(150, len(task.task_title) * 7 + 130)
+            dynamic_header_attrs[col_key] = f'style="width:{col_width}px !important;"'
             dynamic_columns.append(
                 (
                     f"""
@@ -772,7 +840,7 @@ class CandidateList(HorillaListView):
                             <span class="px-2 py-1 text-xs">
                                 {task.task_title}
                             </span>
-                            <div class="hidden group-hover:flex items-center transition duration-300 gap-1 p-1 rounded z-10 bg-white"
+                            <div class="flex items-center transition duration-300 gap-1 p-1 rounded z-10 bg-white"
                                 onclick="event.stopPropagation()"
                             >
                                 <button
@@ -798,7 +866,7 @@ class CandidateList(HorillaListView):
                             </div>
                         </div>
                     """,
-                    f"get_{task.pk}_task",
+                    col_key,
                 )
             )
         dynamic_columns.append(
@@ -831,6 +899,7 @@ class CandidateList(HorillaListView):
         self.columns = self.columns + dynamic_columns
         self.default_columns = self.default_columns + dynamic_columns
         self.toggle_labels = {**self.toggle_labels, **dynamic_toggle_labels}
+        self.header_attrs = {**self.header_attrs, **dynamic_header_attrs}
 
         context = super().get_context_data(**kwargs)
         context["stage"] = onboarding_models.OnboardingStage.objects.filter(
@@ -852,6 +921,8 @@ class CandidateKanbanView(HorillaKanbanView):
     group_key = "onboarding_stage__onboarding_stage_id"
     records_per_page = 10
     show_kanban_confirmation = False
+    # The tab badge counts candidates (set server-side), not stage columns
+    records_count_in_tab = False
     filter_keys_to_remove = ["onboarding_stage_id", "rec_id", "recruitment_id"]
     filter_class = onboarding_filters.KanbanCandidateFilter
     group_filter_class = onboarding_filters.OnboardingStageFilter

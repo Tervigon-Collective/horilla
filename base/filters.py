@@ -995,6 +995,10 @@ class HolidayFilter(HorillaFilterSet):
         lookup_expr="lte",
         widget=forms.DateInput(attrs={"type": "date"}),
     )
+    available_for_all = filters.BooleanFilter(
+        method="filter_available_for_all",
+        label=__("Available for all"),
+    )
 
     class Meta:
         """
@@ -1016,6 +1020,13 @@ class HolidayFilter(HorillaFilterSet):
         self.form.fields["to_date"].label = (
             f"{self.Meta.model()._meta.get_field('end_date').verbose_name} Till"
         )
+
+    def filter_available_for_all(self, queryset, _, value):
+        """
+        Holidays not restricted to specific departments/positions/
+        employees (is_specific=False) are available for everyone.
+        """
+        return queryset.filter(is_specific=not value)
 
     def _build_custom_filter_fields(self):
         """
@@ -1209,6 +1220,7 @@ class RosterFilter(HorillaFilterSet):
     # page already has). filter_search below is the same name-only
     # matching logic, just pointed at the correct field path.
     search = django_filters.CharFilter(method="filter_search")
+    search_field = django_filters.CharFilter(method="search_in")
     # Dedicated comma-separated "Name or Badge ID" search, alongside the
     # AJAX employee picker above rather than instead of it -- same
     # field/behavior as EmployeeFilter.name_or_badge/AttendanceFilters.
@@ -1253,6 +1265,8 @@ class RosterFilter(HorillaFilterSet):
         see this field's own comment above for why it can't reuse the
         shared horilla.filters.filter_by_name.
         """
+        if self.data.get("search_field"):
+            return queryset
         value = " ".join(value.split())
         queryset = queryset.annotate(
             full_name=Concat(

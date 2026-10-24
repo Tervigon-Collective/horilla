@@ -23,6 +23,7 @@ from asset.models import (
     AssetLot,
     AssetReport,
     AssetRequest,
+    AssetServiceRequest,
 )
 from base.forms import ModelForm
 from base.methods import reload_queryset
@@ -507,7 +508,19 @@ class AssetReturnForm(ModelForm):
         self.fields["return_images"] = MultipleFileField(
             label=_("Return Condition Images")
         )
-        self.fields["return_images"].required = True
+        # Required unless the asset is reported Lost: there is nothing to
+        # photograph then. The browser-side "required" is toggled in the
+        # template; clean() below enforces it on the server.
+        self.fields["return_images"].required = False
+        self.fields["return_images"].widget.attrs["required"] = "required"
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if cleaned_data.get("return_status") != "Lost" and not (
+            self.files and self.files.getlist("return_images")
+        ):
+            self.add_error("return_images", _("This field is required."))
+        return cleaned_data
 
     def clean_return_date(self):
         """
@@ -528,6 +541,69 @@ class AssetReturnForm(ModelForm):
             raise forms.ValidationError(_("Return date cannot be in the future."))
 
         return return_date
+
+
+class AssetServiceRequestForm(ModelForm):
+    """
+    A Django ModelForm for employees to raise a service request against
+    one of their own active asset allocations.
+    """
+
+    cols = {"issue_description": 12}
+
+    class Meta:
+        model = AssetServiceRequest
+        fields = ["assignment_id", "issue_description"]
+        widgets = {
+            "assignment_id": forms.HiddenInput(),
+            "issue_description": forms.Textarea(
+                attrs={
+                    "class": "oh-input oh-input--textarea oh-input--block",
+                    "rows": 3,
+                    "cols": 40,
+                    "placeholder": _(
+                        "The laptop screen flickers and shuts down randomly."
+                    ),
+                }
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        request = getattr(_thread_locals, "request", None)
+        employee = request.user.employee_get
+        super().__init__(*args, **kwargs)
+        self.fields["assignment_id"].queryset = AssetAssignment.objects.filter(
+            assigned_to_employee_id=employee, return_date__isnull=True
+        )
+
+        assignment_id = None
+        if self.data:
+            assignment_id = self.data.get("assignment_id")
+        elif request and request.GET.get("assignment_id"):
+            assignment_id = request.GET.get("assignment_id")
+        if assignment_id:
+            self.fields["assignment_id"].initial = assignment_id
+
+    def clean_assignment_id(self):
+        assignment = self.cleaned_data.get("assignment_id")
+        if (
+            assignment
+            and AssetServiceRequest.objects.filter(
+                assignment_id=assignment, status__in=["Requested", "In Progress"]
+            ).exists()
+        ):
+            raise ValidationError(
+                _("There is already an open service request for this asset.")
+            )
+        return assignment
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        request = getattr(_thread_locals, "request", None)
+        instance.requested_employee_id = request.user.employee_get
+        if commit:
+            instance.save()
+        return instance
 
 
 class AssetBatchForm(ModelForm):

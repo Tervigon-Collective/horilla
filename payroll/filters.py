@@ -37,6 +37,7 @@ from payroll.models.models import (
     Reimbursement,
     SalaryStructure,
 )
+from payroll.models.payroll_batch import PayrollBatch
 from payroll.models.tax_models import TaxBracket
 
 
@@ -49,6 +50,7 @@ class ContractFilter(HorillaFilterSet):
     """
 
     search = django_filters.CharFilter(method="filter_by_contract")
+    search_field = django_filters.CharFilter(method="search_in")
     # Multiple-choice (not the plain single-value ChoiceFilter Meta.fields
     # would otherwise auto-generate) so the panel can default to showing
     # Active + Draft together on first load -- see __init__ below -- while
@@ -209,6 +211,8 @@ class ContractFilter(HorillaFilterSet):
         """
         Filter queryset by first name or last name.
         """
+        if self.data.get("search_field"):
+            return queryset
         # Split the search value into first name and last name
         parts = value.split()
         first_name = parts[0]
@@ -419,7 +423,8 @@ class PayslipFilter(HorillaFilterSet):
     Filter set class for payslip model.
     """
 
-    search = django_filters.CharFilter(method=filter_by_name)
+    search = django_filters.CharFilter(method="filter_by_name")
+    search_field = django_filters.CharFilter(method="search_in")
     employee_id = django_filters.ModelMultipleChoiceFilter(
         queryset=Employee.objects.all(),
         widget=forms.SelectMultiple(),
@@ -445,6 +450,16 @@ class PayslipFilter(HorillaFilterSet):
             "placeholder": _("Search employee..."),
         },
     }
+
+    def filter_by_name(self, queryset, name, value):
+        """
+        Delegates to the shared horilla.filters.filter_by_name, except when
+        search_field is set (field-scoped search takes over instead -- see
+        HorillaFilterSet.search_in).
+        """
+        if self.data.get("search_field"):
+            return queryset
+        return filter_by_name(queryset, name, value)
 
     start_date_from = django_filters.DateFilter(
         widget=forms.DateInput(attrs={"type": "date"}),
@@ -491,6 +506,8 @@ class PayslipFilter(HorillaFilterSet):
     )
     month = django_filters.CharFilter(field_name="start_date", lookup_expr="month")
     year = django_filters.CharFilter(field_name="start_date", lookup_expr="year")
+    # One payroll run's payslips: the run page lists them with the payslip list itself.
+    payroll_batch = django_filters.NumberFilter(field_name="payroll_batch_id")
 
     allowance_title = django_filters.CharFilter(
         method="filter_by_allowance_title", label="Allowance Title"
@@ -1031,3 +1048,37 @@ class PayslipAutoGenerateFilter(HorillaFilterSet):
         """
 
         return ((queryset.filter(company_id__company__icontains=value))).distinct()
+
+
+class PayrollBatchFilter(HorillaFilterSet):
+    """Filter set for the payroll runs list."""
+
+    search = django_filters.CharFilter(method="filter_search")
+    status = django_filters.ChoiceFilter(choices=PayrollBatch.STATUS_CHOICES)
+    period_start_from = django_filters.DateFilter(
+        field_name="period_start",
+        lookup_expr="gte",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+    period_end_till = django_filters.DateFilter(
+        field_name="period_end",
+        lookup_expr="lte",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+    pay_date_from = django_filters.DateFilter(
+        field_name="pay_date",
+        lookup_expr="gte",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+    pay_date_till = django_filters.DateFilter(
+        field_name="pay_date",
+        lookup_expr="lte",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+
+    class Meta:
+        model = PayrollBatch
+        fields = ["status"]
+
+    def filter_search(self, queryset, name, value):
+        return queryset.filter(batch_name__icontains=value)

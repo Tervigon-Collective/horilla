@@ -42,6 +42,10 @@ from horilla.methods import get_horilla_model_class
 from horilla.models import HorillaModel, has_xss, upload_path
 from horilla_audit.methods import get_diff
 from horilla_audit.models import HorillaAuditInfo, HorillaAuditLog
+from horilla_auth.methods import (
+    generate_random_password,
+    generate_unique_fallback_username,
+)
 from horilla_auth.models import HorillaUser
 from horilla_views.cbv_methods import render_template
 
@@ -230,7 +234,7 @@ class Employee(models.Model):
                 and self.employee_work_info.reporting_manager_id
                 == request.user.employee_get
             ):
-                return 'style="color: inherit; text-decoration: none; background-color: hsl(38.08deg 100% 50% / 8%);"'
+                return 'style="color: inherit; text-decoration: none; background-color: rgba(255, 166, 0, 0.158);"'
             else:
                 return ""
         else:
@@ -323,7 +327,9 @@ class Employee(models.Model):
         )
         status = _("Expected working")
         if leaves_requests.exists():
-            if leaves_requests.filter(status="approved").exists():
+            if leaves_requests.filter(
+                status__in=["approved", "cancel_requested"]
+            ).exists():
                 status = _("On Leave")
             elif leaves_requests.filter(status="requested"):
                 status = _("Waiting Approval")
@@ -625,6 +631,61 @@ class Employee(models.Model):
         url = reverse_lazy("employee-view-individual", kwargs={"obj_id": self.pk})
         return url
 
+    def get_pay_contract(self):
+        """
+        The contract this employee's pay is read from: the active one, and
+        nothing when there is none. Pay lives on the contract; the salary fields
+        on the work information are the old copy and are no longer shown or
+        edited.
+        """
+        if not apps.is_installed("payroll"):
+            return None
+        return (
+            self.contract_set.filter(contract_status="active")
+            .order_by("-contract_start_date", "-id")
+            .first()
+        )
+
+    def get_pay_summary(self):
+        """
+        The one figure to show for this employee's pay, and what it is called:
+        the monthly CTC when the contract is on a CTC Down structure (that is
+        the number the structure divides), the hourly rate for an hourly
+        contract, the basic salary otherwise. None when there is no active
+        contract.
+        """
+        contract = self.get_pay_contract()
+        if contract is None:
+            return None
+        structure = contract.salary_structure_id
+        if structure is not None and (structure.structure_mode or "") == "ctc_down":
+            return {
+                "label": _("CTC"),
+                "amount": contract.monthly_ctc or contract.wage,
+                "contract": contract,
+            }
+        if contract.wage_type == "hourly":
+            return {
+                "label": _("Hourly"),
+                "amount": contract.hourly_wage or contract.wage,
+                "contract": contract,
+            }
+        return {"label": _("Basic"), "amount": contract.wage, "contract": contract}
+
+    def get_pay_contracts_list_url(self):
+        """The contracts list showing just this employee's contracts."""
+        return f"{reverse('view-contract')}?employee_id={self.pk}&filter_applied=true"
+
+    def get_pay_contract_url(self):
+        """
+        Where the pay is changed: the edit form of the active contract, or, with
+        no active contract, the contracts list showing just this employee's.
+        """
+        contract = self.get_pay_contract()
+        if contract is not None:
+            return reverse("update-contract", kwargs={"contract_id": contract.pk})
+        return f"{reverse('view-contract')}?employee_id={self.pk}&filter_applied=true"
+
     def get_profile_url(self):
         """
         This method to get individual  url
@@ -694,7 +755,7 @@ class Employee(models.Model):
             ("view_ownprofile", "View Own Profile"),
         )
         ordering = [
-            "employee_first_name",
+            "id",
         ]
         constraints = [
             models.UniqueConstraint(
@@ -1210,6 +1271,12 @@ class NoteFiles(HorillaModel):
     def __str__(self):
         return self.files.name.split("/")[-1]
 
+    @property
+    def is_image(self):
+        """Whether the attachment has an image file extension."""
+        name = (self.files.name or "").lower()
+        return name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"))
+
 
 class EmployeeNote(HorillaModel):
     """
@@ -1259,6 +1326,22 @@ class PolicyMultipleFile(HorillaModel):
         return self._attachment_name.endswith(
             (".png", ".jpg", ".jpeg", ".gif", ".webp")
         )
+
+    @property
+    def icon_class(self):
+        """Modifier for ``oh-file-icon`` so each file type gets its own icon."""
+        name = self._attachment_name
+        if name.endswith(".pdf"):
+            return "oh-file-icon--pdf"
+        if self.is_image or name.endswith(".svg"):
+            return "oh-file-icon--image"
+        if name.endswith((".xls", ".xlsx", ".xlsm", ".csv")):
+            return "oh-file-icon--excel"
+        if name.endswith((".doc", ".docx")):
+            return "oh-file-icon--word"
+        if name.endswith((".ppt", ".pptx")):
+            return "oh-file-icon--powerpoint"
+        return "oh-file-icon--default"
 
 
 class Policy(HorillaModel):

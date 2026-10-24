@@ -48,6 +48,14 @@
             <button
                 type="button"
                 class="oh-tabs__tab policies-discipline-tab-btn"
+                data-tab-id="faq"
+                data-url="{% url 'policies-discipline-faq-tab' %}"
+            >
+                {% trans "FAQ" %}
+            </button>
+            <button
+                type="button"
+                class="oh-tabs__tab policies-discipline-tab-btn"
                 data-tab-id="disciplinary"
                 data-url="{% url 'policies-discipline-disciplinary-tab' %}"
             >

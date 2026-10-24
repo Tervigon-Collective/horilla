@@ -22,6 +22,7 @@ from base.models import (
 from employee.models import Employee
 from horilla.filters import HorillaFilterSet, filter_name_or_badge_terms
 from offboarding.models import (
+    EmployeeTask,
     Offboarding,
     OffboardingEmployee,
     OffboardingStage,
@@ -258,6 +259,53 @@ class LetterFilter(HorillaFilterSet):
         )
 
 
+class EmployeeTaskListFilter(HorillaFilterSet):
+    """
+    Filter for the standalone offboarding task list page
+    """
+
+    search = django_filters.CharFilter(method="search_method")
+    task = django_filters.CharFilter(
+        field_name="task_id__title", lookup_expr="icontains"
+    )
+    stage = django_filters.CharFilter(
+        field_name="task_id__stage_id__title", lookup_expr="icontains"
+    )
+    offboarding = django_filters.CharFilter(
+        field_name="task_id__stage_id__offboarding_id__title", lookup_expr="icontains"
+    )
+    created_at_from = django_filters.DateFilter(
+        field_name="created_at",
+        lookup_expr="date__gte",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+    created_at_till = django_filters.DateFilter(
+        field_name="created_at",
+        lookup_expr="date__lte",
+        widget=forms.DateInput(attrs={"type": "date"}),
+    )
+
+    class Meta:
+        model = EmployeeTask
+        fields = ["status"]
+
+    def search_method(self, queryset, _, value):
+        """
+        Search by employee, task, stage or offboarding
+        """
+        return (
+            queryset.filter(
+                employee_id__employee_id__employee_first_name__icontains=value
+            )
+            | queryset.filter(
+                employee_id__employee_id__employee_last_name__icontains=value
+            )
+            | queryset.filter(task_id__title__icontains=value)
+            | queryset.filter(task_id__stage_id__title__icontains=value)
+            | queryset.filter(task_id__stage_id__offboarding_id__title__icontains=value)
+        ).distinct()
+
+
 class PipelineFilter(HorillaFilterSet):
     """
     PipelineFilter
@@ -267,6 +315,12 @@ class PipelineFilter(HorillaFilterSet):
     offboarding_manager = django_filters.ModelChoiceFilter(
         field_name="managers", queryset=Employee.objects.all()
     )
+    # Exact-offboarding deep link (the dashboard's Notice Period Tracker
+    # rows) -- narrows the tab list to just this one record so it's
+    # guaranteed to land at position 1, letting the link combine this with
+    # ?open_tab=1 to open directly on the right tab. Same shape as
+    # PipelineEmployeeFilter.employee_id's own deep-link filter.
+    offboarding_id = django_filters.CharFilter(field_name="id")
 
     # HorillaFilterSet.ajax_fields (generic AJAX-loaded combobox mechanism)
     # -- Managers opts into an AJAX-searched combobox instead of

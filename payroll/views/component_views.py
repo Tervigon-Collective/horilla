@@ -66,29 +66,14 @@ from payroll.filters import (
     ReimbursementFilter,
 )
 from payroll.forms import component_forms as forms
-from payroll.methods.deductions import create_deductions, update_compensation_deduction
-from payroll.methods.methods import (
-    calculate_employer_contribution,
-    compute_net_pay,
-    compute_salary_on_period,
-    paginator_qry,
-    save_payslip,
+from payroll.methods.deductions import create_deductions
+from payroll.methods.methods import paginator_qry, payslip_fields, save_payslip
+from payroll.methods.payroll_run import (  # noqa: F401  (re-exported for callers)
+    get_pending_attendance,
+    payroll_calculation,
 )
-from payroll.methods.payslip_calc import (
-    calculate_allowance,
-    calculate_gross_pay,
-    calculate_net_pay_deduction,
-    calculate_post_tax_deduction,
-    calculate_pre_tax_deduction,
-    calculate_tax_deduction,
-    calculate_taxable_gross_pay,
-)
-from payroll.methods.tax_calc import calculate_taxable_amount
 from payroll.methods.ctc_wizard import is_salary_on_hold
-from payroll.methods.india_statutory import (
-    apply_india_statutory_to_payroll,
-    get_india_settings,
-)
+from payroll.methods.tax_calc import TaxComputationError
 from payroll.models.models import (
     Allowance,
     Contract,
@@ -118,283 +103,6 @@ operator_mapping = {
     "icontains": operator.contains,
     "range": return_none,
 }
-
-
-def get_pending_attendance(employee, start_date, end_date):
-    """
-    Attendance records in the payslip period that still need validation
-    and/or overtime approval — surfaced on the payslip so HR can act on
-    them without leaving the page. Unvalidated attendance doesn't count
-    toward pay (see get_attendance() in payroll/methods/methods.py).
-    """
-    if not apps.is_installed("attendance"):
-        return []
-    Attendance = get_horilla_model_class(app_label="attendance", model="attendance")
-    records = Attendance.objects.filter(
-        employee_id=employee,
-        attendance_date__range=(start_date, end_date),
-    ).order_by("attendance_date")
-
-    pending = []
-    for att in records:
-        needs_validation = not att.attendance_validated
-        needs_ot_approval = (
-            bool(att.overtime_second) and not att.attendance_overtime_approve
-        )
-        if not needs_validation and not needs_ot_approval:
-            continue
-        worked = att.at_work_second or 0
-        overtime = att.overtime_second or 0
-        pending.append(
-            {
-                "id": att.id,
-                "date_label": att.attendance_date.strftime("%d %b %Y"),
-                "worked_label": f"{worked // 3600}h {(worked % 3600) // 60:02d}m",
-                "overtime_label": f"{overtime // 3600}h {(overtime % 3600) // 60:02d}m",
-                "needs_validation": needs_validation,
-                "needs_ot_approval": needs_ot_approval,
-            }
-        )
-    return pending
-
-
-def payroll_calculation(
-    employee, start_date, end_date, structure_override=None, month_summary=None
-):
-    """
-    Calculate payroll components for the specified employee within the given date range.
-
-    Args:
-        employee (Employee): The employee for whom the payroll is calculated.
-        start_date (date): The start date of the payroll period.
-        end_date (date): The end date of the payroll period.
-        structure_override (dict|None): Optional structure-as-of snapshot
-            ({basic, hra, special, ...}) for historical replay.
-
-    Returns:
-        dict: A dictionary containing the calculated payroll components:
-    """
-    wage_override = None
-    if structure_override and structure_override.get("basic") is not None:
-        wage_override = float(structure_override.get("basic") or 0)
-
-    basic_pay_details = compute_salary_on_period(
-        employee,
-        start_date,
-        end_date,
-        wage=wage_override,
-        month_summary=month_summary,
-    )
-    if not basic_pay_details:
-        return None
-    contract = basic_pay_details["contract"]
-    contract_wage = basic_pay_details["contract_wage"]
-    basic_pay = basic_pay_details["basic_pay"]
-    loss_of_pay = basic_pay_details["loss_of_pay"]
-    custom_leave_deduction = basic_pay_details.get("custom_leave_deduction", 0.0)
-    custom_leave_breakdown = basic_pay_details.get("custom_leave_breakdown", [])
-    paid_days = basic_pay_details["paid_days"]
-    unpaid_days = basic_pay_details["unpaid_days"]
-    leave_lop_days = basic_pay_details.get("leave_lop_days", unpaid_days)
-    attendance_lop_days = basic_pay_details.get("attendance_lop_days", 0)
-    partial_pay_days = basic_pay_details.get("partial_pay_days", 0)
-
-    def _secs_to_label(secs):
-        secs = int(secs or 0)
-        return f"{secs // 3600}h {(secs % 3600) // 60:02d}m"
-
-    regular_seconds = basic_pay_details.get("regular_seconds")
-    ot_seconds = basic_pay_details.get("ot_seconds")
-    regular_hours_label = (
-        _secs_to_label(regular_seconds) if regular_seconds is not None else None
-    )
-    ot_hours_label = _secs_to_label(ot_seconds) if ot_seconds is not None else None
-
-    ot_regular_seconds = basic_pay_details.get("ot_regular_seconds", 0)
-    ot_week_off_seconds = basic_pay_details.get("ot_week_off_seconds", 0)
-    ot_holiday_seconds = basic_pay_details.get("ot_holiday_seconds", 0)
-    ot_regular_hours_label = (
-        _secs_to_label(ot_regular_seconds) if ot_regular_seconds else None
-    )
-    ot_week_off_hours_label = (
-        _secs_to_label(ot_week_off_seconds) if ot_week_off_seconds else None
-    )
-    ot_holiday_hours_label = (
-        _secs_to_label(ot_holiday_seconds) if ot_holiday_seconds else None
-    )
-
-    pending_attendance = get_pending_attendance(employee, start_date, end_date)
-
-    working_days_details = basic_pay_details["month_data"]
-
-    updated_basic_pay_data = update_compensation_deduction(
-        employee, basic_pay, "basic_pay", start_date, end_date
-    )
-    basic_pay = updated_basic_pay_data["compensation_amount"]
-    basic_pay_deductions = updated_basic_pay_data["deductions"]
-
-    loss_of_pay_amount = 0
-    if not contract.deduct_leave_from_basic_pay:
-        loss_of_pay_amount = loss_of_pay
-    else:
-        basic_pay = basic_pay - loss_of_pay_amount
-
-    kwargs = {
-        "employee": employee,
-        "start_date": start_date,
-        "end_date": end_date,
-        "basic_pay": basic_pay,
-        "day_dict": working_days_details,
-    }
-    # basic pay will be basic_pay = basic_pay - update_compensation_amount
-    # Overtime pay (regular/week-off/holiday) comes from the configurable
-    # "Regular Overtime" / "Week Off Overtime" / "Holiday Overtime"
-    # Allowance types — see calculate_based_on_overtime and friends in
-    # payroll/methods/payslip_calc.py. Nothing to inject here; it's just
-    # part of whatever calculate_allowance() returns below.
-    allowances = calculate_allowance(**kwargs)
-
-    if structure_override:
-        from payroll.methods.annual_ctc import apply_structure_to_allowance_lines
-
-        allowances["allowances"] = apply_structure_to_allowance_lines(
-            allowances["allowances"], structure_override
-        )
-
-    # finding the total allowance
-    total_allowance = sum(allowance["amount"] for allowance in allowances["allowances"])
-
-    kwargs["allowances"] = allowances
-    kwargs["total_allowance"] = total_allowance
-    updated_gross_pay_data = calculate_gross_pay(**kwargs)
-    gross_pay = updated_gross_pay_data["gross_pay"]
-    gross_pay_deductions = updated_gross_pay_data["deductions"]
-    kwargs["gross_pay"] = gross_pay
-    pretax_deductions = calculate_pre_tax_deduction(**kwargs)
-    post_tax_deductions = calculate_post_tax_deduction(**kwargs)
-
-    installments = (
-        pretax_deductions["installments"] | post_tax_deductions["installments"]
-    )
-
-    taxable_gross_pay = calculate_taxable_gross_pay(**kwargs)
-    india_settings = get_india_settings(employee)
-    if india_settings and india_settings.enable_tds:
-        tax_deductions = {"tax_deductions": []}
-        federal_tax = 0.0
-    else:
-        tax_deductions = calculate_tax_deduction(**kwargs)
-        federal_tax = calculate_taxable_amount(**kwargs)
-
-    india_merge = apply_india_statutory_to_payroll(
-        employee=employee,
-        basic_pay=basic_pay,
-        gross_pay=gross_pay,
-        start_date=start_date,
-        end_date=end_date,
-        pretax_result=pretax_deductions,
-        federal_tax=federal_tax,
-    )
-    pretax_deductions = india_merge["pretax_deductions"]
-    federal_tax = india_merge["federal_tax"]
-    india_statutory = india_merge.get("india_statutory") or {}
-    india_employer_contributions = india_merge.get("india_employer_contributions") or []
-
-    total_allowance = sum(item["amount"] for item in allowances["allowances"])
-    total_pretax_deduction = sum(
-        item["amount"] for item in pretax_deductions["pretax_deductions"]
-    )
-    total_post_tax_deduction = sum(
-        item["amount"] for item in post_tax_deductions["post_tax_deductions"]
-    )
-    total_tax_deductions = sum(
-        item["amount"] for item in tax_deductions["tax_deductions"]
-    )
-
-    total_deductions = (
-        total_pretax_deduction
-        + total_post_tax_deduction
-        + total_tax_deductions
-        + federal_tax
-        + loss_of_pay_amount
-    )
-
-    net_pay = gross_pay - total_deductions
-    # loss_of_pay        -> actual lop amount
-    # loss_of_pay_amount -> actual lop amount, but only when it wasn't
-    #                       already subtracted from basic_pay above (i.e.
-    #                       zero when deduct_leave_from_basic_pay is
-    #                       enabled, since basic_pay already reflects it)
-    net_pay = compute_net_pay(
-        net_pay=net_pay,
-        gross_pay=gross_pay,
-        total_pretax_deduction=total_pretax_deduction,
-        total_post_tax_deduction=total_post_tax_deduction,
-        total_tax_deductions=total_tax_deductions,
-        federal_tax=federal_tax,
-        loss_of_pay_amount=loss_of_pay_amount,
-        loss_of_pay=loss_of_pay,
-    )
-    updated_net_pay_data = update_compensation_deduction(
-        employee, net_pay, "net_pay", start_date, end_date
-    )
-    net_pay = updated_net_pay_data["compensation_amount"]
-    update_net_pay_deductions = updated_net_pay_data["deductions"]
-
-    net_pay_deductions = calculate_net_pay_deduction(
-        net_pay,
-        post_tax_deductions["net_pay_deduction"],
-        **kwargs,
-    )
-    net_pay_deduction_list = net_pay_deductions["net_pay_deductions"]
-    for deduction in update_net_pay_deductions:
-        net_pay_deduction_list.append(deduction)
-    net_pay = net_pay - net_pay_deductions["net_deduction"]
-    payslip_data = {
-        "employee": employee,
-        "contract_wage": contract_wage,
-        "basic_pay": basic_pay,
-        "gross_pay": gross_pay,
-        "taxable_gross_pay": taxable_gross_pay["taxable_gross_pay"],
-        "net_pay": net_pay,
-        "allowances": allowances["allowances"],
-        "paid_days": paid_days,
-        "unpaid_days": unpaid_days,
-        "leave_lop_days": leave_lop_days,
-        "attendance_lop_days": attendance_lop_days,
-        "partial_pay_days": partial_pay_days,
-        "regular_hours_label": regular_hours_label,
-        "ot_hours_label": ot_hours_label,
-        "ot_regular_hours_label": ot_regular_hours_label,
-        "ot_week_off_hours_label": ot_week_off_hours_label,
-        "ot_holiday_hours_label": ot_holiday_hours_label,
-        "pending_attendance": pending_attendance,
-        "basic_pay_deductions": basic_pay_deductions,
-        "gross_pay_deductions": gross_pay_deductions,
-        "pretax_deductions": pretax_deductions["pretax_deductions"],
-        "post_tax_deductions": post_tax_deductions["post_tax_deductions"],
-        "tax_deductions": tax_deductions["tax_deductions"],
-        "net_deductions": net_pay_deduction_list,
-        "total_deductions": total_deductions,
-        "loss_of_pay": loss_of_pay,
-        "custom_leave_deduction": custom_leave_deduction,
-        "custom_leave_breakdown": custom_leave_breakdown,
-        "federal_tax": federal_tax,
-        "india_statutory": india_statutory,
-        "india_employer_contributions": india_employer_contributions,
-        "start_date": start_date,
-        "end_date": end_date,
-        "range": f"{start_date.strftime('%b %d %Y')} - {end_date.strftime('%b %d %Y')}",
-    }
-    data_to_json = payslip_data.copy()
-    data_to_json["employee"] = employee.id
-    data_to_json["start_date"] = start_date.strftime("%Y-%m-%d")
-    data_to_json["end_date"] = end_date.strftime("%Y-%m-%d")
-    json_data = json.dumps(data_to_json)
-
-    payslip_data["json_data"] = json_data
-    payslip_data["installments"] = installments
-    return payslip_data
 
 
 @login_required
@@ -738,10 +446,24 @@ def delete_allowance(request, allowance_id, emp_id=None):
         previous_instance, next_instance = closest_numbers(instances_list, allowance_id)
         instances_list.remove(allowance_id)
     allowance = payroll.models.models.Allowance.objects.filter(id=allowance_id).first()
+    if allowance and allowance.is_system:
+        # A standard pay item cannot be removed: the loan, penalty or
+        # reimbursement code reads it to decide how the rows it generates are
+        # treated, and with it gone they would silently fall back to model
+        # defaults nobody chose. See payroll/system_components.py.
+        messages.error(
+            request,
+            _(
+                "%(title)s is a standard component and cannot be deleted. "
+                "Its settings can still be changed."
+            )
+            % {"title": allowance.title},
+        )
+        allowance = None
     if allowance:
         allowance.delete()
         messages.success(request, _("Allowance deleted successfully"))
-    else:
+    elif not instances_ids:
         messages.error(request, _("Allowance not found"))
 
     paths = {
@@ -959,10 +681,24 @@ def delete_deduction(request, deduction_id, emp_id=None):
         previous_instance, next_instance = closest_numbers(instances_list, deduction_id)
         instances_list.remove(deduction_id)
     deduction = Deduction.objects.filter(id=deduction_id).first()
+    if deduction and deduction.is_system:
+        # A standard pay item cannot be removed: the loan, penalty or
+        # reimbursement code reads it to decide how the rows it generates are
+        # treated, and with it gone they would silently fall back to model
+        # defaults nobody chose. See payroll/system_components.py.
+        messages.error(
+            request,
+            _(
+                "%(title)s is a standard component and cannot be deleted. "
+                "Its settings can still be changed."
+            )
+            % {"title": deduction.title},
+        )
+        deduction = None
     if deduction:
         deduction.delete()
         messages.success(request, _("Deduction deleted successfully"))
-    else:
+    elif not instances_ids:
         messages.error(request, _("Deduction not found"))
 
     paths = {
@@ -1125,6 +861,14 @@ def generate_payslip(request):
                         end_date,
                         month_summary=att_summary.get(employee.pk, {}),
                     )
+                except TaxComputationError as exc:
+                    # Skip this employee rather than saving a payslip whose tax
+                    # silently computed to 0. Same shape as the contract-not-
+                    # started skip above: report it, drop the count, carry on
+                    # with the rest of the batch.
+                    messages.error(request, str(exc))
+                    emp_count -= 1
+                    continue
                 except Exception as exc:
                     # Lock / calc failures should not abort the whole batch
                     from payroll.methods.payroll_run_engine import PayrollRunLockedError
@@ -1146,22 +890,12 @@ def generate_payslip(request):
                 json_data.append(payslip["json_data"])
 
                 payslip["payslip"] = payslip
-                data = {}
-                data["employee"] = employee
-                data["group_name"] = group_name
-                data["start_date"] = payslip["start_date"]
-                data["end_date"] = payslip["end_date"]
-                data["status"] = "draft"
-                data["contract_wage"] = payslip["contract_wage"]
-                data["basic_pay"] = payslip["basic_pay"]
-                data["gross_pay"] = payslip["gross_pay"]
-                data["deduction"] = payslip["total_deductions"]
-                data["net_pay"] = payslip["net_pay"]
-                data["pay_data"] = json.loads(payslip["json_data"])
-                calculate_employer_contribution(data)
-                data["installments"] = payslip["installments"]
                 try:
-                    instance = save_payslip(**data)
+                    instance = save_payslip(
+                        **payslip_fields(
+                            payslip, employee, status="draft", group_name=group_name
+                        )
+                    )
                 except Exception as exc:
                     from payroll.methods.payroll_run_engine import PayrollRunLockedError
 
@@ -1292,9 +1026,19 @@ def create_payslip(request, new_post_data=None):
                     return render(
                         request,
                         "payroll/payslip/create_payslip.html",
-                        {"form": form},
+                        {"individual_form": form},
                     )
-                payslip_data = payroll_calculation(employee, start_date, end_date)
+                try:
+                    payslip_data = payroll_calculation(employee, start_date, end_date)
+                except TaxComputationError as exc:
+                    # Re-show the form with the reason rather than saving a
+                    # payslip whose tax silently computed to 0.
+                    messages.error(request, str(exc))
+                    return render(
+                        request,
+                        "payroll/payslip/create_payslip.html",
+                        {"individual_form": form},
+                    )
                 if not payslip_data:
                     messages.error(
                         request,
@@ -1303,36 +1047,25 @@ def create_payslip(request, new_post_data=None):
                     return render(
                         request,
                         "payroll/payslip/create_payslip.html",
-                        {"form": form},
+                        {"individual_form": form},
                     )
                 payslip_data["payslip"] = payslip
-                data = {}
-                data["employee"] = employee
-                data["start_date"] = payslip_data["start_date"]
-                data["end_date"] = payslip_data["end_date"]
-                data["status"] = (
-                    "draft"
-                    if request.GET.get("status") is None
-                    else request.GET["status"]
-                )
-                data["contract_wage"] = payslip_data["contract_wage"]
-                data["basic_pay"] = payslip_data["basic_pay"]
-                data["gross_pay"] = payslip_data["gross_pay"]
-                data["deduction"] = payslip_data["total_deductions"]
-                data["net_pay"] = payslip_data["net_pay"]
-                data["pay_data"] = json.loads(payslip_data["json_data"])
-                calculate_employer_contribution(data)
-                data["installments"] = payslip_data["installments"]
                 try:
                     from payroll.methods.payroll_run_engine import PayrollRunLockedError
 
-                    payslip_data["instance"] = save_payslip(**data)
+                    payslip_data["instance"] = save_payslip(
+                        **payslip_fields(
+                            payslip_data,
+                            employee,
+                            status=request.GET.get("status") or "draft",
+                        )
+                    )
                 except PayrollRunLockedError as exc:
                     messages.error(request, str(exc))
                     return render(
                         request,
                         "payroll/payslip/create_payslip.html",
-                        {"form": form},
+                        {"individual_form": form},
                     )
                 form = forms.PayslipForm()
                 messages.success(request, _("Payslip Saved"))
@@ -1430,7 +1163,10 @@ def view_individual_payslip(request, employee_id, start_date, end_date):
     This method is used to render the template for viewing a payslip.
     """
 
-    payslip_data = payroll_calculation(employee_id, start_date, end_date)
+    try:
+        payslip_data = payroll_calculation(employee_id, start_date, end_date)
+    except TaxComputationError as exc:
+        return HorillaRedirect(request, message=str(exc))
     if not payslip_data:
         return HorillaRedirect(
             request,
@@ -1438,6 +1174,7 @@ def view_individual_payslip(request, employee_id, start_date, end_date):
                 "Payslip data not found for the specified employee and date range."
             ),
         )
+    payslip_data["company"] = Company.objects.filter(hq=True).first()
     return render(
         request,
         "payroll/payslip/individual_payslip.html",
@@ -2254,6 +1991,43 @@ def search_reimbursement(request):
             "leave_encashments_ids": leave_encashments_ids,
             "bonus_encashment_ids": bonus_encashment_ids,
         },
+    )
+
+
+@login_required
+def bonus_points_note(request):
+    """
+    The note under a Bonus Point Encashment form: how many bonus points the
+    selected employee has available. Loaded when the form opens and again
+    whenever the employee is changed (htmx).
+
+    Whoever may create a reimbursement can look up any employee; anyone else
+    only sees their own points (their form has no employee field).
+    """
+    from base.methods import check_manager
+    from employee.models import BonusPoint
+
+    own_employee = getattr(request.user, "employee_get", None)
+    employee_id = request.GET.get("employee_id")
+    employee = (
+        Employee.objects.filter(id=employee_id).first()
+        if employee_id and str(employee_id).isdigit()
+        else own_employee
+    )
+    if employee and employee != own_employee:
+        if not (
+            request.user.has_perm("payroll.add_reimbursement")
+            or (own_employee and check_manager(own_employee, employee))
+        ):
+            employee = None
+    if not employee:
+        return HttpResponse("")
+
+    bonus = BonusPoint.objects.filter(employee_id=employee).first()
+    return render(
+        request,
+        "payroll/reimbursement/bonus_points_note.html",
+        {"employee": employee, "points": bonus.points if bonus else 0},
     )
 
 

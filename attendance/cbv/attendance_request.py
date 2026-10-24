@@ -13,7 +13,6 @@ from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import gettext_noop
 
-from attendance.cbv.tab_shell import AttendanceTabContentShell
 from attendance.filters import AttendanceFilters
 from attendance.forms import (
     AttendanceRequestForm,
@@ -34,6 +33,7 @@ from horilla_views.generic.cbv.views import (
     HorillaFormView,
     HorillaListView,
     HorillaNavView,
+    HorillaTabContentShell,
     HorillaTabView,
     TemplateView,
 )
@@ -97,6 +97,19 @@ class AttendancesRequestListView(HorillaListView):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.search_url = reverse("attendance-list-tab")
+
+    def get_queryset(self, *args, **kwargs):
+        return (
+            super()
+            .get_queryset(*args, **kwargs)
+            .select_related(
+                "employee_id",
+                "shift_id",
+                "work_type_id",
+                "attendance_day",
+                "approved_by",
+            )
+        )
 
     filter_class = AttendanceFilters
     model = Attendance
@@ -270,19 +283,11 @@ class AttendanceListTab(AttendancesRequestListView):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        data = queryset
-        attendances = filtersubordinates(
+        return filtersubordinates(
             request=self.request,
             perm="attendance.view_attendance",
             queryset=queryset,
         )
-        queryset = attendances | data.filter(
-            employee_id__employee_user_id=self.request.user
-        )
-        queryset = queryset.filter(
-            employee_id__is_active=True,
-        )
-        return queryset
 
     actions = [
         {
@@ -448,13 +453,13 @@ class AllAttendanceRequestNav(_AttendanceRequestTabNavBase):
         self.actions = _attendance_request_common_actions(self.request)
 
 
-class RequestedAttendanceTabShell(AttendanceTabContentShell):
+class RequestedAttendanceTabShell(HorillaTabContentShell):
     nav_url_name = "requested-attendance-nav"
     container_id = "requestedAttendanceListContainer"
     tabs_root_id = "attendance-container"
 
 
-class AllAttendanceTabShell(AttendanceTabContentShell):
+class AllAttendanceTabShell(HorillaTabContentShell):
     nav_url_name = "all-attendance-request-nav"
     container_id = "allAttendanceListContainer"
     tabs_root_id = "attendance-container"

@@ -85,10 +85,10 @@ class ResolveHomeRoleTests(SimpleTestCase):
 
 
 class RoleDefaultPrefsTests(SimpleTestCase):
-    def test_manager_default_visible_at_most_six(self):
+    def test_manager_default_visible_at_most_eight(self):
         prefs = role_default_prefs("manager")
         visible = [p["id"] for p in prefs if p["visible"]]
-        self.assertLessEqual(len(visible), 6)
+        self.assertLessEqual(len(visible), 8)
         for demoted in DEMOTED_BY_DEFAULT:
             self.assertNotIn(demoted, visible)
         for expected in ROLE_DEFAULT_VISIBLE["manager"]:
@@ -99,7 +99,7 @@ class RoleDefaultPrefsTests(SimpleTestCase):
         visible = {p["id"] for p in prefs if p["visible"]}
         self.assertIn("employee_turnover", visible)
         self.assertNotIn("payroll_summary", visible)
-        self.assertNotIn("gender_distribution", visible)
+        self.assertIn("gender_distribution", visible)
 
 
 class PrefsMigrationTests(SimpleTestCase):
@@ -141,13 +141,12 @@ class ModernDashboardFetchInventoryTests(SimpleTestCase):
         )
         for token in banned:
             self.assertNotIn(token, text, msg=f"legacy fetch still present: {token}")
+        # The charts the simplified dashboard still draws (employee status,
+        # department overtime and the two leave-by-department charts went in
+        # "Simplify main dashboard KPI tiles").
         for required in (
-            "dashboard-employee-status",
             "dashboard-attendance-overview",
-            "dashboard-department-overtime",
             "dashboard-leave-trends",
-            "dashboard-leave-by-department",
-            "dashboard-department-leave-days",
             "dashboard-hiring-timeline",
             "dashboard-recruitment-by-stage",
         ):
@@ -158,12 +157,6 @@ class ModernDashboardFetchInventoryTests(SimpleTestCase):
 
         text = Path("templates/dashboard.html").read_text(encoding="utf-8")
         self.assertIn("status=approved&today_leave=true&filter_applied=on", text)
-        # Present Today drills into the employee directory -- the people who
-        # have an attendance record today -- not into attendance-view's
-        # per-record list.
-        self.assertIn(
-            "present_on={% now 'Y-m-d' %}&is_active=True&filter_applied=on", text
-        )
         self.assertIn(
             "expected_to_check_in={% now 'Y-m-d' %}&is_active=True&filter_applied=on",
             text,

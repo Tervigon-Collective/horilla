@@ -5,6 +5,7 @@ import logging
 from collections import defaultdict
 from urllib.parse import parse_qs, urlparse
 
+import numpy as np
 import pandas as pd
 from django.contrib import messages
 from django.core import serializers
@@ -17,9 +18,18 @@ from django.utils.translation import gettext_lazy as _
 from django.utils.translation import gettext_noop
 from django.views.decorators.http import require_http_methods
 
-from base.methods import filtersubordinates, get_key_instances, has_export_access
+from base.auth_backends import company_scoped_active, get_allowed_company_ids
+from base.import_template_data import import_template_frame, write_import_xlsx
+from base.methods import (
+    filtersubordinates,
+    get_key_instances,
+    get_session_company,
+    has_export_access,
+)
+from base.views import generate_error_report
 from horilla.decorators import hx_request_required, login_required, permission_required
 from horilla.http import HorillaRedirect
+from horilla.http.response import with_bulk_result
 from horilla.methods import handle_no_permission
 from notifications.signals import notify
 from project.methods import (
@@ -47,6 +57,9 @@ from .forms import *
 from .methods import (
     is_project_manager_or_super_user,
     is_projectmanager_or_member_or_perms,
+    process_project_records,
+    project_import_error_template,
+    valid_project_import_headers,
 )
 from .models import *
 
@@ -381,150 +394,98 @@ def convert_nan(field, dicts):
 
 @login_required
 @permission_required("project.add_project")
-def project_import(request):
+def project_import_template(request):
     """
-    This method is used to import Project instances and creates related objects
+    Download the project import template.
     """
-    if request.method == "POST" and request.FILES.get("file") is not None:
-        file = request.FILES["file"]
-        data_frame = pd.read_excel(file)
-        project_dicts = data_frame.to_dict("records")
-        error_lists = []
-        for project in project_dicts:
-            try:
-                # getting datas from imported file
-                title = project["Title"]
-                manager_badge_id = convert_nan("Manager Badge id", project)
-                status = project["Status"]
-                start_date = project["Start Date"]
-                end_date = project["End Date"]
-                description = project["Description"]
-
-                # checcking all the imported values
-                is_save = True
-                # getting employee using badge id, for manager
-                if manager_badge_id:
-                    ids = manager_badge_id.split(",")
-                    error_ids = []
-                    managers = []
-                    for id in ids:
-                        if Employee.objects.filter(badge_id=id).exists():
-                            employee = Employee.objects.filter(badge_id=id).first()
-                            managers.append(employee)
-                        else:
-                            error_ids.append(id)
-                            is_save = False
-                    if error_ids:
-                        ids = ",".join(map(str, error_ids))
-                        project["Manager error"] = f"{ids} - This id not exists"
-                    # if Employee.objects.filter(badge_id=manager_badge_id).exists():
-                    #     manager = Employee.objects.filter(
-                    #         badge_id=manager_badge_id
-                    #     ).first()
-                    # else:
-                    #     project["Manager error"] = (
-                    #         f"{manager_badge_id} - This badge not exist"
-                    #     )
-                    #     is_save = False
-
-                if status:
-                    if status not in [stat for stat, _ in Project.PROJECT_STATUS]:
-                        project["Status error"] = (
-                            f"{status} not available in Project status"
-                        )
-                        is_save = False
-                else:
-                    project["Status error"] = "Status is a required field"
-                    is_save = False
-
-                format = "%Y-%m-%d"
-                if start_date:
-
-                    # using try-except to check for truth value
-                    try:
-                        res = bool(
-                            datetime.datetime.strptime(
-                                start_date.strftime("%Y-%m-%d"), format
-                            )
-                        )
-                    except Exception as e:
-                        res = False
-                    if res == False:
-                        project["Start date error"] = (
-                            "Date must be in 'YYYY-MM-DD' format"
-                        )
-                        is_save = False
-                else:
-                    project["Start date error"] = "Start date is a required field"
-                    is_save = False
-
-                if end_date:
-                    # using try-except to check for truth value
-                    try:
-                        res = bool(
-                            datetime.datetime.strptime(
-                                end_date.strftime("%Y-%m-%d"), format
-                            )
-                        )
-                        if end_date < start_date:
-                            project["end date error"] = (
-                                "End date must be greater than Start date"
-                            )
-                            is_save = False
-                    except ValueError:
-                        res = False
-                    if res == False:
-                        project["end date error"] = (
-                            "Date must be in 'YYYY-MM-DD' format"
-                        )
-                        is_save = False
-
-                if is_save == True:
-                    # creating new project
-                    if Project.objects.filter(title=title).exists():
-                        project_obj = Project.objects.filter(title=title).first()
-                    else:
-                        project_obj = Project(title=title)
-                    project_obj.start_date = start_date.strftime("%Y-%m-%d")
-                    project_obj.end_date = end_date.strftime("%Y-%m-%d")
-                    project_obj.status = status
-                    project_obj.description = description
-                    project_obj.save()
-                    for manager in managers:
-                        project_obj.managers.add(manager)
-                    project_obj.save()
-                else:
-                    error_lists.append(project)
-
-            except Exception as e:
-                error_lists.append(project)
-        if error_lists:
-            res = defaultdict(list)
-            for sub in error_lists:
-                for key in sub:
-                    res[key].append(sub[key])
-            data_frame = pd.DataFrame(error_lists, columns=error_lists[0].keys())
-            # Create an HTTP response object with the Excel file
-            response = HttpResponse(content_type="application/ms-excel")
-            response["Content-Disposition"] = 'attachment; filename="ImportError.xlsx"'
-            data_frame.to_excel(response, index=False)
-            return response
-        return HttpResponse("Imported successfully")
-    data_frame = pd.DataFrame(
-        columns=[
-            "Title",
-            "Manager Badge id",
-            "Member Badge id",
-            "Status",
-            "Start Date",
-            "End Date",
-            "Description",
-        ]
-    )
+    data_frame = import_template_frame("project")
     response = HttpResponse(content_type="application/ms-excel")
     response["Content-Disposition"] = 'attachment; filename="project_template.xlsx"'
-    data_frame.to_excel(response, index=False)
+    write_import_xlsx(data_frame, response)
     return response
+
+
+@login_required
+@hx_request_required
+@permission_required("project.add_project")
+def project_import(request):
+    """
+    Import Project instances from a CSV/Excel file (same flow as the employee
+    import). GET renders the import modal, POST processes the uploaded file.
+    """
+    template = "project/project_import.html"
+    if request.method == "GET":
+        return render(request, template)
+
+    file = request.FILES.get("file")
+    if not file:
+        return render(request, template, {"error_message": _("No file uploaded.")})
+    try:
+        extension = file.name.split(".")[-1].lower()
+        if extension == "csv":
+            data_frame = pd.read_csv(file)
+        elif extension in ["xls", "xlsx"]:
+            data_frame = pd.read_excel(file)
+        else:
+            return render(
+                request,
+                template,
+                {
+                    "error_message": _(
+                        "Unsupported file format. Please upload a CSV or Excel file."
+                    )
+                },
+            )
+        valid, error_message = valid_project_import_headers(data_frame)
+        if not valid:
+            return render(request, template, {"error_message": error_message})
+
+        allowed_ids = None
+        if company_scoped_active() and not request.user.is_superuser:
+            allowed_ids = set(get_allowed_company_ids(request.user) or [])
+        created_count, error_list = process_project_records(
+            data_frame.astype(object).replace({np.nan: None}),
+            selected_company=get_session_company(request),
+            allowed_ids=allowed_ids,
+        )
+    except Exception as exception:
+        logger.error(f"Project import error: {exception}")
+        return render(
+            request,
+            template,
+            {
+                "error_message": _(
+                    "Failed to read file. Please ensure it is a valid CSV or Excel file. : {}"
+                ).format(exception)
+            },
+        )
+
+    path_info = (
+        generate_error_report(
+            error_list, project_import_error_template(), "ProjectsImportError.xlsx"
+        )
+        if error_list
+        else None
+    )
+    messages.success(
+        request,
+        _("%(created_count)s projects imported.") % {"created_count": created_count},
+    )
+    result = render_to_string(
+        "employee/employee_import_result.html",
+        {
+            "created_count": created_count,
+            "total_count": created_count + len(error_list),
+            "error_count": len(error_list),
+            "model": _("Projects"),
+            "path_info": path_info,
+        },
+        request,
+    )
+    result += (
+        "<script>$('#objectCreateModalTarget').css('max-width', '440px');</script>"
+    )
+    return HttpResponse(result)
 
 
 @login_required
@@ -643,24 +604,19 @@ def project_bulk_archive(request):
         )
         return HttpResponse("<script>$('#applyFilter').click();</script>")
 
+    done = failed = 0
     for project_id in ids:
         project = Project.objects.filter(id=project_id).first()
         if project and is_project_manager_or_super_user(request, project):
             project.is_active = is_active
             project.save()
-            messages.success(
-                request,
-                _("%(project)s is %(message)s successfully.")
-                % {"project": project, "message": message},
-            )
+            done += 1
         else:
-            messages.warning(
-                request,
-                _("Permission denied or project not found: ID %(project_id)s")
-                % {"project_id": project_id},
-            )
+            failed += 1
 
-    return HttpResponse("<script>$('#applyFilter').click();</script>")
+    return with_bulk_result(
+        HttpResponse("<script>$('#applyFilter').click();</script>"), done, failed
+    )
 
 
 @login_required
@@ -1288,19 +1244,16 @@ def task_all_bulk_archive(request):
     is_active = False
     if request.GET.get("is_active") == "True":
         is_active = True
+    done = failed = 0
     for task_id in ids:
         task = Task.objects.filter(id=task_id).first()
         if not task or not can_delete_task(request, task):
-            continue  # Skip if task not found or no permission
+            failed += 1
+            continue  # no such task, or no permission
         task.is_active = is_active
         task.save()
-        message = _("archived")
-        if is_active:
-            message = _("un-archived")
-        messages.success(
-            request, _("%(task)s is %(message)s") % {"task": task, "message": message}
-        )
-    return JsonResponse({"message": "Success"})
+        done += 1
+    return with_bulk_result(JsonResponse({"message": "Success"}), done, failed)
 
 
 @login_required
@@ -1462,7 +1415,7 @@ def get_stages(request):
         form.fields["stage"].choices = (
             [("", _("Select Stage"))]
             + [(stage.id, stage.title) for stage in stages]
-            + [("dynamic_create", _("Dynamic Create"))]
+            + [("dynamic_create", _("Create %(label)s") % {"label": _("Stage")})]
         )
         # project = Project.objects.filter(id = project_id).first()
         # if (
@@ -1685,7 +1638,10 @@ def get_tasks_in_timesheet(request):
             form.fields["task_id"].choices = list(form.fields["task_id"].choices)
             if can_add_task_to_project(request, project):
                 form.fields["task_id"].choices.append(
-                    ("dynamic_create", "Dynamic create")
+                    (
+                        "dynamic_create",
+                        _("Create %(label)s") % {"label": _("Task")},
+                    )
                 )
             task_id = request.GET.get("task_id")
             if task_id:

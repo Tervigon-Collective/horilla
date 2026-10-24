@@ -114,6 +114,20 @@ class MainParentListView(HorillaListView):
             """,
         ),
         (
+            "cancel_requested--dot",
+            _("Cancel Requested"),
+            """
+            onclick="
+            $('#applyFilter').closest('form').find('[name=status]').val('cancel_requested');
+            $('[name=rejected]').val('unknown').change();
+            $('[name=approved]').val('unknown').change();
+            $('[name=requested]').val('unknown').change();
+            $('#applyFilter').click();
+            "
+
+            """,
+        ),
+        (
             "cancelled--dot",
             _("Cancelled"),
             """
@@ -523,6 +537,11 @@ class MyLeaveRequestSingleForm(HorillaFormView):
         form.fields["leave_type_id"].queryset = leave_type
 
         context["form"] = form
+        # The form's leave type / date fields hx-include "#myleaverequestForm"
+        # (leave/forms.py) to send the whole form to the available-leave-count
+        # request. The form's id is "<view_id>Form", so without this fixed
+        # view_id it was a random id and the include matched nothing.
+        context["view_id"] = "myleaverequest"
         return context
 
     def form_invalid(self, form: Any) -> HttpResponse:
@@ -531,7 +550,9 @@ class MyLeaveRequestSingleForm(HorillaFormView):
         self.form_class.verbose_name = _("Leave Request")
         errors = form.errors.as_data()
         return render(
-            self.request, self.template_name, {"form": form, "errors": errors}
+            self.request,
+            self.template_name,
+            {"form": form, "errors": errors, "view_id": "myleaverequest"},
         )
 
     def form_valid(self, form: UserLeaveRequestCreationForm) -> HttpResponse:

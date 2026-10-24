@@ -16,7 +16,6 @@ from django.utils.translation import gettext_lazy as _
 
 from attendance.cbv.attendance_activity import AttendanceActivityListView
 from attendance.cbv.attendance_tab import AttendanceTabView
-from attendance.cbv.tab_shell import AttendanceTabContentShell
 from attendance.filters import AttendanceFilters
 from attendance.forms import AttendanceExportForm, AttendanceForm, AttendanceUpdateForm
 from attendance.models import Attendance, AttendanceValidationCondition, strtime_seconds
@@ -44,6 +43,7 @@ from horilla_views.generic.cbv.views import (
     HorillaFormView,
     HorillaListView,
     HorillaNavView,
+    HorillaTabContentShell,
     HorillaTabView,
     TemplateView,
 )
@@ -145,6 +145,13 @@ class AttendancesListView(HorillaListView):
         ),
         ("employee_id__employee_work_info__company_id", _("Company")),
     ]
+
+    show_quick_date_filters = True
+    quick_date_fields = (
+        "attendance_date",
+        "attendance_date__gte",
+        "attendance_date__lte",
+    )
 
     # def get_queryset(self, queryset=None, filtered=False, *args, **kwargs):
     #     """
@@ -422,21 +429,21 @@ class ValidatedAttendanceNav(_AttendanceTabNavBase):
         self.actions = _attendance_nav_common_actions(self.request)
 
 
-class ValidateAttendanceTabShell(AttendanceTabContentShell):
+class ValidateAttendanceTabShell(HorillaTabContentShell):
     nav_url_name = "validate-attendance-nav"
     container_id = "validateListContainer"
     tabs_root_id = "attendances-tab"
     selected_instances_key_id = "validateselectedInstances"
 
 
-class OTAttendanceTabShell(AttendanceTabContentShell):
+class OTAttendanceTabShell(HorillaTabContentShell):
     nav_url_name = "ot-attendance-nav"
     container_id = "otListContainer"
     tabs_root_id = "attendances-tab"
     selected_instances_key_id = "overtimeselectedInstances"
 
 
-class ValidatedAttendanceTabShell(AttendanceTabContentShell):
+class ValidatedAttendanceTabShell(HorillaTabContentShell):
     nav_url_name = "validated-attendance-nav"
     container_id = "validatedListContainer"
     tabs_root_id = "attendances-tab"
@@ -515,6 +522,17 @@ class OTAttendancesList(AttendancesListView):
 
     selected_instances_key_id = "overtimeselectedInstances"
 
+    # Same columns as the other tabs, but the Overtime column (shown by
+    # default here) flags overtime below the minimum OT needed for approval.
+    columns = [
+        (_("Overtime"), "overtime_cell") if col[1] == "attendance_overtime" else col
+        for col in AttendancesListView.columns
+    ]
+    default_columns = [
+        *AttendancesListView.default_columns,
+        (_("Overtime"), "overtime_cell"),
+    ]
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.search_url = reverse("ot-attendance-tab")
@@ -572,11 +590,19 @@ class ValidatedAttendancesList(AttendancesListView):
 
     def get_queryset(self):
 
-        if not self.queryset:
-            self.queryset = super().get_queryset()
-            self.queryset = self.queryset.filter(
-                attendance_validated=True, employee_id__is_active=True
+        if self.queryset is None:
+            self.queryset = (
+                super()
+                .get_queryset()
+                .select_related(
+                    "employee_id",
+                    "shift_id",
+                    "work_type_id",
+                    "attendance_day",
+                    "approved_by",
+                )
             )
+            self.queryset = self.queryset.filter(attendance_validated=True)
             self.queryset = filtersubordinates(
                 self.request, self.queryset, "attendance.view_attendance"
             )
@@ -780,6 +806,8 @@ class PenaltyAccountListView(HorillaListView):
     list view for penalty tab
     """
 
+    show_saved_filters = False
+
     filter_class = PenaltyFilter
     model = PenaltyAccounts
     columns = [
@@ -831,6 +859,9 @@ class ValidateAttendancesIndividualTabView(AttendancesListView):
     """
     list view for validate attendance tab view
     """
+
+    show_quick_date_filters = False
+    show_saved_filters = False
 
     def get_queryset(self):
         queryset = super().get_queryset()

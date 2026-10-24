@@ -6,7 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 from django.contrib import messages
-from django.http import HttpRequest, HttpResponse
+from django.http import HttpRequest, HttpResponse, QueryDict
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
@@ -20,15 +20,27 @@ from asset.filters import (
     AssetAllocationFilter,
     AssetRenewalFilter,
     AssetRequestFilter,
+    AssetServiceRequestFilter,
     CustomAssetFilter,
 )
-from asset.forms import AssetAllocationForm, AssetReassignForm, AssetRequestForm
-from asset.models import Asset, AssetAssignment, AssetRequest, ReturnImages
-from attendance.cbv.tab_shell import AttendanceTabContentShell
+from asset.forms import (
+    AssetAllocationForm,
+    AssetReassignForm,
+    AssetRequestForm,
+    AssetServiceRequestForm,
+)
+from asset.models import (
+    Asset,
+    AssetAssignment,
+    AssetRequest,
+    AssetServiceRequest,
+    ReturnImages,
+)
 from base.methods import filtersubordinates
 from employee.models import Employee
 from horilla.horilla_middlewares import _thread_locals
 from horilla.http.response import HorillaRedirect
+from horilla.methods import horilla_users_with_perms
 from horilla_views.cbv_methods import (
     login_required,
     owner_can_enter,
@@ -39,6 +51,7 @@ from horilla_views.generic.cbv.views import (
     HorillaFormView,
     HorillaListView,
     HorillaNavView,
+    HorillaTabContentShell,
     HorillaTabView,
     TemplateView,
 )
@@ -178,6 +191,7 @@ class AssetAllocationList(AllocationList):
         (_("Asset"), "asset_id"),
         (_("Assigned Date"), "assigned_date"),
         (_("Return Date"), "return_status_col"),
+        (_("Return Status"), "return_status"),
     ]
 
     sortby_mapping = [
@@ -185,6 +199,7 @@ class AssetAllocationList(AllocationList):
         (_("Asset"), "asset_id__asset_name"),
         (_("Assigned Date"), "assigned_date"),
         (_("Return Date"), "return_status_col"),
+        (_("Return Status"), "return_status"),
     ]
 
     row_attrs = """
@@ -283,6 +298,107 @@ class AssetRequestList(HorillaListView):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(
+    permission_required(perm="asset.change_assetassignment"), name="dispatch"
+)
+class AssetServiceRequestList(HorillaListView):
+    """
+    Service Request Tab -- manager review/triage list of every service
+    request raised across the company (same audience as the Asset
+    Allocation tab: whoever can process a return can review these).
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.search_url = reverse("list-asset-service-request")
+        self.action_method = "list_action_col"
+
+    model = AssetServiceRequest
+    filter_class = AssetServiceRequestFilter
+
+    header_attrs = {"action": """ style = "width:120px !important" """}
+
+    columns = [
+        (
+            _("Requested By"),
+            "requested_employee_id",
+            "requested_employee_id__get_avatar",
+        ),
+        (_("Asset"), "assignment_id__asset_id"),
+        (_("Requested Date"), "request_date"),
+        (_("Status"), "status_col"),
+    ]
+
+    sortby_mapping = [
+        ("Requested By", "requested_employee_id__get_full_name"),
+        ("Asset", "assignment_id__asset_id__asset_name"),
+        ("Requested Date", "request_date"),
+        ("Status", "status_col"),
+    ]
+
+    row_status_indications = [
+        (
+            "blue--dot",
+            _("Requested"),
+            """
+            onclick="
+                $('#applyFilter').closest('form').find('[name=status]').val('Requested');
+                $('#applyFilter').click();
+            "
+            """,
+        ),
+        (
+            "orange--dot",
+            _("In Progress"),
+            """
+            onclick="
+                $('#applyFilter').closest('form').find('[name=status]').val('In Progress');
+                $('#applyFilter').click();
+            "
+            """,
+        ),
+        (
+            "yellow--dot",
+            _("Completed"),
+            """
+            onclick="
+                $('#applyFilter').closest('form').find('[name=status]').val('Completed');
+                $('#applyFilter').click();
+            "
+            """,
+        ),
+        (
+            "red--dot",
+            _("Rejected"),
+            """
+            onclick="
+                $('#applyFilter').closest('form').find('[name=status]').val('Rejected');
+                $('#applyFilter').click();
+            "
+            """,
+        ),
+        (
+            "gray--dot",
+            _("Returned"),
+            """
+            onclick="
+                $('#applyFilter').closest('form').find('[name=status]').val('Returned');
+                $('#applyFilter').click();
+            "
+            """,
+        ),
+    ]
+    row_status_class = "{row_status_class}"
+
+    row_attrs = """
+        hx-get='{detail_view_url}'
+        hx-target="#genericModalBody"
+        data-target="#genericModal"
+        data-toggle="oh-modal-toggle"
+    """
+
+
+@method_decorator(login_required, name="dispatch")
 @method_decorator(require_http_methods(["POST"]), name="dispatch")
 @method_decorator(
     permission_required(perm="asset.delete_assetassignment"), name="dispatch"
@@ -322,11 +438,46 @@ class AssetRequestDelete(DeleteView):
         return HorillaFormView.HttpResponse()
 
 
+def _query_for_tab(params, filter_class, all_filters):
+    """
+    The query string for one tab: the page's query minus the filters that only
+    other tabs' lists have, and minus the "+ Add filter" rows (custom_field /
+    custom_lookup / custom_value) that name a field this tab's filter doesn't
+    offer. Parameters nobody's filter owns (filter_applied, nested_fields,
+    search ...) go through.
+    """
+    own = set(filter_class.base_filters)
+    foreign = set()
+    for other in all_filters:
+        foreign |= set(other.base_filters)
+    foreign -= own
+    custom = ("custom_field", "custom_lookup", "custom_value")
+
+    query = QueryDict(mutable=True)
+    for key, values in params.lists():
+        if key in foreign or key in custom:
+            continue
+        query.setlist(key, values)
+
+    allowed = {field["key"] for field in filter_class().custom_filter_fields}
+    rows = zip(*(params.getlist(key) for key in custom))
+    for field, lookup, value in rows:
+        if field in allowed:
+            query.appendlist("custom_field", field)
+            query.appendlist("custom_lookup", lookup)
+            query.appendlist("custom_value", value)
+    return query.urlencode()
+
+
 @method_decorator(login_required, name="dispatch")
 class RequestAndAllocationTab(HorillaTabView):
     """
     Tab View
     """
+
+    # Asset, Asset Request, Asset Allocation and Service Request are lists of
+    # different records, so a filter saved on one must not apply on another.
+    share_saved_filters_across_tabs = False
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -358,24 +509,66 @@ class RequestAndAllocationTab(HorillaTabView):
             self.request.GET, queryset=AssetAssignment.objects.all()
         ).qs.count()
 
+        service_request_count = AssetServiceRequestFilter(
+            self.request.GET, queryset=AssetServiceRequest.objects.all()
+        ).qs.count()
+
+        # Each tab's shell hands its query string on to its own nav and list. Without
+        # it they only had HX-Current-Url to go on, which is stale when the page was
+        # reached by a boosted (htmx) navigation -- so a deep link such as
+        # ?assigned_to_employee_id=<id> filtered the first time and not after.
+        # Each tab only gets the filters its own list understands: a deep link
+        # made for one tab (?asset_request_status=Requested&custom_field=...)
+        # must not show up as filter tags on the others.
+        extra_params = self.request.GET.copy()
+        extra_params.pop("open_tab", None)
+        extra_params.pop("view", None)
+        all_filters = (
+            AssetAllocationFilter,
+            CustomAssetFilter,
+            AssetRequestFilter,
+            AssetServiceRequestFilter,
+        )
+
+        def tab_url(name, filter_class):
+            query = _query_for_tab(extra_params, filter_class, all_filters)
+            url = reverse(name)
+            return f"{url}?{query}" if query else url
+
         self.tabs = [
             {
                 "title": _("Asset"),
-                "url": f"{reverse('req-alloc-asset-tab-shell')}",
+                "url": tab_url("req-alloc-asset-tab-shell", AssetAllocationFilter),
                 "badge": asset_count,
+                "query_scoped": True,
             },
             {
                 "title": _("Asset Request"),
-                "url": f"{reverse('req-alloc-asset-request-tab-shell')}",
+                "url": tab_url("req-alloc-asset-request-tab-shell", AssetRequestFilter),
                 "badge": request_count,
+                "query_scoped": True,
             },
         ]
         if self.request.user.has_perm("asset.view_assetassignment"):
             self.tabs.append(
                 {
                     "title": _("Asset Allocation"),
-                    "url": f"{reverse('req-alloc-asset-allocation-tab-shell')}",
+                    "url": tab_url(
+                        "req-alloc-asset-allocation-tab-shell", AssetAllocationFilter
+                    ),
                     "badge": allocation_count,
+                    "query_scoped": True,
+                },
+            )
+        if self.request.user.has_perm("asset.change_assetassignment"):
+            self.tabs.append(
+                {
+                    "title": _("Service Request"),
+                    "url": tab_url(
+                        "req-alloc-service-request-tab-shell", AssetServiceRequestFilter
+                    ),
+                    "badge": service_request_count,
+                    "query_scoped": True,
                 },
             )
 
@@ -430,12 +623,47 @@ class AssetRequestNav(HorillaNavView):
         super().__init__(**kwargs)
         self.search_url = reverse("list-asset-request")
         self.search_swap_target = "#assetRequestListContainer"
+        self.search_in = [
+            ("requested_employee_id", _("Employee")),
+            ("asset_category_id", _("Asset Category")),
+        ]
         self.create_attrs = f"""
                             data-toggle="oh-modal-toggle"
                             data-target="#genericModal"
                             hx-get="{reverse('asset-request-creation')}"
                             hx-target="#genericModalBody"
                             """
+
+
+@method_decorator(login_required, name="dispatch")
+@method_decorator(
+    permission_required(perm="asset.change_assetassignment"), name="dispatch"
+)
+class AssetServiceRequestNav(HorillaNavView):
+    """
+    Independent Nav for the Service Request tab. No create flow of its
+    own -- employees file a service request from their own My Assets tab,
+    this is the manager's review list.
+    """
+
+    nav_title = _("Service Request")
+    filter_instance = AssetServiceRequestFilter()
+    filter_form_context_name = "form"
+    filter_body_template = (
+        "cbv/request_and_allocation/asset_service_request_filter.html"
+    )
+    modern_filter = True
+
+    group_by_fields = [
+        ("requested_employee_id", _("Employee")),
+        ("request_date", _("Request Date")),
+        ("status", _("Status")),
+    ]
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.search_url = reverse("list-asset-service-request")
+        self.search_swap_target = "#assetServiceRequestListContainer"
 
 
 @method_decorator(login_required, name="dispatch")
@@ -461,6 +689,10 @@ class AssetAllocationNav(HorillaNavView):
         super().__init__(**kwargs)
         self.search_url = reverse("list-asset-allocation")
         self.search_swap_target = "#assetAllocationListContainer"
+        self.search_in = [
+            ("assigned_to_employee_id", _("Employee")),
+            ("asset_id", _("Asset")),
+        ]
         if self.request.user.has_perm("asset.view_assetassignment"):
             self.create_attrs = f"""
                                 data-toggle="oh-modal-toggle"
@@ -478,21 +710,27 @@ class AssetAllocationNav(HorillaNavView):
             ]
 
 
-class AssetTabShell(AttendanceTabContentShell):
+class AssetTabShell(HorillaTabContentShell):
     nav_url_name = "req-alloc-asset-nav"
     container_id = "assetListContainer"
     tabs_root_id = "assetReqAllocContainer"
 
 
-class AssetRequestTabShell(AttendanceTabContentShell):
+class AssetRequestTabShell(HorillaTabContentShell):
     nav_url_name = "req-alloc-asset-request-nav"
     container_id = "assetRequestListContainer"
     tabs_root_id = "assetReqAllocContainer"
 
 
-class AssetAllocationTabShell(AttendanceTabContentShell):
+class AssetAllocationTabShell(HorillaTabContentShell):
     nav_url_name = "req-alloc-asset-allocation-nav"
     container_id = "assetAllocationListContainer"
+    tabs_root_id = "assetReqAllocContainer"
+
+
+class AssetServiceRequestTabShell(HorillaTabContentShell):
+    nav_url_name = "req-alloc-service-request-nav"
+    container_id = "assetServiceRequestListContainer"
     tabs_root_id = "assetReqAllocContainer"
 
 
@@ -612,6 +850,121 @@ class AssetAllocationDetailView(HorillaDetailedView):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(
+    owner_can_enter(
+        "asset.view_assetassignment",
+        AssetAssignment,
+        employee_field="assigned_to_employee_id",
+    ),
+    name="dispatch",
+)
+class AssetServiceRequestHistoryView(HorillaDetailedView):
+    """
+    Read-only view of every service request ever raised against one
+    allocation, newest first -- opened from a button on that request's
+    own detail view (AssetServiceRequestDetailView), since an allocation
+    can be serviced, completed, and serviced again any number of times.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.body = [
+            (_("Service History"), "service_history_display", True),
+        ]
+        self.cols = {
+            "service_history_display": 12,
+        }
+
+    model = AssetAssignment
+    title = _("Service Requests")
+    header = {
+        "title": "asset_id",
+        "subtitle": "asset_allocation_detail_subtitle",
+        "avatar": "get_avatar",
+    }
+
+
+@method_decorator(login_required, name="dispatch")
+@method_decorator(
+    owner_can_enter(
+        "asset.view_assetservicerequest",
+        AssetServiceRequest,
+        employee_field="requested_employee_id",
+    ),
+    name="dispatch",
+)
+class AssetServiceRequestDetailView(HorillaDetailedView):
+    """
+    Detail view of a single service request. Status is a stepper at the
+    top right (self-submits back to this same view); notes accumulate
+    below it as a log, one or more per request. History gives access to
+    every other request raised on the same allocation.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.body = [
+            (_(""), "status_edit_display", True),
+            (_("Asset"), "assignment_id__asset_id"),
+            (_("Requested Date"), "request_date"),
+            (_("Issue Description"), "issue_description"),
+            (_("Notes"), "notes_display", True),
+        ]
+        self.cols = {
+            "assignment_id__asset_id": 6,
+            "status_edit_display": 12,
+            "issue_description": 12,
+            "notes_display": 12,
+        }
+
+    model = AssetServiceRequest
+    title = _("Service Request")
+    header = {
+        "title": "assignment_id__asset_id",
+        "subtitle": "requested_employee_id",
+        "avatar": "requested_employee_id__get_avatar",
+    }
+    action_method = "list_action_col"
+
+    def post(self, request, *args, **kwargs):
+        instance = AssetServiceRequest.objects.filter(pk=kwargs.get("pk")).first()
+        if not instance:
+            messages.error(request, _("Service request not found."))
+            return self.get(request, *args, **kwargs)
+        if not request.user.has_perm("asset.change_assetassignment"):
+            messages.error(request, _("You don't have permission."))
+            return self.get(request, *args, **kwargs)
+
+        if "status" in request.POST:
+            new_status = request.POST.get("status")
+            if new_status in dict(AssetServiceRequest.STATUS):
+                instance.status = new_status
+                if new_status in ("Completed", "Rejected"):
+                    instance.resolved_by_employee_id = request.user.employee_get
+                    instance.resolved_date = timezone.now().date()
+                instance.save()
+                messages.success(request, _("Service request updated."))
+                if new_status in ("Completed", "Rejected"):
+                    verb = (
+                        gettext_noop("Your asset service request has been completed!")
+                        if new_status == "Completed"
+                        else gettext_noop("Your asset service request was rejected.")
+                    )
+                    notify.send(
+                        request.user.employee_get,
+                        recipient=instance.requested_employee_id.employee_user_id,
+                        verb=verb,
+                        redirect=reverse("asset-request-allocation-view"),
+                        icon=(
+                            "checkmark-circle-outline"
+                            if new_status == "Completed"
+                            else "close-circle-outline"
+                        ),
+                    )
+        return self.get(request, *args, **kwargs)
+
+
+@method_decorator(login_required, name="dispatch")
 class AssetRequestCreateForm(HorillaFormView):
     """
     Create Asset request
@@ -656,6 +1009,49 @@ class AssetRequestCreateForm(HorillaFormView):
             message = _("Asset Request Created Successfully")
             form.save()
             messages.success(self.request, message)
+            return self.HttpResponse()
+        return super().form_valid(form)
+
+
+@method_decorator(login_required, name="dispatch")
+class AssetServiceRequestCreateForm(HorillaFormView):
+    """
+    Create Asset Service Request -- self-service, launched from an
+    employee's own My Assets row.
+    """
+
+    model = AssetServiceRequest
+    form_class = AssetServiceRequestForm
+    template_name = "cbv/request_and_allocation/forms/service_request_form.html"
+    new_display_title = _("Service Request")
+
+    def get_context_data(self, **kwargs):
+        assignment_id = self.request.GET.get("assignment_id")
+        if assignment_id:
+            assignment = AssetAssignment.objects.filter(pk=assignment_id).first()
+            if assignment:
+                self.new_display_title = _("Service Request - %(asset)s") % {
+                    "asset": assignment.asset_id
+                }
+        return super().get_context_data(**kwargs)
+
+    def form_valid(self, form: AssetServiceRequestForm) -> HttpResponse:
+        if form.is_valid():
+            instance = form.save()
+            messages.success(self.request, _("Service request raised successfully."))
+            notify.send(
+                instance.requested_employee_id,
+                recipient=horilla_users_with_perms("asset.change_assetassignment"),
+                verb=gettext_noop(
+                    "Service request for %(asset_id)s raised by %(employee)s"
+                ),
+                verb_params={
+                    "asset_id": str(instance.assignment_id.asset_id),
+                    "employee": str(instance.requested_employee_id),
+                },
+                redirect=reverse("asset-request-allocation-view"),
+                icon="build-outline",
+            )
             return self.HttpResponse()
         return super().form_valid(form)
 

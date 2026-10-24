@@ -177,6 +177,12 @@ class EmployeesList(HorillaListView):
         "employee_bank_details__city",
     ]
 
+    def import_accessibility(self) -> bool:
+        # Employees are imported from Actions > Import (the work-information
+        # template); the list's own quick import, offered in the empty state,
+        # is not shown.
+        return False
+
     import_fields = [
         "badge_id",
         # "test",
@@ -418,12 +424,14 @@ class EmployeesList(HorillaListView):
                    """
     }
 
+    # A real navigation, not hx-get/hx-push-url into #listContainer: htmx
+    # takes over the browser's Back button for any URL it pushes that way,
+    # and its own history-restore always replaces the whole page body in one
+    # shot -- even on a cache hit, that full teardown-and-rebuild reads as
+    # the page reloading. A real link leaves Back to the browser's own
+    # native history, which is instant and flicker-free.
     row_attrs = """
-                {diff_cell}
-                hx-get="{get_profile_url}"
-                hx-target="#listContainer"
-                hx-swap="innerHTML"
-                hx-push-url="{get_individual_url}"
+                onclick="window.location.href='{get_individual_url}'"
                 class="cursor-pointer"
                 """
     sortby_mapping = [
@@ -594,6 +602,7 @@ class EmployeeNav(HorillaNavView):
         super().__init__(**kwargs)
         self.search_url = reverse("employees-list")
         self.search_in = [
+            ("badge_id", _("Badge ID")),
             ("employee_work_info__reporting_manager_id", _("Reporting Manager")),
             (
                 "employee_work_info__department_id",
@@ -618,11 +627,8 @@ class EmployeeNav(HorillaNavView):
                 {
                     "action": _("Import"),
                     "attrs": f"""
-                        href="#"
-                        data-toggle="oh-modal-toggle"
-                        data-target="#objectCreateModal"
-                        hx-get="{reverse('work-info-import')}"
-                        hx-target="#objectCreateModalTarget"
+                        href="{reverse('master-import')}?dataset=employees"
+                        hx-boost="false"
                         style="cursor: pointer;"
                     """,
                 }
@@ -664,6 +670,20 @@ class EmployeeNav(HorillaNavView):
                         data-target="#sendMailModal"
                         hx-get="{reverse('employee-bulk-mail')}"
                         hx-target="#mail-content"
+                        style="cursor: pointer;"
+                        """,
+                    },
+                    {
+                        "action": _("Reset Password"),
+                        "attrs": """
+                        id="resetPasswordEmployees"
+                        style="cursor: pointer;"
+                        """,
+                    },
+                    {
+                        "action": _("Send Invitation"),
+                        "attrs": """
+                        id="sendInvitationEmployees"
                         style="cursor: pointer;"
                         """,
                     },
@@ -782,6 +802,20 @@ class ExportView(TemplateView):
         employee = Employee.objects.filter(is_active=True)
         export_form = EmployeeExportExcelForm()
         export_filter = EmployeeFilter(queryset=employee)
+        # The AJAX comboboxes get ids derived from their field key
+        # ("id_filter_employee_company", ...), the same ones the page's own
+        # filter panel already uses. Two selects with one id break select2
+        # (its container/results ids and aria-owns resolve to the wrong
+        # element), so the Work Info dropdowns in this modal opened and
+        # immediately closed. Give the export copies their own ids; the
+        # template's <label for> follows via id_for_label.
+        for field_name in EmployeeFilter.ajax_fields:
+            field = export_filter.form.fields.get(field_name)
+            current_id = field.widget.attrs.get("id") if field else None
+            if current_id:
+                field.widget.attrs["id"] = current_id.replace(
+                    "id_filter_", "id_export_filter_", 1
+                )
         context["export_form"] = export_form
         context["export_filter"] = export_filter
         return context
@@ -883,12 +917,11 @@ class EmployeeCard(HorillaCardView):
 
     custom_body_template = "cbv/employees_view/card_body.html"
 
+    # See EmployeesList.row_attrs' comment: a real navigation so the
+    # browser's own Back/Forward history handles this, not htmx's.
     card_attrs = """
-                {diff_cell}
-                hx-get="{get_profile_url}"
-                hx-target="#listContainer"
-                hx-swap="innerHTML"
-                hx-push-url="{get_individual_url}"
+                onclick="window.location.href='{get_individual_url}'"
+                style="cursor:pointer"
                 """
 
 

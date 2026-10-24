@@ -13,7 +13,6 @@ from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import gettext_noop
 
-from attendance.cbv.tab_shell import AttendanceTabContentShell
 from base.methods import choosesubordinates, filtersubordinates, is_reportingmanager
 from employee.cbv.employee_profile import EmployeeProfileView
 from employee.models import Employee
@@ -23,6 +22,7 @@ from horilla_views.generic.cbv.views import (
     HorillaFormView,
     HorillaListView,
     HorillaNavView,
+    HorillaTabContentShell,
     HorillaTabView,
     TemplateView,
 )
@@ -165,10 +165,21 @@ class LeaveAllocationRequestTab(HorillaTabView):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.view_id = "leave-allocation"
+        # Pass the page's own filters on to each tab's shell/nav/list (minus the
+        # tab-picking params), so a deep link like ?status=requested applies
+        # regardless of HX-Current-Url.
+        extra_params = self.request.GET.copy()
+        extra_params.pop("open_tab", None)
+        extra_params.pop("view", None)
+        query_string = extra_params.urlencode()
+
+        def with_query(url):
+            return f"{url}?{query_string}" if query_string else url
+
         self.tabs = [
             {
-                "title": _("My Leave allocation request"),
-                "url": f"{reverse('my-leave-allocation-tab-shell')}",
+                "title": _("My Leave Allocation Request"),
+                "url": with_query(reverse("my-leave-allocation-tab-shell")),
             },
         ]
         if self.request.user.has_perm(
@@ -177,8 +188,8 @@ class LeaveAllocationRequestTab(HorillaTabView):
 
             self.tabs.append(
                 {
-                    "title": _("Leave allocation requests"),
-                    "url": f"{reverse('leave-allocation-requests-tab-shell')}",
+                    "title": _("Leave Allocation Requests"),
+                    "url": with_query(reverse("leave-allocation-requests-tab-shell")),
                 },
             )
 
@@ -306,20 +317,6 @@ class _LeaveAllocationTabNavBase(HorillaNavView):
                             hx-get="{reverse_lazy('leave-allocation-request-create')}"
                             """
 
-        if self.request.user.has_perm("leave.add_leaveallocationrequest"):
-            self.actions = [
-                {
-                    "action": _("Bulk Allocate Leave"),
-                    "attrs": f"""
-                            data-toggle="oh-modal-toggle"
-                            data-target="#genericModal"
-                            hx-target="#genericModalBody"
-                            hx-get="{reverse_lazy('leave-allocation-request-bulk-create')}"
-                            style="cursor: pointer;"
-                        """,
-                },
-            ]
-
 
 @method_decorator(login_required, name="dispatch")
 class MyLeaveAllocationNav(_LeaveAllocationTabNavBase):
@@ -343,15 +340,44 @@ class LeaveAllocationRequestsNav(_LeaveAllocationTabNavBase):
         super().__init__(**kwargs)
         self.search_url = reverse("leave-allocation-requests-tab-view")
         self.search_swap_target = "#allLeaveAllocationListContainer"
+        # Bulk actions act on the selected rows of this tab only; the dialogs and
+        # the in-place refresh live in leave_allocation_request/bulk_actions.js.
+        if self.request.user.has_perm(
+            "leave.delete_leaveallocationrequest"
+        ) or is_reportingmanager(self.request):
+            self.actions = [
+                {
+                    "action": _("Bulk Approve"),
+                    "attrs": """
+                        onclick="leaveAllocationBulkApprove();"
+                        style="cursor: pointer;"
+                    """,
+                },
+                {
+                    "action": _("Bulk Reject"),
+                    "attrs": """
+                        onclick="leaveAllocationBulkReject();"
+                        style="cursor: pointer;"
+                    """,
+                },
+                {
+                    "action": _("Delete"),
+                    "attrs": """
+                        onclick="leaveAllocationBulkDelete();"
+                        data-action="delete"
+                        style="cursor: pointer; color:red !important"
+                    """,
+                },
+            ]
 
 
-class MyLeaveAllocationTabShell(AttendanceTabContentShell):
+class MyLeaveAllocationTabShell(HorillaTabContentShell):
     nav_url_name = "my-leave-allocation-nav"
     container_id = "myLeaveAllocationListContainer"
     tabs_root_id = "leave-allocation"
 
 
-class LeaveAllocationRequestsTabShell(AttendanceTabContentShell):
+class LeaveAllocationRequestsTabShell(HorillaTabContentShell):
     nav_url_name = "leave-allocation-requests-nav"
     container_id = "allLeaveAllocationListContainer"
     tabs_root_id = "leave-allocation"

@@ -633,6 +633,11 @@ urlpatterns = [
         recruitment_survey.SurveyTemplateFormView.as_view(),
         name="survey-template-create",
     ),
+    path(
+        "survey-template-duplicate/<int:obj_id>/",
+        recruitment_survey.SurveyTemplateDuplicateFormView.as_view(),
+        name="survey-template-duplicate",
+    ),
     # path(
     #     "survey-template-create",
     #     surveys.create_template,
@@ -1159,6 +1164,16 @@ urlpatterns = [
         name="recruitment-dashboard-source-quality",
     ),
     path(
+        "dashboard/api/vacancy-vs-hired/",
+        rec_dashboard.recruitment_vacancy_vs_hired,
+        name="recruitment-dashboard-vacancy-hired",
+    ),
+    path(
+        "dashboard/api/talent-pool/",
+        rec_dashboard.recruitment_talent_pool,
+        name="recruitment-dashboard-talent-pool",
+    ),
+    path(
         "dashboard/api/time-to-hire/",
         rec_dashboard.recruitment_time_to_hire,
         name="recruitment-dashboard-time-to-hire",
@@ -1192,6 +1207,11 @@ urlpatterns = [
         "dashboard/api/source-conversion/",
         rec_dashboard.recruitment_source_conversion,
         name="recruitment-dashboard-source-conv",
+    ),
+    path(
+        "dashboard/api/rejection-reasons/",
+        rec_dashboard.recruitment_rejection_reasons,
+        name="recruitment-dashboard-rejection-reasons",
     ),
     path(
         "dashboard/api/joinings/",

@@ -37,6 +37,54 @@ class CandidateTaskFilter(HorillaFilterSet):
         fields = "__all__"
 
 
+class CandidateTaskListFilter(HorillaFilterSet):
+    """
+    Filter for the standalone onboarding task list page
+    """
+
+    search = django_filters.CharFilter(method="search_method")
+    onboarding_task_id = django_filters.NumberFilter(field_name="onboarding_task_id")
+    task = django_filters.CharFilter(
+        field_name="onboarding_task_id__task_title", lookup_expr="icontains"
+    )
+    stage = django_filters.CharFilter(
+        field_name="stage_id__stage_title", lookup_expr="icontains"
+    )
+    recruitment = django_filters.CharFilter(
+        field_name="candidate_id__recruitment_id__title", lookup_expr="icontains"
+    )
+    task_manager = django_filters.ModelChoiceFilter(
+        field_name="onboarding_task_id__employee_id",
+        queryset=Employee.objects.all(),
+        label=_("Task Manager"),
+    )
+
+    ajax_fields = {
+        "task_manager": {
+            "key": "onboarding-task-list-manager",
+            "queryset_fn": lambda request: Employee.objects.filter(is_active=True),
+            "display_fn": lambda obj: obj.get_full_name(),
+            "search_fields": ["employee_first_name", "employee_last_name", "badge_id"],
+            "placeholder": _("Search employee..."),
+        },
+    }
+
+    class Meta:
+        model = CandidateTask
+        fields = ["status"]
+
+    def search_method(self, queryset, _, value):
+        """
+        Search by candidate, task, stage or recruitment
+        """
+        return (
+            queryset.filter(candidate_id__name__icontains=value)
+            | queryset.filter(onboarding_task_id__task_title__icontains=value)
+            | queryset.filter(stage_id__stage_title__icontains=value)
+            | queryset.filter(candidate_id__recruitment_id__title__icontains=value)
+        ).distinct()
+
+
 class RecruitmentFilter(rec_filter):
     """
     RecruitmentFilter
@@ -98,8 +146,10 @@ class PipelineCandidateFilter(HorillaFilterSet):
         field_name="candidate_id__candidate_task__onboarding_task_id",
         queryset=OnboardingTask.objects.all(),
     )
+    # status lives on CandidateTask itself, not on the OnboardingTask it
+    # points to -- onboarding_task_id__status doesn't exist on that model.
     task_status = filters.ChoiceFilter(
-        field_name="candidate_id__candidate_task__onboarding_task_id__status",
+        field_name="candidate_id__candidate_task__status",
         choices=CandidateTask.choice,
     )
     candidate = django_filters.ModelMultipleChoiceFilter(
@@ -264,8 +314,10 @@ class KanbanCandidateFilter(FilterSet):
         field_name="candidate_task__onboarding_task_id",
         queryset=OnboardingTask.objects.all(),
     )
+    # status lives on CandidateTask itself, not on the OnboardingTask it
+    # points to -- onboarding_task_id__status doesn't exist on that model.
     task_status = filters.ChoiceFilter(
-        field_name="candidate_task__onboarding_task_id__status",
+        field_name="candidate_task__status",
         choices=CandidateTask.choice,
     )
     candidate = django_filters.ModelMultipleChoiceFilter(
@@ -492,6 +544,10 @@ class OnboardingCandidateFilter(HorillaFilterSet):
     tasks = filters.ModelMultipleChoiceFilter(
         field_name="candidate_id__candidate_task__onboarding_task_id",
         queryset=OnboardingTask.objects.all(),
+    )
+    task_status = filters.ChoiceFilter(
+        field_name="candidate_id__candidate_task__status",
+        choices=CandidateTask.choice,
     )
     onboarding_end_date__gte = django_filters.DateFilter(
         field_name="onboarding_end_date",

@@ -222,7 +222,7 @@ class ProjectsList(HorillaListView):
     @cached_property
     def columns(self):
         get_field = self.model()._meta.get_field
-        return [
+        columns = [
             (get_field("title").verbose_name, "title"),
             (get_field("managers").verbose_name, "get_managers"),
             (get_field("status").verbose_name, "get_status_display"),
@@ -231,6 +231,11 @@ class ProjectsList(HorillaListView):
             (get_field("document").verbose_name, "get_document_html"),
             (get_field("description").verbose_name, "get_description"),
         ]
+        # A single company is implied when one is selected, so the column is
+        # only useful when projects of every company are listed together.
+        if self.request.session.get("selected_company") == "all":
+            columns.append((_("Company"), "get_company_name"))
+        return columns
 
     @cached_property
     def sortby_mapping(self):

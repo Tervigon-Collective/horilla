@@ -20,6 +20,7 @@ from django.utils.translation import gettext_lazy as _
 from base.forms import ModelForm as BaseForm
 from base.forms import ModelForm as HorillaModelForm
 from base.methods import (
+    check_manager,
     filtersubordinatesemployeemodel,
     is_reportingmanager,
     reload_queryset,
@@ -720,7 +721,7 @@ class FeedbackForm(HorillaModelForm):
             "colleague_id": _("Colleague"),
             "question_template_id": _("Question Template"),
             "employee_key_results_id": _("Key Result"),
-            "cyclic_feedback": _("Is Cyclic Feedback"),
+            "cyclic_feedback": _("Cyclic Feedback"),
             # "cyclic_feedback_period":_("")
         }
 
@@ -1271,6 +1272,27 @@ class EmployeeBonusPointForm(HorillaModelForm):
         if bonus_point <= 0:
             raise forms.ValidationError(
                 {"bonus_point": _("Point should be greater than zero.")}
+            )
+        # Without the permission, only the employees the user manages
+        request = getattr(horilla_middlewares._thread_locals, "request", None)
+        employee = cleaned_data.get("employee_id")
+        perm = (
+            "pms.change_employeebonuspoint"
+            if self.instance.pk
+            else "pms.add_employeebonuspoint"
+        )
+        if (
+            request
+            and employee
+            and not request.user.has_perm(perm)
+            and not check_manager(request.user.employee_get, employee)
+        ):
+            raise forms.ValidationError(
+                {
+                    "employee_id": _(
+                        "You can only give bonus points to employees you manage."
+                    )
+                }
             )
         return cleaned_data
 

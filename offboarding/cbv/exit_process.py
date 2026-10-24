@@ -10,7 +10,7 @@ from urllib.parse import urlencode, urlparse
 from django import forms
 from django.apps import apps
 from django.contrib import messages
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
@@ -47,6 +47,7 @@ from offboarding.cbv_decorators import (
     offboarding_or_stage_manager_can_enter,
 )
 from offboarding.filters import (
+    EmployeeTaskListFilter,
     PipelineEmployeeFilter,
     PipelineFilter,
     PipelineStageFilter,
@@ -70,13 +71,45 @@ from offboarding.templatetags.offboarding_filter import (
 )
 
 
-def offboarding_pipeline_modal_success_response(request) -> HttpResponse:
+def offboarding_pipeline_modal_success_response(
+    request, reload_page=False
+) -> HttpResponse:
     """
     Close modals and refresh the Exit Process pipeline area without a full-page reload.
 
     Uses the pipeline nav filter form's apply button when present (preserves filters
     and active list/card view); otherwise falls back to HTMX-loading the tabs view.
+
+    With reload_page=True (offboarding created/updated, so the tab bar itself
+    changes) the whole Exit Process page content is re-fetched the same way the
+    sidebar link does it, instead of refreshing only the active tab.
     """
+    if reload_page:
+        page_url_lit = f'"{escapejs(reverse("offboarding-pipeline"))}"'
+        snippet = rf"""
+<script>
+(function () {{
+  document.querySelectorAll(".oh-modal--show").forEach(function (el) {{
+    el.classList.remove("oh-modal--show");
+  }});
+  if (typeof htmx !== "undefined") {{
+    htmx.ajax("GET", {page_url_lit}, {{
+      target: "#ohMainContent",
+      select: "#ohMainContent > *",
+      swap: "innerHTML show:window:top",
+    }});
+  }} else {{
+    window.location.reload();
+  }}
+  var msgBtn = document.getElementById("reloadMessagesButton");
+  if (msgBtn) {{
+    msgBtn.click();
+  }}
+}})();
+</script>
+"""
+        return HttpResponse(snippet)
+
     qs = urlparse(request.headers.get("HX-Current-URL", "") or "").query
     tab_url = reverse("get-offboarding-tab")
     if qs:
@@ -256,7 +289,9 @@ class OffboardingCreateFormView(HorillaFormView):
             form.save()
 
             messages.success(self.request, message)
-            return offboarding_pipeline_modal_success_response(self.request)
+            return offboarding_pipeline_modal_success_response(
+                self.request, reload_page=True
+            )
 
         return super().form_valid(form)
 
@@ -397,7 +432,7 @@ class OffboardingPipelineNav(HorillaNavView):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        if self.request.user.has_perm("offboarding.create_offboarding"):
+        if self.request.user.has_perm("offboarding.add_offboarding"):
             self.create_attrs = f"""
                 class="oh-btn oh-btn--secondary"
                 hx-get="{reverse_lazy("create-offboarding")}"
@@ -558,6 +593,25 @@ class PipeLineTabView(HorillaTabView):
         context = super().get_context_data(**kwargs)
         offboardings = self.filter_class(self.request.GET).qs.filter(is_active=True)
         self.tabs = []
+        # Employees on each offboarding's board, not how many stages it has.
+        # Run through PipelineEmployeeFilter too (same fields the per-stage
+        # breakdown underneath already filters by -- stage_type, search, ...)
+        # so a deep link like the dashboard's pipeline-stage tiles
+        # (?stage_type=handover) narrows this tab badge the same way it
+        # narrows every stage count on the board, instead of leaving it at
+        # the full, unfiltered total no matter what's actually showing.
+        employee_qs = PipelineEmployeeFilter(
+            self.request.GET,
+            queryset=OffboardingEmployee.objects.filter(
+                stage_id__offboarding_id__in=offboardings.values_list("pk", flat=True),
+                stage_id__is_active=True,
+            ),
+        ).qs
+        employee_counts = dict(
+            employee_qs.values("stage_id__offboarding_id")
+            .annotate(total=Count("id"))
+            .values_list("stage_id__offboarding_id", "total")
+        )
         for offboarding in offboardings:
             tab = {}
             tab["title"] = offboarding.title
@@ -568,13 +622,21 @@ class PipeLineTabView(HorillaTabView):
 
             tab["url"] = url
 
-            tab["badge_label"] = _("Stages")
-            tab["badge"] = offboarding.offboardingstage_set.filter(
-                is_active=True
-            ).count()
+            tab["badge_label"] = _("Employees")
+            tab["badge"] = employee_counts.get(offboarding.pk, 0)
             self.tabs.append(tab)
 
         context["tabs"] = self.tabs
+        if self.request.user.has_perm("offboarding.add_offboarding"):
+            context["tab_create_label"] = _("Create")
+            context[
+                "tab_create_attrs"
+            ] = f"""
+                hx-get="{reverse("create-offboarding")}"
+                hx-target="#genericModalBody"
+                data-toggle="oh-modal-toggle"
+                data-target="#genericModal"
+            """
         return context
 
 
@@ -695,6 +757,7 @@ class OffboardingPipelineTabNav(HorillaNavView):
                 .first()
             )
             if first_stage:
+                self.create_label = _("Add")
                 self.create_attrs = f"""
                     data-toggle="oh-modal-toggle"
                     data-target="#genericModal"
@@ -755,17 +818,6 @@ class OffboardingPipelineStage(Pipeline):
             ],
             "actions": [
                 {
-                    "action": _("Add Employee"),
-                    "accessibility": "offboarding.cbv.accessibility.add_employee_accessibility",
-                    "attrs": """
-                        data-toggle="oh-modal-toggle"
-                        data-target="#genericModal"
-                        hx-get="{get_add_employee_url}"
-                        hx-target="#genericModalBody"
-                        class="oh-dropdown__link"
-                    """,
-                },
-                {
                     "action": _("Edit"),
                     "accessibility": "offboarding.cbv.accessibility.edit_stage_accessibility",
                     "attrs": """
@@ -809,13 +861,20 @@ class OffboardingPipelineStage(Pipeline):
             self.request.GET.get(name) for name in PipelineEmployeeFilter.base_filters
         )
         for stage in context["groups"]:
-            stage.pipeline_open = (
-                not is_filtered
-                or PipelineEmployeeFilter(
-                    self.request.GET,
-                    queryset=OffboardingEmployee.objects.filter(stage_id=stage.pk),
-                ).qs.exists()
-            )
+            stage_employees = PipelineEmployeeFilter(
+                self.request.GET,
+                queryset=OffboardingEmployee.objects.filter(stage_id=stage.pk),
+            ).qs
+            # get_queryset()'s own employee_count annotation counts every
+            # employee in the stage, unfiltered -- PipelineStageFilter (this
+            # grouper's own field_filter_class) has no stage_type/search/etc.
+            # fields, so a deep link like the dashboard's pipeline-stage
+            # tiles (?stage_type=handover) never touched it: every stage
+            # kept showing its full, unfiltered count even once collapsed as
+            # empty, instead of the 0 its own "no records" body agreed with.
+            if is_filtered:
+                stage.employee_count = stage_employees.count()
+            stage.pipeline_open = not is_filtered or stage_employees.exists()
         return context
 
 
@@ -831,6 +890,8 @@ class OffboardingKanbanView(HorillaKanbanView):
     group_key = "stage_id"
     records_per_page = 10
     show_kanban_confirmation = False
+    # The tab badge counts employees (set server-side), not stage columns
+    records_count_in_tab = False
     pre_move_check_url = reverse_lazy("offboarding-kanban-required-task-check")
 
     kanban_attrs = """
@@ -842,17 +903,6 @@ class OffboardingKanbanView(HorillaKanbanView):
     """
 
     group_actions = [
-        {
-            "action": "Add Employee",
-            "accessibility": "offboarding.cbv.accessibility.add_employee_accessibility",
-            "attrs": """
-                data-toggle="oh-modal-toggle"
-                data-target="#genericModal"
-                hx-get="{get_add_employee_url}"
-                hx-target="#genericModalBody"
-                class="oh-dropdown__link"
-            """,
-        },
         {
             "action": "Edit",
             "accessibility": "offboarding.cbv.accessibility.edit_stage_accessibility",
@@ -1103,7 +1153,11 @@ class OffboardingEmployeeList(HorillaListView):
             if stage_id
             else OffboardingTask.objects.none()
         )
+        header_attrs = dict(context.get("header_attrs") or {})
         for task in tasks:
+            col_key = f"get_{task.pk}_task"
+            col_width = max(150, len(task.title) * 7 + 130)
+            header_attrs[col_key] = f'style="width:{col_width}px !important;"'
             context["columns"].append(
                 (
                     f"""
@@ -1111,7 +1165,7 @@ class OffboardingEmployeeList(HorillaListView):
                           <span class="px-2 py-1 text-xs">
                             {task.title}
                           </span>
-                          <div class="hidden group-hover:flex items-center transition duration-300 gap-1 p-1 rounded z-10 bg-white"
+                          <div class="flex items-center transition duration-300 gap-1 p-1 rounded z-10 bg-white"
                                onclick="event.stopPropagation()">
                             <button
                               hx-get="{reverse("offboarding-update-task",kwargs={"pk":task.pk})}"
@@ -1136,9 +1190,10 @@ class OffboardingEmployeeList(HorillaListView):
                           </div>
                         </div>
                     """,
-                    f"get_{task.pk}_task",
+                    col_key,
                 )
             )
+        context["header_attrs"] = header_attrs
         if self.request.user.has_perm(
             "perms.offboarding.add_offboardingtask"
         ) or any_manager(self.request.user.employee_get):
@@ -1246,6 +1301,92 @@ class DashboardTaskListview(HorillaListView):
         ("Stage", "stage_id"),
         ("Task Status", "get_task_status_col"),
     ]
+
+
+def visible_employee_tasks(request):
+    """
+    Employee tasks the requesting user is allowed to see
+    """
+    queryset = EmployeeTask.objects.all()
+    if request.user.has_perm("offboarding.view_offboarding"):
+        return queryset
+    employee = request.user.employee_get
+    return queryset.filter(
+        Q(task_id__managers=employee)
+        | Q(task_id__stage_id__managers=employee)
+        | Q(task_id__stage_id__offboarding_id__managers=employee)
+    ).distinct()
+
+
+@method_decorator(login_required, name="dispatch")
+@method_decorator(
+    any_manager_can_enter("offboarding.view_offboarding"), name="dispatch"
+)
+class EmployeeTasksPage(TemplateView):
+    """
+    Page shell for the offboarding task list
+    """
+
+    template_name = "cbv/employee_tasks/employee_tasks.html"
+
+
+@method_decorator(login_required, name="dispatch")
+@method_decorator(
+    any_manager_can_enter("offboarding.view_offboarding"), name="dispatch"
+)
+class EmployeeTasksNav(HorillaNavView):
+    """
+    Search and filter bar of the offboarding task list
+    """
+
+    nav_title = _("Offboarding Tasks")
+    filter_instance = EmployeeTaskListFilter()
+    filter_form_context_name = "form"
+    filter_body_template = "cbv/employee_tasks/employee_task_filter.html"
+    search_swap_target = "#listContainer"
+    modern_filter = True
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.search_url = reverse("employee-tasks-list")
+
+
+@method_decorator(login_required, name="dispatch")
+@method_decorator(
+    any_manager_can_enter("offboarding.view_offboarding"), name="dispatch"
+)
+class EmployeeTasksList(HorillaListView):
+    """
+    List of offboarding employee tasks
+    """
+
+    model = EmployeeTask
+    filter_class = EmployeeTaskListFilter
+    view_id = "employeeTasksContainer"
+    filter_selected = False
+    bulk_select_option = False
+    bulk_update = False
+    quick_export = False
+
+    columns = [
+        (
+            _("Employee"),
+            "employee_id__employee_id",
+            "employee_id__employee_id__get_avatar",
+        ),
+        (_("Task"), "task_id__title"),
+        (_("Stage"), "task_id__stage_id__title"),
+        (_("Offboarding"), "task_id__stage_id__offboarding_id__title"),
+        (_("Status"), "get_status_display"),
+    ]
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.search_url = reverse("employee-tasks-list")
+
+    def get_queryset(self, queryset=None, filtered=False, *args, **kwargs):
+        qs = super().get_queryset(queryset, filtered, *args, **kwargs)
+        return qs.filter(pk__in=visible_employee_tasks(self.request).values("pk"))
 
 
 if apps.is_installed("asset"):

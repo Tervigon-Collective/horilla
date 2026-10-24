@@ -29,7 +29,7 @@ from base.methods import (
     is_reportingmanager,
 )
 from base.models import EmployeeShift, ShiftRequest
-from base.views import include_employee_instance
+from base.views import include_employee_instance, shift_requests_url
 from employee.models import Employee
 from horilla.http.response import HorillaRedirect
 from horilla_views.cbv_methods import (
@@ -130,7 +130,9 @@ class ShiftRequestList(ShiftList):
             queryset.filter(reallocate_to__isnull=True),
             "base.view_shiftrequest",
         )
-        queryset = queryset | data.filter(employee_id=employee)
+        queryset = queryset | data.filter(
+            employee_id=employee, reallocate_to__isnull=True
+        )
         queryset = queryset.filter(employee_id__is_active=True)
 
         return queryset
@@ -397,7 +399,7 @@ class ShiftRequestDetailview(HorillaDetailedView):
         (_("Previous Shift"), "previous_shift_id"),
         (_("Requested Date"), "requested_date"),
         (_("Requested Till"), "requested_till"),
-        (_("Is permenent shift"), "is_permanent"),
+        (_("Permenent shift"), "is_permanent"),
         (_("Description"), "description"),
     ]
 
@@ -544,7 +546,7 @@ class ShiftRequestFormView(HorillaFormView):
                         ),
                         verb_params={"employee": str(instance.employee_id)},
                         icon="information",
-                        redirect=reverse("shift-request-view") + f"?id={instance.id}",
+                        redirect=shift_requests_url(instance),
                     )
             messages.success(self.request, message)
             return self.HttpResponse()
@@ -670,7 +672,7 @@ class ShiftAllocationFormView(HorillaFormView):
                         ),
                         verb_params={"employee": str(instance.employee_id)},
                         icon="information",
-                        redirect=reverse("shift-request-view") + f"?id={instance.id}",
+                        redirect=shift_requests_url(instance),
                     )
 
                     notify.send(
@@ -681,7 +683,7 @@ class ShiftAllocationFormView(HorillaFormView):
                         ),
                         verb_params={"employee": str(instance.employee_id)},
                         icon="information",
-                        redirect=reverse("shift-request-view") + f"?id={instance.id}",
+                        redirect=shift_requests_url(instance),
                     )
             messages.success(self.request, message)
             return HorillaRedirect(self.request)

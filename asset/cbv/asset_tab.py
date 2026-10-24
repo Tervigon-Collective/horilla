@@ -18,11 +18,22 @@ from horilla_views.cbv_methods import login_required, owner_can_enter
 from horilla_views.generic.cbv.views import HorillaNavView, HorillaTabView
 
 
+# Every view below is opened with the *employee's* id in the url (pk), so the
+# decorator has to resolve pk as an Employee. Resolving it as an AssetAssignment
+# / AssetRequest id picked some other record's owner, and the employee viewing
+# their own profile got "You don't have permission." (and a page refresh, in a
+# loop).
 @method_decorator(login_required, name="dispatch")
+@method_decorator(
+    owner_can_enter("asset.view_assetassignment", Employee),
+    name="dispatch",
+)
 class AssetTabListView(EmployeeRecordAccessDispatchMixin, AllocationList):
     """
     Asset tab in individual view
     """
+
+    show_saved_filters = False
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -49,10 +60,16 @@ class AssetTabListView(EmployeeRecordAccessDispatchMixin, AllocationList):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(
+    owner_can_enter("asset.view_assetrequest", Employee),
+    name="dispatch",
+)
 class AssetRequestTab(EmployeeRecordAccessDispatchMixin, AssetRequestList):
     """
     Asset request tab
     """
+
+    show_saved_filters = False
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -81,9 +98,7 @@ class AssetRequestIndividualTabShell(ProfileTabShellView):
 
 
 @method_decorator(
-    owner_can_enter(
-        "asset.view_assetrequest", AssetRequest, employee_field="requested_employee_id"
-    ),
+    owner_can_enter("asset.view_assetrequest", Employee),
     name="dispatch",
 )
 class AssetRequestIndividualNav(HorillaNavView):
@@ -116,6 +131,10 @@ class AssetRequestIndividualNav(HorillaNavView):
 
 
 @method_decorator(login_required, name="dispatch")
+@method_decorator(
+    owner_can_enter("asset.view_assetassignment", Employee),
+    name="dispatch",
+)
 class AssetTabView(EmployeeRecordAccessDispatchMixin, HorillaTabView):
     """
     generic tab view for asset tab

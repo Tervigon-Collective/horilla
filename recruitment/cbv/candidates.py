@@ -689,6 +689,12 @@ class CandidateNav(HorillaNavView):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.search_url = reverse("list-candidate")
+        self.search_in = [
+            ("recruitment_id", _("Recruitment")),
+            ("job_position_id", _("Job Position")),
+            ("stage_id", _("Stage")),
+            ("job_position_id__department_id", _("Department")),
+        ]
         self.create_attrs = f"""
                             hx-get="{reverse_lazy('candidate-create')}?container=true"
                             hx-target="#candidateMainContainer"

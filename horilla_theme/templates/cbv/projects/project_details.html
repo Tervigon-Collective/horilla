@@ -7,8 +7,8 @@
                 <ion-icon name="briefcase-outline" class="text-lg"></ion-icon>
             </div>
             <div class="min-w-0">
-                <h3 class="text-base font-semibold text-[#26251F] leading-tight">{{ project }}</h3>
-                <p class="text-sm text-[#8C8A82] mt-1">
+                <h3 class="text-base font-semibold text-gray-700 leading-tight">{{ project }}</h3>
+                <p class="text-sm text-gray-600 mt-1">
                     {% if project.description %}
                         {{ project.description|linebreaksbr }}
                     {% else %}
@@ -41,7 +41,7 @@
                     </select>
                 </div>
             {% else %}
-                <div class="text-xs font-medium px-3 py-2 bg-[#FAFAF8] rounded-md">
+                <div class="text-xs font-medium px-3 py-2 bg-white rounded-md">
                     {{ project.get_status_display }}
                 </div>
             {% endif %}
@@ -63,17 +63,17 @@
     </div>
 
     <!-- Meta row -->
-    <div class="border-t border-[#F0EFEA] bg-[#FAFAF8] px-3 py-2 flex flex-wrap items-center gap-x-6 gap-y-2">
+    <div class="border-t border-[#ececec] bg-white px-3 py-2 flex flex-wrap items-center gap-x-6 gap-y-2">
         <div class="flex items-center gap-1.5 text-sm">
-            <ion-icon name="calendar-outline" class="text-[15px] text-[#9C9A92]"></ion-icon>
-            <span class="text-[#8C8A82]">{% trans "Start Date" %}</span>
-            <span class="font-semibold text-[#26251F]">{{ project.start_date }}</span>
+            <ion-icon name="calendar-outline" class="text-[15px] text-gray-600"></ion-icon>
+            <span class="text-gray-600">{% trans "Start Date" %}</span>
+            <span class="font-semibold text-gray-700">{{ project.start_date }}</span>
         </div>
 
         <div class="flex items-center gap-1.5 text-sm">
-            <ion-icon name="time-outline" class="text-[15px] text-[#9C9A92]"></ion-icon>
-            <span class="text-[#8C8A82]">{% trans "End Date" %}</span>
-            <span class="font-semibold text-[#26251F] flex items-center gap-1">
+            <ion-icon name="time-outline" class="text-[15px] text-gray-600"></ion-icon>
+            <span class="text-gray-600">{% trans "End Date" %}</span>
+            <span class="font-semibold text-gray-700 flex items-center gap-1">
                 {{ project.end_date }}
                 <span
                     title="{% if project.end_date == today %}due today{% else %}due in {{ project.end_date|sub:today }}{% endif %}"
@@ -88,8 +88,8 @@
         </div>
 
         <div class="flex items-center gap-1.5 text-sm">
-            <ion-icon name="people-outline" class="text-[15px] text-[#9C9A92]"></ion-icon>
-            <span class="text-[#8C8A82]">{% trans "Managers" %}</span>
+            <ion-icon name="people-outline" class="text-[15px] text-gray-600"></ion-icon>
+            <span class="text-gray-600">{% trans "Managers" %}</span>
             {% if project.managers.all %}
                 <ul class="flex items-center -space-x-2">
                     {% for manager in project.managers.all %}
@@ -108,7 +108,7 @@
                     {% endfor %}
                 </ul>
             {% else %}
-                <span class="text-[#B7B5AC] italic">{% trans "No managers assigned" %}</span>
+                <span class="text-gray-600 italic">{% trans "No managers assigned" %}</span>
             {% endif %}
         </div>
     </div>

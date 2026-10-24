@@ -7,6 +7,7 @@ from __future__ import annotations
 from functools import wraps
 
 from django.contrib import messages
+from django.apps import apps
 from django.contrib.auth.context_processors import PermWrapper
 from django.utils.translation import gettext_lazy as _
 
@@ -375,6 +376,68 @@ def history_accessibility(
     return is_hr_user(request)
 
 
+def allocation_accessibility(
+    request, instance: object = None, user_perms: PermWrapper = [], *args, **kwargs
+) -> bool:
+    """
+    Allocations page: visible to the instance's reporting manager, the
+    recruitment manager or onboarding stage/task manager of the candidate
+    behind it (if any), or users with explicit permission.
+
+    ``instance`` may be an Employee or (pre-conversion) a recruitment
+    Candidate, matching what AllocationView resolves before this runs.
+    """
+    if not instance or not request.user.is_authenticated:
+        return False
+    if request.user.has_perm("recruitment.view_recruitment"):
+        return True
+
+    employee = getattr(request.user, "employee_get", None)
+    if not employee:
+        return False
+
+    Candidate = (
+        apps.get_model("recruitment", "Candidate")
+        if apps.is_installed("recruitment")
+        else None
+    )
+
+    if Candidate and isinstance(instance, Candidate):
+        candidate = instance
+    elif isinstance(instance, Employee):
+        if check_manager(employee, instance):
+            return True
+        candidate = instance.candidate_get.first() if Candidate else None
+    else:
+        return False
+
+    if not candidate:
+        return False
+
+    recruitment = candidate.recruitment_id
+    if recruitment and recruitment.recruitment_managers.filter(pk=employee.pk).exists():
+        return True
+
+    if apps.is_installed("onboarding"):
+        CandidateStage = apps.get_model("onboarding", "CandidateStage")
+        stage_link = CandidateStage.objects.filter(candidate_id=candidate).first()
+        if (
+            stage_link
+            and stage_link.onboarding_stage_id.employee_id.filter(
+                pk=employee.pk
+            ).exists()
+        ):
+            return True
+
+        OnboardingTask = apps.get_model("onboarding", "OnboardingTask")
+        if OnboardingTask.objects.filter(
+            candidatetask__candidate_id=candidate, employee_id=employee
+        ).exists():
+            return True
+
+    return False
+
+
 def project_accessibility(
     request, instance: object = None, user_perms: PermWrapper = [], *args, **kwargs
 ) -> bool:
@@ -383,3 +446,68 @@ def project_accessibility(
     """
     employee = Employee.objects.get(id=instance.pk)
     return can_access_employee_record(request, employee)
+
+
+def export_data_accessibility(
+    request, instance: object = None, user_perms: PermWrapper = [], *args, **kwargs
+) -> bool:
+    """
+    To export individual employee data
+    """
+    return any(apps.is_installed(app) for app in ("leave", "payroll", "attendance"))
+
+
+def allocations_accessibility(
+    request, instance: object = None, user_perms: PermWrapper = [], *args, **kwargs
+) -> bool:
+    """
+    To view employee allocations
+    """
+    return request.user.has_perm("employee.change_employee") or check_manager(
+        request.user.employee_get, instance
+    )
+
+
+def send_mail_accessibility(
+    request, instance: object = None, user_perms: PermWrapper = [], *args, **kwargs
+) -> bool:
+    """
+    To send mail to the employee
+    """
+    return True
+
+
+def admin_reset_password_accessibility(
+    request, instance: object = None, user_perms: PermWrapper = [], *args, **kwargs
+) -> bool:
+    """
+    To reset password / send invitation as admin
+    """
+    return request.user.has_perm("employee.change_employee")
+
+
+def archive_accessibility(
+    request, instance: object = None, user_perms: PermWrapper = [], *args, **kwargs
+) -> bool:
+    """
+    To archive an active employee
+    """
+    return request.user.has_perm("employee.delete_employee") and instance.is_active
+
+
+def un_archive_accessibility(
+    request, instance: object = None, user_perms: PermWrapper = [], *args, **kwargs
+) -> bool:
+    """
+    To un-archive an archived employee
+    """
+    return request.user.has_perm("employee.delete_employee") and not instance.is_active
+
+
+def delete_accessibility(
+    request, instance: object = None, user_perms: PermWrapper = [], *args, **kwargs
+) -> bool:
+    """
+    To delete the employee
+    """
+    return request.user.has_perm("employee.delete_employee")

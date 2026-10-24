@@ -182,7 +182,7 @@ class Recruitment(HorillaModel):
             "To publish a recruitment in website, if false then it \
             will not appear on open recruitment page."
         ),
-        verbose_name=_("Is Published"),
+        verbose_name=_("Published"),
     )
     open_positions = models.ManyToManyField(
         JobPosition,
@@ -226,7 +226,7 @@ class Recruitment(HorillaModel):
     )
     linkedin_post_id = models.CharField(max_length=150, null=True, blank=True)
     publish_in_linkedin = models.BooleanField(
-        default=True,
+        default=False,
         help_text=_(
             "To publish a recruitment in Linkedin, if active is false then it \
             will not post on LinkedIn."
@@ -459,7 +459,7 @@ class Stage(HorillaModel):
         ("applied", _("Applied")),
         ("test", _("Test")),
         ("interview", _("Interview")),
-        ("cancelled", _("Cancelled")),
+        ("cancelled", _("Rejected")),
         ("hired", _("Hired")),
     ]
     recruitment_id = models.ForeignKey(
@@ -648,6 +648,17 @@ class Candidate(HorillaModel):
         ("software", _("Inside software")),
         ("other", _("Other")),
     ]
+    referral_source_choices = [
+        ("job_board", _("Job Boards")),
+        ("company_career_site", _("Company Career Site")),
+        ("social_media", _("Social Media")),
+        ("employee_referral", _("Employee Referral")),
+        ("recruiter_headhunter", _("Recruiter / Headhunter")),
+        ("search_engine", _("Search Engine")),
+        ("college_university", _("College or University")),
+        ("advertisement_event", _("Advertisement / Event")),
+        ("other", _("Other")),
+    ]
     name = models.CharField(max_length=100, null=True, verbose_name=_("Name"))
     profile = models.ImageField(upload_to=upload_path, null=True)  # 853
     portfolio = models.URLField(max_length=200, blank=True, verbose_name=_("Portfolio"))
@@ -735,6 +746,19 @@ class Candidate(HorillaModel):
         null=True,
         blank=True,
         verbose_name=_("Source"),
+    )
+    referral_source = models.CharField(
+        max_length=20,
+        choices=referral_source_choices,
+        null=True,
+        blank=True,
+        verbose_name=_("How Did You Hear About Us?"),
+    )
+    referral_source_other = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        verbose_name=_("Please Specify"),
     )
     start_onboard = models.BooleanField(
         default=False, verbose_name=_("Start Onboarding")
@@ -1542,13 +1566,12 @@ class RecruitmentSurvey(HorillaModel):
         ("rating", _("Rating")),
     ]
     template_id = models.ManyToManyField(
-        SurveyTemplate, verbose_name="Template", blank=True
+        SurveyTemplate,
+        verbose_name="Template",
+        blank=True,
+        related_name="questions",
     )
     is_mandatory = models.BooleanField(default=False)
-    recruitment_ids = models.ManyToManyField(
-        Recruitment,
-        verbose_name=_("Recruitment"),
-    )
     question = models.TextField(null=False)
     job_position_ids = models.ManyToManyField(
         JobPosition, verbose_name=_("Job Positions"), editable=False
@@ -1561,7 +1584,7 @@ class RecruitmentSurvey(HorillaModel):
     options = models.TextField(
         null=True, default="", help_text=_("Separate choices by ',  '"), max_length=255
     )
-    objects = HorillaCompanyManager(related_company_field="recruitment_ids__company_id")
+    objects = HorillaCompanyManager(related_company_field="template_id__company_id")
 
     def __str__(self) -> str:
         return str(self.question)
@@ -1597,13 +1620,11 @@ class RecruitmentSurvey(HorillaModel):
         )
         return url
 
-    def recruitment_col(self):
+    def template_col(self):
         """
-        Manager in detail view
+        Templates this question belongs to, for the detail view.
         """
-        recruitment = self.recruitment_ids.all()
-        recruitment_string = "<br>".join([str(rec) for rec in recruitment])
-        return recruitment_string
+        return ", ".join(str(template) for template in self.template_id.all())
 
     def get_question_type(self):
         return dict(self.question_types).get(self.type)
@@ -1613,16 +1634,6 @@ class RecruitmentSurvey(HorillaModel):
         Used to split the choices
         """
         return self.options.split(", ")
-
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        if self.template_id is None:
-            general_template = SurveyTemplate.objects.filter(
-                is_general_template=True
-            ).first()
-            if general_template:
-                self.template_id.add(general_template)
-                super().save(*args, **kwargs)
 
     class Meta:
         ordering = [
@@ -1836,21 +1847,12 @@ class InterviewSchedule(HorillaModel):
         blank=True,
     )
     completed = models.BooleanField(
-        default=False, verbose_name=_("Is Interview Completed")
+        default=False, verbose_name=_("Interview Completed")
     )
     objects = HorillaCompanyManager("candidate_id__recruitment_id__company_id")
 
     def __str__(self) -> str:
         return f"{self.candidate_id} -Interview."
-
-    def candidate_custom_col(self):
-        """
-        method for candidate coloumn
-        """
-        return render_template(
-            path="cbv/interview/candidate_custom_col.html",
-            context={"instance": self},
-        )
 
     def interviewer_custom_col(self):
         """
@@ -1860,27 +1862,6 @@ class InterviewSchedule(HorillaModel):
             path="cbv/interview/interviewer_custom_col.html",
             context={"instance": self},
         )
-
-    def custom_color(self):
-        """
-        Custom background color for all rows with hover effect
-        """
-        # interviews = InterviewSchedule.objects.filter(
-        #     employee_id=self.user.employee_get.id
-        # )
-        request = getattr(_thread_locals, "request", None)
-        if not getattr(self, "request", None):
-            self.request = request
-        user = request.user
-        if user.employee_get in self.employee_id.all():
-            color = "rgba(255, 166, 0, 0.158)"
-            hovering = "white"
-
-            return (
-                f'style="background-color: {color};" '
-                f"onmouseover=\"this.style.backgroundColor='{hovering}';\" "
-                f"onmouseout=\"this.style.backgroundColor='{color}';\""
-            )
 
     def interviewer_detail(self):
         """
@@ -1907,6 +1888,22 @@ class InterviewSchedule(HorillaModel):
         else:
             return _("None")
 
+    def interview_state(self):
+        """
+        Return completed, expired, today_passed, today_upcoming or upcoming.
+        """
+        if self.completed:
+            return "completed"
+        now = tz.localtime() if settings.USE_TZ else datetime.now()
+        now = now.replace(tzinfo=None)
+        if self.interview_date < now.date():
+            return "expired"
+        if self.interview_date > now.date():
+            return "upcoming"
+        if datetime.combine(self.interview_date, self.interview_time) < now:
+            return "today_passed"
+        return "today_upcoming"
+
     def status_custom_col(self):
         """
         method for status coloumn
@@ -1914,7 +1911,7 @@ class InterviewSchedule(HorillaModel):
         now = datetime.now(tz=timezone.utc if settings.USE_TZ else None)
         return render_template(
             path="cbv/interview/status_custom_col.html",
-            context={"instance": self, "now": now},
+            context={"instance": self, "now": now, "state": self.interview_state()},
         )
 
     def custom_action_col(self):

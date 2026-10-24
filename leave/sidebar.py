@@ -104,14 +104,8 @@ SUBMENUS = [
 
 
 def dashboard_accessibility(request, submenu, user_perms, *args, **kwargs):
-    have_perm = request.user.is_superuser or request.user.has_perm(
-        "leave.delete_leaverequest"
-    )
-    if not have_perm:
-        submenu["redirect"] = (
-            reverse_lazy("leave-employee-dashboard") + "?dashboard=true"
-        )
-    return True
+    """The leave dashboard is the admin-level one; it needs view_leaverequest."""
+    return request.user.has_perm("leave.view_leaverequest")
 
 
 def approval_inbox_accessibility(request, submenu, user_perms, *args, **kwargs):

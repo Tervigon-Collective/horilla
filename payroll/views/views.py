@@ -53,7 +53,7 @@ from payroll.forms.component_forms import (
     PayrollSettingsForm,
     PayslipAutoGenerateForm,
 )
-from payroll.methods.methods import paginator_qry, save_payslip
+from payroll.methods.methods import get_total_calendar_days, paginator_qry, save_payslip
 from payroll.models.models import (
     Contract,
     FilingStatus,
@@ -157,9 +157,19 @@ def contract_update(request, contract_id, **kwargs):
                 )
                 return response
             return redirect(reverse("view-contract"))
-    template_name = (
-        "payroll/common/form_fragment.html" if is_htmx else "payroll/common/form.html"
-    )
+    # ?modal=1 asks for the same form in the app's standard modal chrome --
+    # header, close button, and a post that lands back in the modal instead of
+    # in #listContainer, which on another page belongs to something else
+    # entirely. Opt-in so the contracts page keeps its full-width card.
+    in_modal = bool(request.GET.get("modal"))
+    if in_modal:
+        template_name = "payroll/common/form_modal.html"
+    else:
+        template_name = (
+            "payroll/common/form_fragment.html"
+            if is_htmx
+            else "payroll/common/form.html"
+        )
     return render(
         request,
         template_name,
@@ -167,6 +177,9 @@ def contract_update(request, contract_id, **kwargs):
             "form": contract_form,
             "post_url": request.get_full_path(),
             "back_url": reverse("contract-filter"),
+            "in_modal": in_modal,
+            "form_target": "#relatedObjectModalBody" if in_modal else "#listContainer",
+            "modal_title": _("Contract") if in_modal else "",
         },
     )
 
@@ -305,7 +318,11 @@ def contract_delete(request, contract_id):
 
     """
     try:
-        Contract.objects.get(id=contract_id).delete()
+        contract = Contract.objects.get(id=contract_id)
+        if contract.contract_status != "draft":
+            messages.error(request, _("Only a draft contract can be deleted."))
+            return HorillaRedirect(request)
+        contract.delete()
         messages.success(request, _("Contract deleted"))
         request_path = request.path.split("/")
         if "delete-contract-modal" in request_path:
@@ -533,6 +550,7 @@ def update_payslip_status(request, payslip_id):
     data["json_data"]["employee"] = payslip.employee_id.id
     data["json_data"]["payslip"] = payslip.id
     data["instance"] = payslip
+    data["total_calendar_days"] = get_total_calendar_days(data)
     return render(request, "payroll/payslip/individual_payslip_summery.html", data)
 
 
@@ -621,6 +639,10 @@ def view_payslip_pdf(request, payslip_id):
             data["month_end_name"] = month_end_name
             data["formatted_start_date"] = formatted_start_date
             data["formatted_end_date"] = formatted_end_date
+            # Every day in the period, week offs and holidays included --
+            # "working_days" excludes those, which reads as though paid days
+            # are being counted against a smaller month than the one shown.
+            data["total_calendar_days"] = (end_date - start_date).days + 1
             data["employee"] = payslip.employee_id
             data["payslip"] = payslip
             data["json_data"] = data.copy()
@@ -671,6 +693,8 @@ def view_created_payslip(request, payslip_id, **kwargs):
         data["json_data"]["employee"] = payslip.employee_id.id
         data["json_data"]["payslip"] = payslip.id
         data["instance"] = payslip
+        data["total_calendar_days"] = get_total_calendar_days(data)
+        data["company"] = Company.objects.filter(hq=True).first()
         return render(request, "payroll/payslip/individual_payslip.html", data)
     return render(request, "404.html")
 
@@ -791,6 +815,7 @@ def view_payroll_dashboard(request):
 
 
 @login_required
+@permission_required("payroll.view_payslip")
 def dashboard_employee_chart(request):
     """
     payroll dashboard employee chart data
@@ -876,6 +901,7 @@ def dashboard_employee_chart(request):
 
 
 @login_required
+@permission_required("payroll.view_payslip")
 def payslip_details(request):
     """
     payroll dashboard payslip details data
@@ -899,6 +925,7 @@ def payslip_details(request):
 
 
 @login_required
+@permission_required("payroll.view_payslip")
 def dashboard_department_chart(request):
     """
     payroll dashboard department chart data
@@ -1000,6 +1027,7 @@ def contract_ending(request):
 
 
 @login_required
+@permission_required("payroll.view_payslip")
 def payslip_export(request):
     """
     payroll dashboard exporting to excell data
@@ -1393,6 +1421,14 @@ def payslip_bulk_delete(request):
     for id in ids:
         try:
             payslip = Payslip.objects.get(id=id)
+            if payslip.status == "paid":
+                messages.error(
+                    request,
+                    _("{payslip} is paid and cannot be deleted.").format(
+                        payslip=payslip
+                    ),
+                )
+                continue
             period = f"{payslip.start_date} to {payslip.end_date}"
             payslip.delete()
             messages.success(
@@ -1470,13 +1506,21 @@ def contract_bulk_delete(request):
     for id in ids:
         try:
             contract = Contract.objects.get(id=id)
+            if contract.contract_status != "draft":
+                messages.error(
+                    request,
+                    _("{contract} is not a draft and cannot be deleted.").format(
+                        contract=contract
+                    ),
+                )
+                continue
             name = f"{contract.contract_name}"
             contract.delete()
             messages.success(
                 request,
                 _("{name} deleted.").format(name=name),
             )
-        except Payslip.DoesNotExist:
+        except Contract.DoesNotExist:
             messages.error(request, _("Contract not found."))
         except ProtectedError:
             messages.error(
@@ -1548,7 +1592,10 @@ def generate_payslip_pdf(template_path, context, html=False):
             "encoding": "UTF-8",
             "enable-local-file-access": None,  # Required to load local CSS/images
             "dpi": 300,
-            "zoom": 1.3,
+            # 1.0, not the 1.3 the old, taller design needed: this layout is
+            # already compact (12.5px base, tight table rows), and the extra
+            # scale was pushing a near-empty second page past the A4 break.
+            "zoom": 1.0,
             "footer-center": "[page]/[topage]",  # Required to load local CSS/images
         }
 
@@ -1563,11 +1610,23 @@ def generate_payslip_pdf(template_path, context, html=False):
             )
 
         # Generate the PDF as binary content
-        pdf = pdfkit.from_string(html_content, False, options=pdf_options)
+        from base.methods import pdfkit_configuration
+
+        pdf = pdfkit.from_string(
+            html_content,
+            False,
+            options=pdf_options,
+            configuration=pdfkit_configuration(),
+        )
 
         # Return an HttpResponse containing the PDF content
         response = HttpResponse(pdf, content_type="application/pdf")
         response["Content-Disposition"] = "inline; filename=payslip.pdf"
+        # Every payslip is served from the same URL shape (no per-render
+        # query string/ETag), so without this the browser can reuse a
+        # previously cached PDF -- stale company/logo info included -- for
+        # what looks like a fresh request.
+        response["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return response
     except Exception as e:
         # Handle errors gracefully
@@ -1632,6 +1691,9 @@ def payslip_pdf(request, id):
                     "month_end_name": end_date.strftime("%b %Y"),
                     "formatted_start_date": formatted_start_date,
                     "formatted_end_date": formatted_end_date,
+                    # Every day in the period, week offs and holidays
+                    # included -- "working_days" excludes those.
+                    "total_calendar_days": (end_date - start_date).days + 1,
                     "employee": payslip.employee_id,
                     "payslip": payslip,
                     "json_data": data.copy(),

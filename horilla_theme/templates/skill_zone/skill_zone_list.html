@@ -1,26 +1,59 @@
 {% load i18n static i18n %}
 {% if skill_zones %}
+    {% comment %}
+    One column header shared by every talent pool's table below, instead of
+    each accordion panel repeating its own -- mirrors the objective detail
+    page (pms/okr/emp_objective/emp_objective_list.html): the per-pool
+    tables drop their own <thead> and use the same colgroup, so columns
+    stay aligned across all of them.
+    {% endcomment %}
+    {% comment %}
+    px-5 matches .oh-tabs__movable-body's own 1.25rem side padding below
+    (v1_styles.css) now that its own inner wrapper no longer adds a second,
+    redundant layer of padding -- without this the two tables measure at
+    different widths and every column past the first drifts out of
+    alignment. See the wrapper right before each pool's own table.
+    {% endcomment %}
+    <div class="bg-white border border-[#EAE8E3] rounded-lg mb-1.5 overflow-hidden px-5">
+        <table class="fixed-table w-full table-fixed border-separate">
+            {% include "skill_zone/_talent_pool_colgroup.html" %}
+            <thead>
+                <tr class="border-b border-[#ececec]">
+                    <th class="text-sm font-medium text-left px-1.5 py-1">{% trans "Candidate" %}</th>
+                    <th class="text-sm font-medium text-left px-1.5 py-1">{% trans "Reason" %}</th>
+                    <th class="text-sm font-medium text-left px-1.5 py-1">{% trans "Added on" %}</th>
+                    <th class="text-sm font-medium text-center px-1.5 py-1">{% trans "Resume" %}</th>
+                    {% if perms.recruitment.change_skillzonecandidate or perms.recruitment.delete_skillzonecandidate %}
+                        <th class="text-sm font-medium text-center px-1.5 py-1">{% trans "Actions" %}</th>
+                    {% endif %}
+                </tr>
+            </thead>
+        </table>
+    </div>
+
     {% for skill_zone in skill_zones %}
-        <div class="oh-tabs__movable-area mb-2">
-            <div class="oh-tabs__movable">
+        <div class="oh-tabs__movable-area mb-1.5">
+            <div class="oh-tabs__movable bg-white border border-[#EAE8E3] !rounded-lg overflow-hidden">
                 <div
-                    class="oh-tabs__movable-header"
+                    class="oh-tabs__movable-header !rounded-none bg-primary-100 text-primary-600 hover:bg-primary-200 transition-colors"
                     style="cursor: pointer"
                     onclick="$(this).parent().find('.oh-tabs__movable-body').toggleClass('d-none'); var foldIcon = this.querySelector('.oh-tabs__movable-fold-icon'); if(foldIcon){foldIcon.setAttribute('name', foldIcon.getAttribute('name') === 'chevron-up-outline' ? 'chevron-down-outline' : 'chevron-up-outline');}"
                 >
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2.5">
                         <span
-                            class="w-6 h-6 bg-primary-600 rounded-full text-white flex items-center justify-center text-xs"
+                            class="inline-flex items-center justify-center rounded-full font-semibold min-w-[22px] h-[22px] px-1.5 text-[11px] bg-primary-600 text-white"
                             title="{{skill_zone.list|length}} Candidate"
                         >
                             {{ skill_zone.list|length }}
                         </span>
-                        <span class="oh-tabs__movable-title">{{ skill_zone.grouper.title|title }}</span>
+                        <span class="oh-tabs__movable-title !text-[13.5px] !font-semibold !text-gray-700">{{ skill_zone.grouper.title|title }}</span>
                     </div>
 
                     {% if perms.recruitment.add_skillzonecandidate or perms.recruitment.change_skillzone or perms.recruitment.delete_skillzone %}
                         <div class="d-flex align-items-center">
-                        <ion-icon name="chevron-up-outline" class="oh-tabs__movable-fold-icon me-2"></ion-icon>
+                        <span class="w-6 h-6 flex items-center justify-center rounded-full hover:bg-white/50 transition-colors shrink-0 me-2">
+                            <ion-icon name="chevron-up-outline" class="oh-tabs__movable-fold-icon text-sm text-gray-600"></ion-icon>
+                        </span>
                         <div onclick="event.stopPropagation()" class="oh-dropdown" x-data="{open: false}">
                             <button
                                 class="oh-btn oh-stop-prop oh-btn--transparent oh-accordion-meta__btn"
@@ -171,38 +204,23 @@
                             </div>
                         </div>
                     {% endif %}
-                    <div class="bg-white p-2 rounded-md shadow-card relative">
+                    <div class="bg-white rounded-md relative">
                         <div class="max-h-[400px] overflow-hidden overflow-y-auto overflow-x-auto">
                             {% if skill_zone.list %}
-                                <table class="fixed-table w-full border-separate">
-                                    <thead class="sticky top-0 bg-[white] z-[1]">
-                                        <tr class="border-b border-[#ececec]">
-                                            <th class="stickyleft text-sm font-medium text-left px-1.5 py-1.5">
-                                                {% trans "Candidate" %}
-                                            </th>
-                                            <th class="text-sm font-medium text-left px-1.5 py-1.5">
-                                                {% trans "Reason" %}
-                                            </th>
-                                            <th class="text-sm font-medium text-left px-1.5 py-1.5">
-                                                {% trans "Added on" %}
-                                            </th>
-                                            <th class="text-sm font-medium text-left px-1.5 py-1.5">
-                                                {% trans "Resume" %}
-                                            </th>
-                                            {% if perms.recruitment.change_skillzonecandidate or perms.recruitment.delete_skillzonecandidate %}
-                                                <th class="text-sm font-medium px-1.5 py-1.5 text-center">
-                                                    {% trans "Actions" %}
-                                                </th>
-                                            {% endif %}
-                                        </tr>
-                                    </thead>
+                                {% comment %}
+                                No <thead> here -- the one shared header above
+                                covers every pool's table. Same colgroup keeps
+                                this table's columns aligned under it.
+                                {% endcomment %}
+                                <table class="fixed-table w-full table-fixed border-separate">
+                                    {% include "skill_zone/_talent_pool_colgroup.html" %}
                                     <tbody>
                                         {% for sz_candidate in skill_zone.list %}
                                             <tr
                                                 class="border-b border-[#f3f3f3] cursor-pointer"
                                                 onclick="window.location.href = `{% url 'candidate-view-individual' sz_candidate.candidate_id.id %}`"
                                             >
-                                                <td class="stickyleft text-sm text-left px-1 py-1 text-[#666] h-[30px]">
+                                                <td class="text-sm text-left px-1.5 py-0.5 text-[#666] h-[24px]">
                                                     <div class="oh-profile oh-profile--md w-full justify-normal">
                                                         <div
                                                             class="oh-profile__avatar mr-1"
@@ -221,13 +239,13 @@
                                                         >{{ sz_candidate.candidate_id.get_full_name }}</span>
                                                     </div>
                                                 </td>
-                                                <td class="text-sm text-left px-1 py-1 text-[#666] h-[30px]">
+                                                <td class="text-sm text-left px-1.5 py-0.5 text-[#666] h-[24px]">
                                                     {{ sz_candidate.reason }}
                                                 </td>
-                                                <td class="text-sm text-left px-1 py-1 text-[#666] h-[30px]">
+                                                <td class="text-sm text-left px-1.5 py-0.5 text-[#666] h-[24px]">
                                                     {{ sz_candidate.added_on }}
                                                 </td>
-                                                <td class="text-sm text-left px-1 py-1 text-[#666] h-[30px]">
+                                                <td class="text-sm text-center px-1.5 py-0.5 text-[#666] h-[24px]">
                                                     <a
                                                         onclick="event.stopPropagation()"
                                                         class="oh-btn oh-btn--light-bkg oh-btn--sq-sm"
@@ -240,7 +258,7 @@
                                                     </a>
                                                 </td>
                                                 {% if perms.recruitment.change_skillzonecandidate or perms.recruitment.delete_skillzonecandidate %}
-                                                    <td class="h-[30px]" onclick="event.stopPropagation()">
+                                                    <td class="h-[24px] py-0.5" onclick="event.stopPropagation()">
                                                         <div class="flex items-center justify-center gap-1">
                                                             {% if perms.recruitment.change_skillzonecandidate %}
                                                                 <button
@@ -278,20 +296,16 @@
                                     </tbody>
                                 </table>
                             {% else %}
-                                <div class="oh-wrapper h-full" align="center">
-                                    <div class="xl:col-span-4 md:col-span-6 col-span-12 bg-white p-6 rounded-md shadow-card h-[70%]">
-                                        <div class="flex flex-col items-center justify-center h-full">
-                                            <img
-                                                src="/static/horilla_theme/assets/img/no-records.svg"
-                                                alt=""
-                                                width="300"
-                                                class="mb-4"
-                                            >
-                                            <p class="text-[#666] mb-5">
-                                                {% trans "No records available at the moment" %}
-                                            </p>
-                                        </div>
-                                    </div>
+                                <div class="flex flex-col items-center justify-center py-4">
+                                    <img
+                                        src="/static/horilla_theme/assets/img/no-records.svg"
+                                        alt=""
+                                        width="120"
+                                        class="mb-2 opacity-80"
+                                    >
+                                    <p class="text-[#666] text-sm">
+                                        {% trans "No records available at the moment" %}
+                                    </p>
                                 </div>
                             {% endif %}
                         </div>

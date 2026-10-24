@@ -10,7 +10,6 @@ from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 
-from attendance.cbv.tab_shell import AttendanceTabContentShell
 from horilla.record_access import EmployeeRecordAccessMixin
 from horilla_views.cbv_methods import login_required, permission_required
 from horilla_views.generic.cbv.views import (
@@ -18,6 +17,7 @@ from horilla_views.generic.cbv.views import (
     HorillaFormView,
     HorillaListView,
     HorillaNavView,
+    HorillaTabContentShell,
     HorillaTabView,
     TemplateView,
 )
@@ -308,19 +308,19 @@ class FineNav(_LoanTabNavBase):
         self._set_create_attrs("fine-create-form")
 
 
-class LoanTabShell(AttendanceTabContentShell):
+class LoanTabShell(HorillaTabContentShell):
     nav_url_name = "loan-nav"
     container_id = "loanListContainer"
     tabs_root_id = "loan-generic-tab-view"
 
 
-class AdvancedSalaryTabShell(AttendanceTabContentShell):
+class AdvancedSalaryTabShell(HorillaTabContentShell):
     nav_url_name = "advanced-salary-nav"
     container_id = "advancedSalaryListContainer"
     tabs_root_id = "loan-generic-tab-view"
 
 
-class FineTabShell(AttendanceTabContentShell):
+class FineTabShell(HorillaTabContentShell):
     nav_url_name = "fine-nav"
     container_id = "fineListContainer"
     tabs_root_id = "loan-generic-tab-view"

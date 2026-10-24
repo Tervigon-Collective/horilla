@@ -11,6 +11,18 @@
         </a>
     {% endif %}
 {% else %}
+    {% if not instance.is_compensatory_leave %}
+        <a
+            data-toggle="oh-modal-toggle"
+            data-target="#genericModal"
+            hx-get="{% url 'assign-one' instance.id %}"
+            hx-target="#genericModalBody"
+            class="oh-btn oh-btn--light-bkg text-success w-24 px-4 py-2 rounded-md text-xs flex items-center justify-center gap-2 transition duration-300"
+        >
+            <ion-icon name="checkmark-done-outline"></ion-icon>
+            {% trans 'Assign' %}
+        </a>
+    {% endif %}
     {% if perms.leave.change_leavetype and perms.leave.add_availableleave %}
         <a
             href="{% url 'type-update' instance.id %}"
@@ -29,18 +41,6 @@
         >
             <ion-icon name="trash-outline"></ion-icon>
             {% trans 'Delete' %}
-        </a>
-    {% endif %}
-    {% if not instance.is_compensatory_leave %}
-        <a
-            data-toggle="oh-modal-toggle"
-            data-target="#genericModal"
-            hx-get="{% url 'assign-one' instance.id %}"
-            hx-target="#genericModalBody"
-            class="oh-btn oh-btn--light-bkg text-success w-24 px-4 py-2 rounded-md text-xs flex items-center justify-center gap-2 transition duration-300"
-        >
-            <ion-icon name="checkmark-done-outline"></ion-icon>
-            {% trans 'Assign' %}
         </a>
     {% endif %}
 {% endif %}

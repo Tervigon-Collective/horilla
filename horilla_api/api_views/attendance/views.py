@@ -979,7 +979,7 @@ class TodayAttendance(APIView):
 
         marked_attendances = late_come_obj + on_time
 
-        expected_attendances = find_expected_attendances(week_day=week_day)
+        expected_attendances = find_expected_attendances(request, week_day=week_day)
         marked_attendances_ratio = 0
         if expected_attendances != 0:
             marked_attendances_ratio = (
@@ -1086,7 +1086,7 @@ class OfflineEmployeesListView(APIView):
                         Q(leaverequest__end_date__gte=today)
                         | Q(leaverequest__end_date__isnull=True)
                     )
-                    & Q(leaverequest__status="approved"),
+                    & Q(leaverequest__status__in=["approved", "cancel_requested"]),
                     then=Value("On Leave"),
                 ),
                 When(

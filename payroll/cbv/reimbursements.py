@@ -6,7 +6,6 @@ from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 
-from attendance.cbv.tab_shell import AttendanceTabContentShell
 from base.methods import filter_own_records
 from horilla.methods import handle_no_permission
 from horilla_views.cbv_methods import login_required
@@ -15,6 +14,7 @@ from horilla_views.generic.cbv.views import (
     HorillaFormView,
     HorillaListView,
     HorillaNavView,
+    HorillaTabContentShell,
     HorillaTabView,
     TemplateView,
 )
@@ -401,20 +401,20 @@ class BonusEncashNav(_ReimbursementTabNavBase):
         self.search_swap_target = "#bonusEncashListContainer"
 
 
-class ReimbursementTabShell(AttendanceTabContentShell):
+class ReimbursementTabShell(HorillaTabContentShell):
     nav_url_name = "reimbursement-nav"
     container_id = "reimbursementListContainer"
     tabs_root_id = "reimbursmentContainer"
 
 
 @method_decorator(is_leave_encashment_enabled(), name="dispatch")
-class LeaveEncashTabShell(AttendanceTabContentShell):
+class LeaveEncashTabShell(HorillaTabContentShell):
     nav_url_name = "leave-encash-nav"
     container_id = "leaveEncashListContainer"
     tabs_root_id = "reimbursmentContainer"
 
 
-class BonusEncashTabShell(AttendanceTabContentShell):
+class BonusEncashTabShell(HorillaTabContentShell):
     nav_url_name = "bonus-encash-nav"
     container_id = "bonusEncashListContainer"
     tabs_root_id = "reimbursmentContainer"

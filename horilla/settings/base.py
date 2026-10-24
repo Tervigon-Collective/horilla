@@ -109,6 +109,7 @@ INSTALLED_APPS = [
     "horilla_ldap",
     "horilla_dbtemplate",
     "horilla_tour",
+    "master_import",
 ]
 
 # ========================================
@@ -226,6 +227,7 @@ MIDDLEWARE = [
     "horilla.horilla_middlewares.MethodNotAllowedMiddleware",
     "horilla.horilla_middlewares.SVGSecurityMiddleware",
     "horilla.horilla_middlewares.MissingParameterMiddleware",
+    "horilla.horilla_middlewares.BulkDeleteSummaryMiddleware",
     "auditlog.middleware.AuditlogMiddleware",
     # Last: needs request.user from AuthenticationMiddleware, and
     # converts a PermissionDenied from the Axes backend into the

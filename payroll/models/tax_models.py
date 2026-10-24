@@ -75,6 +75,23 @@ class TaxBracket(HorillaModel):
             f"{self.min_income} for {self.filing_status_id}"
         )
 
+    def band_label(self):
+        """
+        The income range this slab covers, as one phrase.
+
+        One column rather than a From and a To. Split across two, a range reads
+        as two unrelated numbers with the page's width between them, which is
+        what made a seven-slab table hard to follow.
+
+        The open-ended top slab is stored as NULL by some tax packs and as
+        float("inf") by others, and only the first was handled -- so the last
+        row of a US table read "inf". Both mean the same thing and both say so.
+        """
+        top = self.max_income
+        if top is None or top == math.inf:
+            return _("%(floor)s and above") % {"floor": f"{self.min_income:,.0f}"}
+        return f"{self.min_income:,.0f} – {top:,.0f}"
+
     def get_display_max_income(self):
         """
         Retrieves the maximum income.
@@ -111,28 +128,33 @@ class TaxBracket(HorillaModel):
         if existing_bracket.exists():
             raise ValidationError(_("This tax bracket already exists"))
 
-        if self.max_income is None:
-            self.max_income = math.inf
+        # Open-ended is NULL, read as infinity but never written back as it.
+        top = math.inf if self.max_income is None else self.max_income
 
-        if self.min_income >= self.max_income:
+        if self.min_income >= top:
             raise ValidationError(
                 {"max_income": _("Maximum income must be greater than minimum income.")}
             )
 
-        existing_brackets = TaxBracket.objects.filter(
+        # The slab grid validates the whole table itself.
+        if getattr(self, "_table_validated", False):
+            return
+
+        # Slabs that meet are fine; only a real overlap is refused.
+        overlapping = TaxBracket.objects.filter(
             filing_status_id=self.filing_status_id
         ).exclude(pk=self.pk)
-        if existing_brackets.filter(max_income__gte=self.min_income).exists():
-            tax_bracket = existing_brackets.filter(
-                max_income__gte=self.min_income
-            ).first()
-            if tax_bracket.min_income <= self.max_income:
-                raise ValidationError(
-                    {
-                        "min_income": format_lazy(
-                            "The minimum income of this tax bracket must be \
-                                greater than the maximum income of {}.",
-                            tax_bracket,
-                        )
-                    }
-                )
+        overlapping = overlapping.filter(
+            models.Q(max_income__isnull=True) | models.Q(max_income__gt=self.min_income)
+        )
+        if top != math.inf:
+            overlapping = overlapping.filter(min_income__lt=top)
+        tax_bracket = overlapping.first()
+        if tax_bracket is not None:
+            raise ValidationError(
+                {
+                    "min_income": format_lazy(
+                        "This tax bracket overlaps {}.", tax_bracket
+                    )
+                }
+            )

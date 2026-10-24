@@ -129,7 +129,7 @@
                                                 href="{% url 'department-view' %}"
                                                 class="group inline-flex max-w-full items-center gap-2 rounded-full border border-[#ebebeb] bg-white py-1 px-2.5 transition-colors hover:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-1"
                                             >
-                                                <span class="min-w-0 truncate text-xs font-medium text-dark-500 group-hover:text-primary-600">
+                                                <span class="min-w-0 truncate text-sm font-medium text-dark-500 group-hover:text-primary-600">
                                                     {{ work_info.department_id }}
                                                 </span>
                                                 <svg
@@ -163,7 +163,7 @@
                                                 href="{% url 'employee-settings-view' %}?tab=shift"
                                                 class="group inline-flex max-w-full items-center gap-2 rounded-full border border-[#ebebeb] bg-white py-1 px-2.5 transition-colors hover:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-1"
                                             >
-                                                <span class="min-w-0 truncate text-xs font-medium text-dark-500 group-hover:text-primary-600">
+                                                <span class="min-w-0 truncate text-sm font-medium text-dark-500 group-hover:text-primary-600">
                                                     {{ work_info.shift_id }}
                                                 </span>
                                                 <svg
@@ -197,7 +197,7 @@
                                                 href="{% url 'employee-settings-view' %}?tab=employee-type"
                                                 class="group inline-flex max-w-full items-center gap-2 rounded-full border border-[#ebebeb] bg-white py-1 px-2.5 transition-colors hover:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-1"
                                             >
-                                                <span class="min-w-0 truncate text-xs font-medium text-dark-500 group-hover:text-primary-600">
+                                                <span class="min-w-0 truncate text-sm font-medium text-dark-500 group-hover:text-primary-600">
                                                     {{ work_info.employee_type_id }}
                                                 </span>
                                                 <svg
@@ -238,7 +238,7 @@
                                                         class="h-full w-full object-cover"
                                                     >
                                                 </span>
-                                                <span class="min-w-0 truncate text-xs font-medium text-dark-500 group-hover:text-primary-600">
+                                                <span class="min-w-0 truncate text-sm font-medium text-dark-500 group-hover:text-primary-600">
                                                     {{ manager.get_full_name }}
                                                 </span>
                                                 {% if manager.badge_id %}
@@ -311,7 +311,7 @@
                                                 href="{% url 'job-position-view' %}"
                                                 class="group inline-flex max-w-full items-center gap-2 rounded-full border border-[#ebebeb] bg-white py-1 px-2.5 transition-colors hover:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-1"
                                             >
-                                                <span class="min-w-0 truncate text-xs font-medium text-dark-500 group-hover:text-primary-600">
+                                                <span class="min-w-0 truncate text-sm font-medium text-dark-500 group-hover:text-primary-600">
                                                     {{ work_info.job_position_id }}
                                                 </span>
                                                 <svg
@@ -345,7 +345,7 @@
                                                 href="{% url 'employee-settings-view' %}?tab=work-type"
                                                 class="group inline-flex max-w-full items-center gap-2 rounded-full border border-[#ebebeb] bg-white py-1 px-2.5 transition-colors hover:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-1"
                                             >
-                                                <span class="min-w-0 truncate text-xs font-medium text-dark-500 group-hover:text-primary-600">
+                                                <span class="min-w-0 truncate text-sm font-medium text-dark-500 group-hover:text-primary-600">
                                                     {{ work_info.work_type_id }}
                                                 </span>
                                                 <svg
@@ -373,13 +373,27 @@
                             {% if show_salary %}
                             <div class="flex items-baseline justify-between gap-3 py-2">
                                 <dt class="text-xs font-medium text-color-600">{% trans "Salary" %}</dt>
-                                <dd class="text-right text-sm {% if work_info.basic_salary %}font-medium text-dark-500{% else %}italic text-dark-100{% endif %}">
-                                    {% if work_info.basic_salary %}
-                                        {{ work_info.basic_salary }}
+                                {% with pay=employee.get_pay_summary %}
+                                <dd class="text-right">
+                                    {% if perms.employee.view_employee or request.user == employee.employee_user_id %}
+                                        {% comment %}
+                                        Always a bubble, like Department and the rest. With an active contract it
+                                        opens that contract's edit form (change permission), else the employee's
+                                        contracts list (view permission). Without the permission it is shown
+                                        disabled, not linked.
+                                        {% endcomment %}
+                                        {% if pay and perms.payroll.change_contract %}
+                                            {% with link=employee.get_pay_contract_url %}{% include "tabs/_pay_bubble.html" %}{% endwith %}
+                                        {% elif perms.payroll.view_contract %}
+                                            {% with link=employee.get_pay_contracts_list_url %}{% include "tabs/_pay_bubble.html" %}{% endwith %}
+                                        {% else %}
+                                            {% include "tabs/_pay_bubble.html" %}
+                                        {% endif %}
                                     {% else %}
-                                        {% trans "Not set" %}
+                                        <span class="text-sm font-medium text-dark-500">**********</span>
                                     {% endif %}
                                 </dd>
+                                {% endwith %}
                             </div>
                             {% endif %}
                             <div class="flex items-baseline justify-between gap-3 py-2">
@@ -399,7 +413,7 @@
                                                             class="h-full w-full object-cover"
                                                         >
                                                     </span>
-                                                    <span class="min-w-0 truncate text-xs font-medium text-dark-500 group-hover:text-primary-600">
+                                                    <span class="min-w-0 truncate text-sm font-medium text-dark-500 group-hover:text-primary-600">
                                                         {{ company }}
                                                     </span>
                                                     {% if company.city %}

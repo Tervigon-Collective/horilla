@@ -73,9 +73,9 @@
               <ion-icon name="flag-outline" class="text-lg"></ion-icon>
             </div>
             <div class="min-w-0">
-              <h3 class="text-base font-semibold text-[#26251F] leading-tight">{{ objective }}</h3>
+              <h3 class="text-base font-semibold text-gray-700 leading-tight">{{ objective }}</h3>
               {% if objective.description %}
-                <p class="text-sm text-[#8C8A82] mt-1">{{ objective.description }}</p>
+                <p class="text-sm text-gray-600 mt-1">{{ objective.description }}</p>
               {% endif %}
             </div>
           </div>
@@ -107,15 +107,15 @@
         </div>
 
         <!-- Meta row -->
-        <div class="border-t border-[#F0EFEA] bg-[#FAFAF8] px-3 py-2 flex flex-wrap items-center gap-x-6 gap-y-2">
+        <div class="border-t border-[#ececec] bg-white px-3 py-2 flex flex-wrap items-center gap-x-6 gap-y-2">
           <div class="flex items-center gap-1.5 text-sm">
-            <ion-icon name="time-outline" class="text-[15px] text-[#9C9A92]"></ion-icon>
-            <span class="text-[#8C8A82]">{% trans "Duration" %}</span>
-            <span class="font-semibold text-[#26251F]">{{ objective.duration }} {{ objective.get_duration_unit_display }}</span>
+            <ion-icon name="time-outline" class="text-[15px] text-gray-600"></ion-icon>
+            <span class="text-gray-600">{% trans "Duration" %}</span>
+            <span class="font-semibold text-gray-700">{{ objective.duration }} {{ objective.get_duration_unit_display }}</span>
           </div>
           <div class="flex items-center gap-1.5 text-sm">
-            <ion-icon name="people-outline" class="text-[15px] text-[#9C9A92]"></ion-icon>
-            <span class="text-[#8C8A82]">{% trans "Managers" %}</span>
+            <ion-icon name="people-outline" class="text-[15px] text-gray-600"></ion-icon>
+            <span class="text-gray-600">{% trans "Managers" %}</span>
             {% if objective.managers.all %}
               <ul class="flex items-center -space-x-2">
                 {% for manager in objective.managers.all %}
@@ -123,7 +123,7 @@
                 {% endfor %}
               </ul>
             {% else %}
-              <span class="text-[#B7B5AC] italic">{% trans "No managers assigned" %}</span>
+              <span class="text-gray-600 italic">{% trans "No managers assigned" %}</span>
             {% endif %}
           </div>
         </div>

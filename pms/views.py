@@ -48,11 +48,12 @@ from horilla.decorators import (
     permission_required,
 )
 from horilla.group_by import group_by_queryset
-from horilla.http.response import HorillaRedirect
+from horilla.http.response import HorillaRedirect, with_bulk_result
 from horilla.methods import handle_no_permission
 from horilla_auth.models import HorillaUser
 from horilla_automations.methods.methods import generate_choices
 from horilla_automations.methods.serialize import serialize_form
+from horilla_views.models import ActiveTab
 from notifications.signals import notify
 from pms.filters import (
     ActualKeyResultFilter,
@@ -1889,22 +1890,25 @@ def feedback_detailed_view(request, id, **kwargs):
     if is_have_perm:
         feedback_started = Answer.objects.filter(feedback_id=id)
         employees = feedback.requested_employees()
-        yes = []
-        no = []
-        for employee in employees:
-            if Answer.objects.filter(
-                feedback_id=feedback, employee_id=employee
-            ).exists():
-                yes.append(employee)
-            else:
-                no.append(employee)
+        answered_ids = set(
+            Answer.objects.filter(feedback_id=feedback).values_list(
+                "employee_id", flat=True
+            )
+        )
+        yes = [employee for employee in employees if employee.id in answered_ids]
+        no = [employee for employee in employees if employee.id not in answered_ids]
         employee_statics = {"yes": yes, "no": no}
+        active_tab = ActiveTab.objects.filter(
+            created_by=request.user, path=request.path
+        ).first()
         context = {
             "feedback": feedback,
             "feedback_started": feedback_started,
             "feedback_status": Feedback.STATUS_CHOICES,
             "employee_statics": employee_statics,
+            "answered_ids": answered_ids,
             "today": datetime.datetime.today().date(),
+            "active_tab": active_tab.tab_target if active_tab else "",
         }
         return render(request, "feedback/feedback_detailed_view.html", context)
     return handle_no_permission(request)
@@ -2059,6 +2063,58 @@ def feedback_answer_post(request, id):
         return redirect(reverse("feedback-view"))
 
 
+FEEDBACK_YES_NO = (("yes", _("Yes")), ("no", _("No")))
+FEEDBACK_LIKERT = (
+    ("Strongly Disagree", _("Strongly Disagree")),
+    ("Disagree", _("Disagree")),
+    ("Neutral", _("Neutral")),
+    ("Agree", _("Agree")),
+    ("Strongly Agree", _("Strongly Agree")),
+)
+FEEDBACK_KEY_RESULT_SCALE = (
+    ("Perfect", _("Perfect")),
+    ("Good", _("Good")),
+    ("Average", _("Average")),
+    ("Bad", _("Bad")),
+)
+
+
+def with_given_choice(choices, given):
+    """
+    Returns the (value, label) choices, adding the given answer if it is not among them.
+    """
+    choices = list(choices)
+    if given and str(given).lower() not in {value.lower() for value, label in choices}:
+        choices.append((given, given))
+    return choices
+
+
+def answer_choices(answer):
+    """
+    Returns every choice the answered question offered, for rendering the answer read-only.
+    """
+    kind = answer.question_id.question_type
+    if kind == "3":
+        choices = FEEDBACK_YES_NO
+    elif kind == "5":
+        choices = FEEDBACK_LIKERT
+    elif kind == "4":
+        choices = [
+            (value, value)
+            for option in answer.question_id.question_options.all()
+            for value in (
+                option.option_a,
+                option.option_b,
+                option.option_c,
+                option.option_d,
+            )
+            if value
+        ]
+    else:
+        return []
+    return with_given_choice(choices, (answer.answer or {}).get("answer"))
+
+
 @login_required
 def feedback_answer_view(request, id, **kwargs):
     """
@@ -2077,17 +2133,31 @@ def feedback_answer_view(request, id, **kwargs):
 
     user = request.user
     employee = Employee.objects.filter(employee_user_id=user).first()
-    answers = Answer.objects.filter(feedback_id=feedback, employee_id=employee)
-    key_result_feedback = KeyResultFeedback.objects.filter(
-        feedback_id=feedback, employee_id=employee
+    answers = (
+        Answer.objects.filter(feedback_id=feedback, employee_id=employee)
+        .select_related("question_id")
+        .prefetch_related("question_id__question_options")
+        .order_by("pk")
     )
-
-    if not answers:
-        messages.info(request, _("Feedback is not answered yet"))
-        return redirect(reverse("feedback-view"))
+    page_obj = Paginator(answers, 20).get_page(request.GET.get("page"))
+    for answer in page_obj:
+        answer.choices = answer_choices(answer)
+    key_result_feedback = []
+    if not page_obj.has_next():
+        key_result_feedback = list(
+            KeyResultFeedback.objects.filter(
+                feedback_id=feedback, employee_id=employee
+            ).select_related("key_result_id__key_result_id")
+        )
+        for key_result in key_result_feedback:
+            key_result.choices = with_given_choice(
+                FEEDBACK_KEY_RESULT_SCALE, (key_result.answer or {}).get("answer")
+            )
 
     context = {
-        "answers": answers,
+        "answers": page_obj,
+        "page_obj": page_obj,
+        "is_chunk": page_obj.number > 1,
         "feedback_id": feedback,
         "key_result_feedback": key_result_feedback,
     }
@@ -2192,46 +2262,75 @@ def get_feedback_overview(request, obj_id):
     overview of feedback
     """
     feedback = Feedback.objects.filter(id=obj_id).first() if obj_id else None
-    if feedback and check_permission_feedback_detailed_view(
+    if feedback and not check_permission_feedback_detailed_view(
         request, feedback, perm="pms.view_feedback"
     ):
-        question_template = feedback.question_template_id
-        questions = question_template.question.all()
-        feedback_answers = feedback.feedback_answer.all()
-        kr_feedbacks = feedback.feedback_key_result.all()
-        feedback_overview = {}
-        for question in questions:
-            answer_list = []
-            for answer in feedback_answers:
-                if answer.question_id == question:
-                    answer_list.append(
-                        {
-                            answer.employee_id: [
-                                answer.answer,
-                                {"type": answer.question_id.question_type},
-                            ]
-                        }
-                    )
-            feedback_overview[question] = answer_list
-        for kr_feedback in kr_feedbacks:
-            answer_list = []
-            answer_list.append(
-                {kr_feedback.employee_id: [kr_feedback.answer, {"type": "6"}]}
-            )
-            feedback_overview[
-                f"Feedback about keyresult: {kr_feedback.key_result_id.key_result_id}"
-            ] = answer_list
-
-        return render(
-            request,
-            "feedback/feedback_overview.html",
-            context={"feedback_overview": feedback_overview},
-        )
-    if feedback:
         messages.info(request, _("You don't have permission."))
-    else:
-        messages.info(request, _("Feedback does not exist."))
-    return HorillaRedirect(request)
+        return HorillaRedirect(request)
+
+    questions = feedback.question_template_id.question.all().order_by("id")
+    page_obj = Paginator(questions, 10).get_page(request.GET.get("page"))
+    page_questions = list(page_obj)
+
+    answers = (
+        feedback.feedback_answer.filter(
+            question_id__in=[question.id for question in page_questions]
+        )
+        .select_related("question_id", "employee_id")
+        .order_by("pk")
+    )
+    avatars = {}
+
+    def with_avatar(employee):
+        if employee.id not in avatars:
+            avatars[employee.id] = employee.get_avatar()
+        employee.avatar_url = avatars[employee.id]
+        return employee
+
+    answers_by_question = {}
+    for answer in answers:
+        if answer.employee_id is None:
+            continue
+        answers_by_question.setdefault(answer.question_id_id, []).append(
+            {
+                with_avatar(answer.employee_id): [
+                    answer.answer,
+                    {"type": answer.question_id.question_type},
+                ]
+            }
+        )
+    feedback_overview = {
+        question: answers_by_question.get(question.id, [])
+        for question in page_questions
+    }
+
+    if not page_obj.has_next():
+        kr_feedbacks = feedback.feedback_key_result.select_related(
+            "employee_id", "key_result_id__key_result_id"
+        ).order_by("pk")
+        for kr_feedback in kr_feedbacks:
+            title = (
+                f"Feedback about keyresult: {kr_feedback.key_result_id.key_result_id}"
+            )
+            feedback_overview.setdefault(title, []).append(
+                {
+                    with_avatar(kr_feedback.employee_id): [
+                        kr_feedback.answer,
+                        {"type": "6"},
+                    ]
+                }
+            )
+
+    return render(
+        request,
+        "feedback/feedback_overview.html",
+        context={
+            "feedback_overview": feedback_overview,
+            "page_obj": page_obj,
+            "is_chunk": page_obj.number > 1,
+            "feedback": feedback,
+        },
+    )
 
 
 @login_required
@@ -3001,17 +3100,16 @@ def objective_bulk_archive(request):
     if request.GET.get("is_active") == "False":
         is_active = True
         message = _("archived")
+    done = failed = 0
     for objective_id in ids:
-        objective_obj = EmployeeObjective.objects.get(id=objective_id)
+        objective_obj = EmployeeObjective.objects.filter(id=objective_id).first()
+        if objective_obj is None:
+            failed += 1
+            continue
         objective_obj.archive = is_active
         objective_obj.save()
-        messages.success(
-            request,
-            _("{objective} is {message}").format(
-                objective=objective_obj, message=message
-            ),
-        )
-    return JsonResponse({"message": "Success"})
+        done += 1
+    return with_bulk_result(JsonResponse({"message": "Success"}), done, failed)
 
 
 @login_required
@@ -3062,26 +3160,25 @@ def feedback_bulk_archive(request):
     if request.GET.get("is_active") == "False":
         is_active = True
         message = _("archived")
+    done = failed = 0
     for feedback_id in ids:
-        feedback_id = Feedback.objects.get(id=feedback_id)
-        feedback_id.archive = is_active
-        feedback_id.save()
-        messages.success(
-            request,
-            _("{feedback} is {message}").format(feedback=feedback_id, message=message),
-        )
+        feedback = Feedback.objects.filter(id=feedback_id).first()
+        if feedback is None:
+            failed += 1
+            continue
+        feedback.archive = is_active
+        feedback.save()
+        done += 1
 
     for feedback_id in announy_ids:
-        feedback_id = AnonymousFeedback.objects.get(id=feedback_id)
-        feedback_id.archive = is_active
-        feedback_id.save()
-        messages.success(
-            request,
-            _("{feedback} is {message}").format(
-                feedback=feedback_id.feedback_subject, message=message
-            ),
-        )
-    return JsonResponse({"message": "Success"})
+        feedback = AnonymousFeedback.objects.filter(id=feedback_id).first()
+        if feedback is None:
+            failed += 1
+            continue
+        feedback.archive = is_active
+        feedback.save()
+        done += 1
+    return with_bulk_result(JsonResponse({"message": "Success"}), done, failed)
 
 
 @login_required

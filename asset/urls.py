@@ -55,6 +55,11 @@ urlpatterns = [
     #     name="asset-creation",
     # ),
     path(
+        "asset-creation/",
+        asset_category.AssetFormView.as_view(),
+        name="asset-creation-new",
+    ),
+    path(
         "asset-creation/<int:asset_category_id>/",
         asset_category.AssetFormView.as_view(),
         name="asset-creation",
@@ -465,6 +470,41 @@ urlpatterns = [
         "asset-request-approve-form/<int:req_id>/",
         request_and_allocation.AssetApproveFormView.as_view(),
         name="asset-request-approve-form",
+    ),
+    path(
+        "asset-service-request-creation/",
+        request_and_allocation.AssetServiceRequestCreateForm.as_view(),
+        name="asset-service-request-creation",
+    ),
+    path(
+        "list-asset-service-request/",
+        request_and_allocation.AssetServiceRequestList.as_view(),
+        name="list-asset-service-request",
+    ),
+    path(
+        "req-alloc-service-request-nav/",
+        request_and_allocation.AssetServiceRequestNav.as_view(),
+        name="req-alloc-service-request-nav",
+    ),
+    path(
+        "req-alloc-service-request-tab-shell/",
+        request_and_allocation.AssetServiceRequestTabShell.as_view(),
+        name="req-alloc-service-request-tab-shell",
+    ),
+    path(
+        "asset-service-request-detail-view/<int:pk>/",
+        request_and_allocation.AssetServiceRequestDetailView.as_view(),
+        name="asset-service-request-detail-view",
+    ),
+    path(
+        "asset-service-request-history/<int:pk>/",
+        request_and_allocation.AssetServiceRequestHistoryView.as_view(),
+        name="asset-service-request-history",
+    ),
+    path(
+        "asset-service-request-add-note/<int:pk>/",
+        views.asset_service_request_add_note,
+        name="asset-service-request-add-note",
     ),
     path("asset-tab/<int:pk>/", views.asset_tab, name="asset-tab"),
     path(
