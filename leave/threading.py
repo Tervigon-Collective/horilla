@@ -200,17 +200,17 @@ class LeaveMailSendThread(Thread):
                 self.send_email(
                     subject_owner, content_owner, [owner], self.leave_request.id
                 )
+
+            elif self.type in ("cancel_approve", "cancel_reject"):
+                owner = self.leave_request.employee_id
+                reporting_manager = owner.get_reporting_manager()
+                outcome = "approved" if self.type == "cancel_approve" else "rejected"
+                subject = f"The Leave cancellation request has been {outcome}"
+                content = f"This is to inform you that your leave cancellation request has been {outcome}. If you have any questions or require further information, feel free to reach out to the {reporting_manager}."
+
+                self.send_email(subject, content, [owner], self.leave_request.id)
         finally:
             close_old_connections()
-
-        elif self.type in ("cancel_approve", "cancel_reject"):
-            owner = self.leave_request.employee_id
-            reporting_manager = owner.get_reporting_manager()
-            outcome = "approved" if self.type == "cancel_approve" else "rejected"
-            subject = f"The Leave cancellation request has been {outcome}"
-            content = f"This is to inform you that your leave cancellation request has been {outcome}. If you have any questions or require further information, feel free to reach out to the {reporting_manager}."
-
-            self.send_email(subject, content, [owner], self.leave_request.id)
 
         return
 

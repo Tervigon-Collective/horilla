@@ -45,7 +45,7 @@ from payroll.methods.payslip_calc import (
     calculate_tax_deduction,
     calculate_taxable_gross_pay,
 )
-from payroll.methods.tax_calc import calculate_taxable_amount
+from payroll.methods.tax_calc import TaxComputationError, calculate_taxable_amount
 
 
 def get_pending_attendance(employee, start_date, end_date):
@@ -89,13 +89,13 @@ def get_pending_attendance(employee, start_date, end_date):
 logger = logging.getLogger(__name__)
 
 
-class StructureConfigurationError(Exception):
+class StructureConfigurationError(TaxComputationError):
     """
     A salary structure that cannot produce a coherent payslip.
 
     Raised rather than returned so a caller generating a batch cannot mistake it
-    for a valid result. payroll_calculation's callers already handle a
-    per-employee failure this way for tax (TaxComputationError).
+    for a valid result. It is a TaxComputationError so every caller that already
+    reports and skips a per-employee failure for tax does the same for this.
     """
 
 
