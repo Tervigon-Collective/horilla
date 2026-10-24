@@ -1835,6 +1835,7 @@ def template_pdf(template, context={}, html=False, filename="payslip.pdf"):
             "margin-right": "10mm",
             "encoding": "UTF-8",
             "enable-local-file-access": None,
+            "disable-javascript": None,  # pdfkit GHSA-9g3x-6x24-vf9f
             "dpi": 300,
             "zoom": 1.3,
             "footer-center": "[page]/[topage]",

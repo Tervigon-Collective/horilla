@@ -1591,6 +1591,7 @@ def generate_payslip_pdf(template_path, context, html=False):
             "margin-right": "10mm",
             "encoding": "UTF-8",
             "enable-local-file-access": None,  # Required to load local CSS/images
+            "disable-javascript": None,  # pdfkit GHSA-9g3x-6x24-vf9f: no scripts in rendered HTML
             "dpi": 300,
             # 1.0, not the 1.3 the old, taller design needed: this layout is
             # already compact (12.5px base, tight table rows), and the extra

@@ -647,6 +647,7 @@ class PayslipPDFAPIView(APIView):
                 # optional: configure pdfkit with path if needed
                 pdf_options = {
                     "enable-local-file-access": None,  # if your template references local CSS
+                    "disable-javascript": None,  # pdfkit GHSA-9g3x-6x24-vf9f
                 }
                 from base.methods import pdfkit_configuration
 
