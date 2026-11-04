@@ -63,7 +63,7 @@
         <!-- Load global.css after Select2 to ensure custom styles override Select2 defaults -->
         <link
             rel="stylesheet"
-            href="{% static 'horilla_theme/assets/css/global.css' %}"
+            href="{% static 'horilla_theme/assets/css/global.css' %}?v=2"
         >
         {% comment %} ?v= busts browser caches when this stylesheet changes
            (same trick as tourController.js in footer_scripts.html) - bump it
@@ -71,7 +71,7 @@
            happily cache. {% endcomment %}
         <link
             rel="stylesheet"
-            href="{% static 'horilla_theme/assets/css/v1_styles.css' %}?v=23"
+            href="{% static 'horilla_theme/assets/css/v1_styles.css' %}?v=25"
         >
         <link rel="stylesheet" href="{% static 'build/css/pivottable.min.css' %}">
         {% with theme=theme_obj %}
@@ -124,12 +124,6 @@
                 .usertablist li button.active,
                 .usertablist li button:hover{
                     border: 1px solid {{ theme_obj.primary_600|default:"#E54F38" }};
-                }
-
-                .myform input:focus, .myform select:focus, .myform textarea:focus,
-                .oh-input:focus, .oh-input:focus-visible, .oh-select:focus, .oh-select:focus-visible
-                {
-                    border: 1px solid {{ theme_obj.primary_600|default:"#E54F38" }} !important;
                 }
 
                 {% comment %} .oh-activity-sidebar {

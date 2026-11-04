@@ -612,7 +612,7 @@ RECRUITMENT_EXTRA_STAGES = [
     ("Technical Test", "test", 2),
     ("Interview", "interview", 3),
     ("Hired", "hired", 4),
-    ("Cancelled Candidates", "cancelled", 50),
+    ("Rejected Candidates", "cancelled", 50),
 ]
 # Candidates per stage for each recruitment, so the dashboard's Recruitment
 # Pipeline Trend lines take visibly different shapes instead of overlapping.
@@ -1765,13 +1765,13 @@ class ExtrasMixin:
         if department:
             freeze = RestrictLeave.objects.create(
                 title="Quarter-end Sales Freeze",
-                department=department,
                 start_date=datetime.date(today.year, 12, 22),
                 end_date=datetime.date(today.year, 12, 31),
                 include_all=False,
                 description="Leave is restricted while the quarter is being closed.",
                 company_id=company,
             )
+            freeze.department.set([department])
             freeze.spesific_leave_types.set(types[:1])
 
         # Comments on a few existing requests.
@@ -3561,6 +3561,8 @@ class Command(ExtrasMixin, BaseCommand):
                     clock_out = max(clock_in, now.replace(second=0, microsecond=0))
 
                 worked = int((clock_out - clock_in).total_seconds())
+                # Overtime follows the rewritten hours: only what is worked beyond the 8h minimum.
+                overtime = max(0, worked - 8 * 3600)
                 Attendance.objects.filter(pk=attendance.pk).update(
                     shift_id=shift,
                     work_type_id=work_type,
@@ -3568,6 +3570,8 @@ class Command(ExtrasMixin, BaseCommand):
                     attendance_clock_out=clock_out.time(),
                     attendance_worked_hour=f"{worked // 3600:02d}:{worked % 3600 // 60:02d}",
                     at_work_second=worked,
+                    attendance_overtime=f"{overtime // 3600:02d}:{overtime % 3600 // 60:02d}",
+                    overtime_second=overtime,
                 )
                 for flag, kind in ((is_late, "late_come"), (is_early, "early_out")):
                     if flag:

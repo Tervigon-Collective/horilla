@@ -25,6 +25,7 @@ from datetime import date, timedelta
 
 from django.contrib import messages
 from django.db import transaction
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
@@ -45,6 +46,9 @@ from payroll.models.models import (
 logger = logging.getLogger(__name__)
 
 SESSION_KEY = "payroll_batch_wizard"
+# The batch this session last started. The wizard's own state is cleared once a run starts, so
+# this is what lets the Review crumb find its way back to that batch's inputs.
+SESSION_LAST_BATCH = "payroll_last_batch"
 
 
 def _settings_for(request):
@@ -57,6 +61,20 @@ def _settings_for(request):
 
 def _wizard_state(request):
     return request.session.get(SESSION_KEY) or {}
+
+
+def _reopenable_last_batch(request):
+    """The batch this session last started, if it is still a draft nobody has acted on."""
+    batch = PayrollBatch.objects.filter(
+        pk=request.session.get(SESSION_LAST_BATCH)
+    ).first()
+    if (
+        batch
+        and batch.status == PayrollBatch.DRAFT
+        and not batch.payslips.exclude(status="draft").exists()
+    ):
+        return batch
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -74,42 +92,8 @@ def batch_home(request):
     than an aggregate over payslips — twenty runs would otherwise mean twenty
     aggregate queries to draw one row of numbers.
     """
-    batches = PayrollBatch.objects.all()
-
-    period = _settings_for(request).period_for(date.today())
-    return render(
-        request,
-        "payroll/batch/batch_home.html",
-        {
-            "batches": paginator_qry(batches, request.GET.get("page")),
-            "kpi": _kpis(batches),
-            "period": period,
-            "pd": request.GET.urlencode(),
-        },
-    )
-
-
-def _kpis(batches):
-    """Headline figures for the runs listed."""
-    from django.db.models import Count, Q, Sum
-
-    figures = batches.aggregate(
-        runs=Count("id"),
-        employees=Sum("generated_count"),
-        net=Sum("total_net"),
-        gross=Sum("total_gross"),
-        flagged=Sum("flagged_count"),
-        failed=Sum("failed_count"),
-        unpaid=Count("id", filter=~Q(status=PayrollBatch.PAID)),
-    )
-    figures = {key: value or 0 for key, value in figures.items()}
-    # Payslips counted for active employees only, as each run shows them.
-    from payroll.models.models import Payslip
-
-    figures["employees"] = Payslip.objects.filter(
-        payroll_batch__in=batches, employee_id__is_active=True
-    ).count()
-    return figures
+    # The batches are the second tab of the payslips page.
+    return redirect(f"{reverse('view-payslip')}?open_tab=2")
 
 
 @login_required
@@ -117,6 +101,7 @@ def _kpis(batches):
 def batch_detail(request, batch_id, model=None):
     """One run: its payslips, the ones that failed, and where it can go next."""
     batch = get_object_or_404(PayrollBatch, pk=batch_id)
+    batch.refresh_totals()  # the summary reads off the payslips inside it
     problems = batch.lines.filter(
         status__in=[PayrollBatchLine.FAILED, PayrollBatchLine.SKIPPED]
     ).select_related("employee_id")
@@ -189,7 +174,7 @@ def batch_set_status(request, batch_id):
 
     messages.success(
         request,
-        _("Run marked %(status)s.") % {"status": batch.get_status_display()},
+        _("Batch marked %(status)s.") % {"status": batch.get_status_display()},
     )
     return HorillaRedirect(request, reverse("payroll-batch-detail", args=[batch.pk]))
 
@@ -214,7 +199,7 @@ def batch_delete(request, batch_id):
     if batch.status == PayrollBatch.PAID:
         messages.error(
             request,
-            _("A paid run cannot be deleted. Correct it with another run."),
+            _("A paid batch cannot be deleted. Correct it with another batch."),
         )
         return HorillaRedirect(
             request, reverse("payroll-batch-detail", args=[batch.pk])
@@ -233,10 +218,37 @@ def batch_delete(request, batch_id):
 
     messages.success(
         request,
-        _("Deleted the run %(name)s and its %(count)s payslip(s).")
+        _("Deleted the batch %(name)s and its %(count)s payslip(s).")
         % {"name": name, "count": removed},
     )
     return HorillaRedirect(request, reverse("payroll-batch-home"))
+
+
+@login_required
+@permission_required("payroll.delete_payslip")
+@permission_required("payroll.add_payslip")
+def batch_inputs(request, batch_id):
+    """
+    Ask before sending a draft run back to its inputs.
+
+    Going back discards the run's draft payslips (see batch_reopen), so a link cannot do it
+    quietly. This is the page a link to "the inputs" lands on: it says what will happen, and the
+    button posts to batch_reopen.
+    """
+    batch = get_object_or_404(PayrollBatch, pk=batch_id)
+    detail = reverse("payroll-batch-detail", args=[batch.pk])
+    if (
+        batch.status != PayrollBatch.DRAFT
+        or batch.payslips.exclude(status="draft").exists()
+    ):
+        messages.info(
+            request,
+            _("This batch has moved on, so its inputs can no longer be reopened."),
+        )
+        return redirect(detail)
+    return render(
+        request, "payroll/batch/batch_inputs.html", {"batch": batch, "step": 2}
+    )
 
 
 @login_required
@@ -270,7 +282,7 @@ def batch_reopen(request, batch_id):
     ):
         messages.error(
             request,
-            _("Only a draft run can be sent back to check its inputs."),
+            _("Only a draft batch can be sent back to check its inputs."),
         )
         return HorillaRedirect(request, detail)
 
@@ -305,14 +317,13 @@ def batch_reopen(request, batch_id):
 def wizard_scope(request):
     """Which period, and who is in it."""
     settings = _settings_for(request)
-    # Last month, not this one: payroll is run once the month is over, so the
-    # period that is complete is the one people almost always want. The dates
-    # stay editable.
-    last_month_day = date.today().replace(day=1) - timedelta(days=1)
-    period = settings.period_for(last_month_day)
+    # The last period that has finished, not the current one: payroll is run once
+    # the period is over, so that is the one people almost always want. The start
+    # stays editable (the end follows from it).
+    period = settings.last_completed_period(date.today())
 
     if request.method == "POST":
-        form = PayrollBatchScopeForm(request.POST, period=period)
+        form = PayrollBatchScopeForm(request.POST, period=period, settings=settings)
         if form.is_valid():
             employees = form.selected_employees()
             request.session[SESSION_KEY] = {
@@ -323,7 +334,7 @@ def wizard_scope(request):
             }
             return redirect("payroll-batch-review")
     else:
-        form = PayrollBatchScopeForm(period=period)
+        form = PayrollBatchScopeForm(period=period, settings=settings)
 
     return render(
         request,
@@ -349,6 +360,12 @@ def wizard_review(request):
     """
     state = _wizard_state(request)
     if not state:
+        # Coming back here once the run has started (the Review crumb, say) has no inputs to show
+        # -- they were cleared when it started. If that run is still a draft, take the person to
+        # the page that reopens its inputs, rather than to an empty new batch.
+        batch = _reopenable_last_batch(request)
+        if batch:
+            return redirect("payroll-batch-inputs", batch_id=batch.pk)
         return redirect("payroll-batch-scope")
 
     start = date.fromisoformat(state["period_start"])
@@ -435,7 +452,7 @@ def wizard_start(request):
 
     if not ready:
         messages.error(
-            request, _("Nobody in this run can be paid yet. Fix the problems listed.")
+            request, _("Nobody in this batch can be paid yet. Fix the problems listed.")
         )
         if request.headers.get("HX-Request"):
             return HorillaRedirect(request, reverse("payroll-batch-review"))
@@ -450,6 +467,7 @@ def wizard_start(request):
         settings=_settings_for(request),
     )
     request.session.pop(SESSION_KEY, None)
+    request.session[SESSION_LAST_BATCH] = batch.pk
     if request.headers.get("HX-Request"):
         # The review page shows the run in a modal instead of leaving the page.
         return render(
@@ -505,31 +523,126 @@ def wizard_generate_slice(request, batch_id):
 
 @login_required
 @permission_required("payroll.change_payslipautogenerate")
-def pay_period_settings(request):
-    """The company's pay period. One row per company, created on first save."""
+def pay_period_settings(request, pk=None):
+    """
+    A company's pay period. One row per company (and one for all companies).
+
+    Without ``pk`` this is the signed-in user's own company: its row, or a new one that starts
+    from the setting now in force. With ``pk`` it is that row, which is how the Payroll Settings
+    list edits any company's. ``?new=1`` opens a blank row for a company still without one.
+    """
     from base.auth_backends import stamp_company_on_create
 
-    instance = _settings_for(request)
+    creating = bool(request.GET.get("new") or request.POST.get("new"))
+    if pk is not None:
+        instance = get_object_or_404(PayPeriodSettings.objects.entire(), pk=pk)
+    elif creating:
+        instance = PayPeriodSettings()
+    else:
+        company = getattr(
+            getattr(request.user, "employee_get", None), "get_company", lambda: None
+        )()
+        instance = PayPeriodSettings.objects.entire().filter(company_id=company).first()
+        if instance is None:
+            # No row of its own yet: start from what is in force, saved as this company's.
+            in_force = PayPeriodSettings.for_company(company)
+            instance = PayPeriodSettings(
+                company_id=company,
+                cycle_start_day=in_force.cycle_start_day,
+                pay_day_offset=in_force.pay_day_offset,
+                pay_day_of_month=in_force.pay_day_of_month,
+            )
+    # ?modal=1: the same form, loaded into a dialog -- the run wizard's, or the settings list's.
+    modal = bool(request.GET.get("modal")) and bool(request.META.get("HTTP_HX_REQUEST"))
+    from_list = request.GET.get("then") == "list"
+    with_company = from_list
     if request.method == "POST":
-        form = PayPeriodSettingsForm(request.POST, instance=instance)
+        form = PayPeriodSettingsForm(
+            request.POST, instance=instance, modal=modal, with_company=with_company
+        )
         if form.is_valid():
             obj = form.save(commit=False)
-            if not obj.pk:
+            if not obj.pk and obj.company_id_id is None and not with_company:
                 stamp_company_on_create(obj)
             obj.save()
             messages.success(request, _("Pay period saved."))
+            if modal and from_list:
+                return HttpResponse(
+                    "<script>$('#genericModal').removeClass('oh-modal--show');"
+                    "htmx.ajax('GET', '%s', {target: '#payPeriodListContainer', swap: 'innerHTML'});</script>"
+                    % reverse("pay-period-list")
+                )
+            if modal:
+                # The page behind the dialog shows dates drawn from this setting.
+                return HttpResponse("<script>window.location.reload();</script>")
             return HorillaRedirect(request, reverse("pay-period-settings"))
     else:
-        form = PayPeriodSettingsForm(instance=instance)
+        form = PayPeriodSettingsForm(
+            instance=instance, modal=modal, with_company=with_company
+        )
 
     start, end = instance.period_for(date.today())
     return render(
         request,
-        "payroll/batch/pay_period_settings.html",
+        (
+            "payroll/batch/pay_period_settings_modal.html"
+            if modal
+            else "payroll/batch/pay_period_settings.html"
+        ),
         {
             "form": form,
             "example_start": start,
             "example_end": end,
             "example_pay_date": instance.pay_date_for(end),
+            "today": date.today(),
+            "modal_body_id": "genericModalBody" if from_list else "pbSettingsModalBody",
+            "post_url": request.get_full_path(),
+            "show_company": with_company,
+            "heading": _("Pay period") if not instance.pk else _("Pay period"),
         },
     )
+
+
+@login_required
+@permission_required("payroll.delete_payslipautogenerate")
+def pay_period_delete(request, pk):
+    """Remove one company's pay period; that company then falls back to the all-companies one."""
+    if request.method != "POST":
+        return HorillaRedirect(request, reverse("payroll-settings"))
+    row = PayPeriodSettings.objects.entire().filter(pk=pk).first()
+    if row is None:
+        messages.error(request, _("Pay period not found."))
+    else:
+        row.delete()
+        messages.success(request, _("Pay period deleted."))
+    return HorillaRedirect(request)
+
+
+@login_required
+@permission_required("payroll.add_payslip")
+def pay_period_generate(request, pk):
+    """Generate payslips now for a company's last completed pay period."""
+    if request.method != "POST":
+        return HorillaRedirect(request, reverse("payroll-settings"))
+    from payroll.scheduler import generate_for_setting
+
+    row = PayPeriodSettings.objects.entire().filter(pk=pk).first()
+    if row is None:
+        messages.error(request, _("Pay period not found."))
+        return HorillaRedirect(request)
+    start, end = row.manual_period()
+    created = generate_for_setting(row, date.today(), force=True)
+    period = f"{start.day} {start:%b %Y} \u2013 {end.day} {end:%b %Y}"
+    if created:
+        messages.success(
+            request,
+            _("%(n)s payslips generated for %(period)s.")
+            % {"n": created, "period": period},
+        )
+    else:
+        messages.info(
+            request,
+            _("No new payslips: everyone already has one for %(period)s.")
+            % {"period": period},
+        )
+    return HorillaRedirect(request)

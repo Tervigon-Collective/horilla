@@ -42,6 +42,17 @@ def _cached(key, loader, ttl=90):
     return value
 
 
+def company_icon_url(company):
+    """
+    The company's logo URL, or "" when it has none.
+
+    FieldFile.url is patched in horilla/models.py to answer "/404/" for an empty
+    field; that string must not reach the session or an <img src>.
+    """
+    icon = getattr(company, "icon", None)
+    return icon.url if icon else ""
+
+
 class AllCompany:
     """
     Dummy class for the "all companies" switcher entry.
@@ -94,11 +105,7 @@ def get_companies(request):
             qs = qs.filter(id__in=allowed_ids or [])
         rows = []
         for company in qs:
-            try:
-                icon = company.icon.url if company.icon else ""
-            except Exception:
-                icon = ""
-            rows.append([company.id, company.company, icon, False])
+            rows.append([company.id, company.company, company_icon_url(company), False])
         return rows
 
     cache_key = (
@@ -217,7 +224,7 @@ def update_selected_company(request):
 
     company = {
         "company": company.company,
-        "icon": company.icon.url,
+        "icon": company_icon_url(company),
         "text": text,
         "id": company.id,
     }

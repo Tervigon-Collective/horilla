@@ -89,38 +89,218 @@ class ListTests(Fixture):
         )
         self.assertContains(response, reverse("payroll-batch-scope"))
 
-    def test_the_figures_come_from_the_runs(self):
-        batch = PayrollBatch.objects.create(
+
+class BatchWithPayslips:
+    """Builds a batch and payslips inside it."""
+
+    def _batch(self, **kwargs):
+        defaults = dict(
             batch_name="March",
             period_start=date(2026, 3, 1),
             period_end=date(2026, 3, 31),
-            generated_count=7,
-            total_net=1234.0,
-            flagged_count=2,
         )
-        # "People" counts the run's payslips for active employees, as the
-        # run's own page shows them -- not the stored generated_count.
+        defaults.update(kwargs)
+        return PayrollBatch.objects.create(**defaults)
+
+    def _slip(self, batch, person, gross=100.0, net=80.0):
+        return Payslip.objects.create(
+            employee_id=person,
+            start_date=date(2026, 3, 1),
+            end_date=date(2026, 3, 31),
+            status="draft",
+            basic_pay=1,
+            contract_wage=1,
+            gross_pay=gross,
+            deduction=gross - net,
+            net_pay=net,
+            pay_head_data={},
+            payroll_batch=batch,
+        )
+
+
+class SummaryFollowsPayslipsTests(BatchWithPayslips, Fixture):
+    """A batch's figures are read off the payslips inside it, whatever was stored before."""
+
+    def test_refreshing_counts_only_the_active_employees_payslips(self):
+        batch = self._batch()
+        self._slip(batch, self.people[0])
+        self._slip(batch, self.people[1], gross=300.0, net=250.0)
         left = self.people[1]
         left.is_active = False
         left.save()
-        for person in self.people:
-            Payslip.objects.create(
-                employee_id=person,
-                start_date=date(2026, 3, 1),
-                end_date=date(2026, 3, 31),
-                status="draft",
-                basic_pay=1,
-                contract_wage=1,
-                gross_pay=1,
-                deduction=0,
-                net_pay=1,
-                pay_head_data={},
-                payroll_batch=batch,
+        batch.refresh_totals()
+        batch.refresh_from_db()
+        self.assertEqual(
+            (batch.generated_count, batch.total_gross, batch.total_net),
+            (1, 100.0, 80.0),
+        )
+
+    def test_deleting_a_payslip_takes_it_out_of_the_summary(self):
+        batch = self._batch()
+        slip = self._slip(batch, self.people[0])
+        self._slip(batch, self.people[1], gross=300.0, net=250.0)
+        batch.refresh_totals()
+        slip.delete()
+        batch.refresh_from_db()
+        self.assertEqual((batch.generated_count, batch.total_gross), (1, 300.0))
+
+    def test_editing_a_payslip_changes_the_summary(self):
+        batch = self._batch()
+        slip = self._slip(batch, self.people[0])
+        batch.refresh_totals()
+        slip.gross_pay, slip.net_pay = 500.0, 400.0
+        slip.save()
+        batch.refresh_from_db()
+        self.assertEqual((batch.total_gross, batch.total_net), (500.0, 400.0))
+
+    def test_a_stale_open_batch_is_put_right_when_it_is_opened(self):
+        batch = self._batch(
+            generated_count=7,
+            total_gross=31976.0,
+            total_deductions=1344.0,
+            total_net=30632.0,
+        )
+        response = self.client.get(reverse("payroll-batch-detail", args=[batch.pk]))
+        batch.refresh_from_db()
+        self.assertEqual(
+            (batch.generated_count, batch.total_gross, batch.total_net), (0, 0, 0)
+        )
+        self.assertEqual(response.context["batch"].total_gross, 0)
+
+    def test_a_stale_open_batch_is_put_right_when_the_list_is_drawn(self):
+        batch = self._batch(generated_count=7, total_gross=31976.0, total_net=30632.0)
+        self.client.get(reverse("payroll-batch-list"), HTTP_HX_REQUEST="true")
+        batch.refresh_from_db()
+        self.assertEqual((batch.generated_count, batch.total_gross), (0, 0))
+
+    def test_a_paid_batch_follows_its_payslips_too(self):
+        batch = self._batch(
+            status=PayrollBatch.PAID,
+            generated_count=5,
+            total_gross=500.0,
+            total_net=400.0,
+        )
+        self._slip(batch, self.people[0])
+        self.client.get(reverse("payroll-batch-list"), HTTP_HX_REQUEST="true")
+        batch.refresh_from_db()
+        self.assertEqual(
+            (batch.generated_count, batch.total_gross, batch.total_net),
+            (1, 100.0, 80.0),
+        )
+
+
+class PayslipStatusLockTests(BatchWithPayslips, Fixture):
+    """Payslips in an approved or paid batch change status only with the batch."""
+
+    def _locked_slip(self, status, person=0):
+        batch = self._batch(status=status, progress_state=PayrollBatch.DONE)
+        return batch, self._slip(batch, self.people[person])
+
+    def test_a_payslip_in_an_approved_or_paid_batch_cannot_be_changed_alone(self):
+        for person, status in enumerate((PayrollBatch.APPROVED, PayrollBatch.PAID)):
+            batch, slip = self._locked_slip(status, person)
+            self.client.post(
+                reverse("payslip-status-update", args=[slip.pk]),
+                {"status": "review_ongoing"},
             )
+            slip.refresh_from_db()
+            self.assertEqual(slip.status, "draft", status)
+
+    def test_a_payslip_in_an_open_batch_still_changes(self):
+        for person, status in enumerate((PayrollBatch.DRAFT, PayrollBatch.REVIEW)):
+            batch, slip = self._locked_slip(status, person)
+            self.client.post(
+                reverse("payslip-status-update", args=[slip.pk]),
+                {"status": "review_ongoing"},
+            )
+            slip.refresh_from_db()
+            self.assertEqual(slip.status, "review_ongoing", status)
+
+    def test_a_payslip_outside_any_batch_still_changes(self):
+        slip = self._slip(None, self.people[0])
+        self.client.post(
+            reverse("payslip-status-update", args=[slip.pk]), {"status": "confirmed"}
+        )
+        slip.refresh_from_db()
+        self.assertEqual(slip.status, "confirmed")
+
+    def test_the_bulk_change_skips_the_locked_ones_and_says_so(self):
+        import json
+
+        _, locked = self._locked_slip(PayrollBatch.PAID)
+        free = self._slip(self._batch(batch_name="Open"), self.people[1])
+        response = self.client.post(
+            reverse("payslip-status-update-no-id"),
+            {"ids": json.dumps([locked.pk, free.pk]), "status": "confirmed"},
+            HTTP_HX_REQUEST="true",
+        )
+        locked.refresh_from_db()
+        free.refresh_from_db()
+        self.assertEqual((locked.status, free.status), ("draft", "confirmed"))
+        self.assertIn("left as they are", response.json()["message"])
+
+    def test_the_batch_still_moves_its_payslips(self):
+        batch, slip = self._locked_slip(PayrollBatch.REVIEW)
+        batch.refresh_totals()
+        self.client.post(
+            reverse("payroll-batch-set-status", args=[batch.pk]), {"status": "approved"}
+        )
+        slip.refresh_from_db()
+        self.assertEqual(slip.status, "confirmed")
+
+    def test_the_status_cell_is_plain_text_when_locked(self):
+        _, locked = self._locked_slip(PayrollBatch.APPROVED)
+        _, open_slip = self._locked_slip(PayrollBatch.DRAFT, 1)
+        html = self.client.get(
+            reverse("payslip-list"), HTTP_HX_REQUEST="true"
+        ).content.decode()
+        self.assertIn(reverse("payslip-status-update", args=[open_slip.pk]), html)
+        self.assertNotIn(reverse("payslip-status-update", args=[locked.pk]), html)
+
+
+class CombinedPageTests(Fixture):
+    """Payslips and batches are two tabs of one page."""
+
+    def test_the_old_batches_page_opens_the_batches_tab(self):
         response = self.client.get(reverse("payroll-batch-home"))
-        self.assertEqual(response.context["kpi"]["employees"], 1)
-        self.assertEqual(response.context["kpi"]["flagged"], 2)
-        self.assertEqual(response.context["kpi"]["unpaid"], 1)
+        self.assertRedirects(
+            response,
+            f"{reverse('view-payslip')}?open_tab=2",
+            fetch_redirect_response=False,
+        )
+
+    def test_the_tabs_are_payslips_then_batches_with_counts(self):
+        response = self.client.get(
+            reverse("payslip-batch-tabs"), HTTP_HX_REQUEST="true"
+        )
+        tabs = response.context["tabs"]
+        self.assertEqual([str(tab["title"]) for tab in tabs], ["Payslips", "Batches"])
+        self.assertTrue(all("badge" in tab for tab in tabs))
+
+    def test_each_tab_loads_its_own_nav_and_list_container(self):
+        payslips = self.client.get(
+            reverse("payslip-tab-shell"), HTTP_HX_REQUEST="true"
+        ).content.decode()
+        batches = self.client.get(
+            reverse("payroll-batch-tab-shell"), HTTP_HX_REQUEST="true"
+        ).content.decode()
+        self.assertIn('id="listContainer"', payslips)
+        self.assertIn(reverse("payslip-navbar"), payslips)
+        self.assertIn('id="batchListContainer"', batches)
+        self.assertIn(reverse("payroll-batch-navbar"), batches)
+
+    def test_the_menu_has_one_entry_for_both(self):
+        from payroll.sidebar import SUBMENUS
+
+        names = [str(item["menu"]) for item in SUBMENUS]
+        self.assertIn("Payslips", names)
+        self.assertNotIn("Payroll Batches", names)
+
+    def test_the_batch_search_swaps_the_batch_list(self):
+        html = self.client.get(
+            reverse("payroll-batch-navbar"), HTTP_HX_REQUEST="true"
+        ).content.decode()
+        self.assertIn("#batchListContainer", html)
 
 
 class ScopeTests(Fixture):
@@ -157,6 +337,55 @@ class ScopeTests(Fixture):
         self.assertCountEqual(stashed["employee_ids"], list(expected))
         for employee in self.people:
             self.assertIn(employee.pk, stashed["employee_ids"])
+
+    def test_the_end_is_the_start_plus_the_days_of_the_starts_month(self):
+        for start, end in (
+            (date(2026, 9, 1), date(2026, 9, 30)),
+            (date(2026, 9, 15), date(2026, 10, 14)),  # September has 30 days
+            (date(2026, 10, 15), date(2026, 11, 14)),  # October has 31
+            (date(2026, 2, 10), date(2026, 3, 9)),  # February has 28
+            (date(2028, 2, 10), date(2028, 3, 9)),  # 2028 is a leap year: 29
+            (date(2026, 12, 20), date(2027, 1, 19)),  # across the year
+        ):
+            with self.subTest(start=start):
+                self.assertEqual(PayPeriodSettings.period_end_for(start), end)
+
+    def test_a_posted_end_date_is_ignored_and_worked_out_from_the_start(self):
+        self.client.post(
+            reverse("payroll-batch-scope"),
+            {
+                "batch_name": "Cross month",
+                "period_start": "2026-09-15",
+                "period_end": "2026-09-20",
+                "scope": "all",
+            },
+        )
+        state = self.client.session[SESSION_KEY]
+        self.assertEqual(state["period_start"], "2026-09-15")
+        self.assertEqual(state["period_end"], "2026-10-14")
+
+    def test_the_end_may_be_left_out_altogether(self):
+        self.client.post(
+            reverse("payroll-batch-scope"),
+            {"batch_name": "No end", "period_start": "2026-03-01", "scope": "all"},
+        )
+        self.assertEqual(self.client.session[SESSION_KEY]["period_end"], "2026-03-31")
+
+    def test_the_end_field_is_shown_read_only(self):
+        html = self.client.get(reverse("payroll-batch-scope")).content.decode()
+        end_input = html.split('name="period_end"')[1].split(">")[0]
+        self.assertIn("readonly", end_input)
+
+    def test_the_default_name_follows_the_period(self):
+        from payroll.forms.batch_forms import suggest_batch_name
+
+        self.assertEqual(
+            suggest_batch_name(date(2026, 9, 1), date(2026, 9, 30)), "September 2026"
+        )
+        self.assertEqual(
+            suggest_batch_name(date(2026, 9, 15), date(2026, 10, 14)),
+            "15 Sep 2026 – 14 Oct 2026",
+        )
 
     def test_a_future_period_is_refused(self):
         response = self.client.post(
@@ -395,7 +624,9 @@ class StatusTests(Fixture):
         self.assertEqual(self.batch.status, PayrollBatch.DRAFT)
 
 
-class DeleteTests(Fixture):
+class DraftRunFixture:
+    """A draft run with one payslip. A plain mixin (not a TestCase) so ReopenTests does not inherit and re-run DeleteTests' tests."""
+
     def setUp(self):
         super().setUp()
         self.batch = batch_run.create_batch(
@@ -416,6 +647,8 @@ class DeleteTests(Fixture):
         )
         self.url = reverse("payroll-batch-delete", args=[self.batch.pk])
 
+
+class DeleteTests(DraftRunFixture, Fixture):
     def test_a_draft_run_and_its_payslips_go(self):
         self.client.post(self.url)
 
@@ -507,22 +740,15 @@ class FlashMessageTests(Fixture):
         section = html[html.index('<section class="oh-wrapper pb">') :]
         self.assertNotIn("oh-alert--animated", section)
 
-    def test_the_steps_are_named_for_what_you_do(self):
-        html = self.client.get(reverse("payroll-batch-scope")).content.decode()
-        self.assertIn("Select Employees", html)
-        self.assertIn("Review & Regularize", html)
-        self.assertNotIn("Who is in it", html)
-        self.assertNotIn("Check the inputs", html)
-
 
 class PayPeriodTests(Fixture):
     def test_saving_creates_the_row_for_this_company(self):
         self.client.post(
             reverse("pay-period-settings"),
-            {"boundary": "calendar_month", "pay_day_offset": 3, "input_cutoff_days": 2},
+            {"cycle_start_day": 1, "pay_day": "day:3"},
         )
         settings = PayPeriodSettings.objects.entire().get()
-        self.assertEqual(settings.pay_day_offset, 3)
+        self.assertEqual(settings.pay_day_of_month, 3)
 
     def test_the_pay_date_shown_follows_the_offset(self):
         PayPeriodSettings.objects.create(pay_day_offset=5)
@@ -540,7 +766,7 @@ class PayPeriodTests(Fixture):
         self.assertEqual(PayPeriodSettings.objects.entire().count(), 0)
 
 
-class ReopenTests(DeleteTests):
+class ReopenTests(DraftRunFixture, Fixture):
     """Back to "Review & Regularize" from a draft run (inherits its draft run and payslip)."""
 
     def setUp(self):
@@ -576,3 +802,54 @@ class ReopenTests(DeleteTests):
     def test_a_get_changes_nothing(self):
         self.client.get(self.url)
         self.assertTrue(PayrollBatch.objects.filter(pk=self.batch.pk).exists())
+
+
+class CycleSettingsFlowTests(Fixture):
+    def test_saved_cycle_drives_the_wizard_default_and_its_hint(self):
+        response = self.client.post(
+            reverse("pay-period-settings"),
+            {"cycle_start_day": "15", "pay_day": "day:1"},
+        )
+        self.assertIn(response.status_code, (200, 302))
+        saved = PayPeriodSettings.objects.entire().get()
+        self.assertEqual(saved.cycle_start_day, 15)
+
+        page = self.client.get(reverse("payroll-batch-scope"))
+        start, end = saved.last_completed_period(date.today())
+        self.assertEqual(page.context["form"].initial["period_start"], start)
+        self.assertEqual(page.context["form"].initial["period_end"], end)
+        self.assertEqual(start.day, 15)
+        # The wording of the rule line is pinned where it is built:
+        # test_cross_month_period (PayPeriodSettings.summary).
+
+
+class SettingsModalTests(Fixture):
+    def _modal(self, method="get", data=None):
+        url = reverse("pay-period-settings") + "?modal=1"
+        call = getattr(self.client, method)
+        return (
+            call(url, data or {}, HTTP_HX_REQUEST="true")
+            if method == "post"
+            else call(url, HTTP_HX_REQUEST="true")
+        )
+
+    def test_saving_in_the_modal_stores_it_and_reloads_the_page_behind(self):
+        response = self._modal(
+            "post",
+            {"cycle_start_day": "15", "pay_day": "day:1"},
+        )
+        self.assertContains(response, "window.location.reload()")
+        saved = PayPeriodSettings.objects.entire().get()
+        self.assertEqual(saved.cycle_start_day, 15)
+
+    def test_a_bad_day_comes_back_as_the_form_with_its_error(self):
+        response = self._modal("post", {"cycle_start_day": "32", "pay_day": "day:1"})
+        self.assertContains(response, 'id="pbSettingsForm"')
+        self.assertContains(response, "pb__problem")
+        self.assertFalse(PayPeriodSettings.objects.entire().exists())
+
+    def test_a_day_of_the_month_pay_day_can_be_saved_in_the_modal(self):
+        response = self._modal("post", {"cycle_start_day": "30", "pay_day": "day:31"})
+        self.assertContains(response, "window.location.reload()")
+        saved = PayPeriodSettings.objects.entire().get()
+        self.assertEqual((saved.cycle_start_day, saved.pay_day_of_month), (30, 31))

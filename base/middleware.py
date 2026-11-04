@@ -15,7 +15,7 @@ from django.shortcuts import redirect
 from django.utils.translation import gettext_lazy as _
 
 from base.backends import ConfiguredEmailBackend
-from base.context_processors import AllCompany, AllMyCompanies
+from base.context_processors import AllCompany, AllMyCompanies, company_icon_url
 from base.horilla_company_manager import HorillaCompanyManager
 from base.models import Company, ShiftRequest, WorkTypeRequest
 from employee.models import (
@@ -277,7 +277,7 @@ class CompanyMiddleware:
                 "selected_company_instance",
                 {
                     "company": company_id.company,
-                    "icon": company_id.icon.url,
+                    "icon": company_icon_url(company_id),
                     "text": text,
                     "id": company_id.id,
                 },

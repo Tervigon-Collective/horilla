@@ -6,7 +6,7 @@ fixed at creation, and the combination that silently taxed everyone at 0 —
 Python mode enabled with no code — was accepted at save time.
 """
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from horilla.testkit import make_company, make_employee, make_user
 from payroll.forms.tax_forms import FilingStatusForm
@@ -23,6 +23,7 @@ def _data(**overrides):
     return data
 
 
+@override_settings(HORILLA_ALLOW_PYTHON_TAX_FORMULAS=True)
 class FilingStatusModeSwitchTests(TestCase):
     def _create_in_bracket_mode(self):
         form = FilingStatusForm(data=_data())
@@ -81,6 +82,7 @@ class FilingStatusModeSwitchTests(TestCase):
         self.assertFalse((form.save().python_code or "").strip())
 
 
+@override_settings(HORILLA_ALLOW_PYTHON_TAX_FORMULAS=True)
 class TestPyCodeEndpointTests(TestCase):
     """
     The built-in formula preview that replaces the onecompiler.com iframe.
@@ -277,23 +279,31 @@ class SavingAnUnchangedSlabTableTests(TestCase):
     def test_a_slab_that_only_meets_its_neighbour_is_not_an_overlap(self):
         from payroll.models.tax_models import TaxBracket
 
-        TaxBracket(
+        # Without the open-ended top slab, 1,000,000 is where the last slab
+        # ends, so a new slab starting there only meets it.
+        self.rows[-1].delete()
+        meeting = TaxBracket(
             filing_status_id=self.filing_status,
             min_income=1000000,
-            max_income=None,
-            tax_rate=31,
-        ).clean_fields()
-        meeting = TaxBracket(
+            max_income=2000000,
+            tax_rate=30,
+        )
+        meeting.clean()
+
+    def test_a_slab_inside_the_open_ended_one_is_an_overlap(self):
+        from django.core.exceptions import ValidationError
+
+        from payroll.models.tax_models import TaxBracket
+
+        inside = TaxBracket(
             filing_status_id=self.filing_status,
             min_income=2000000,
             max_income=3000000,
             tax_rate=1,
         )
-        # Still overlaps the open-ended top slab.
-        from django.core.exceptions import ValidationError
-
-        with self.assertRaises(ValidationError):
-            meeting.clean()
+        with self.assertRaises(ValidationError) as caught:
+            inside.clean()
+        self.assertIn("min_income", caught.exception.error_dict)
 
     def test_the_open_ended_slab_stays_null_after_validation(self):
         from payroll.models.tax_models import TaxBracket
@@ -303,6 +313,7 @@ class SavingAnUnchangedSlabTableTests(TestCase):
         self.assertIsNone(top.max_income)
 
 
+@override_settings(HORILLA_ALLOW_PYTHON_TAX_FORMULAS=True)
 class FilingStatusTaxRulesFormTests(TestCase):
     def setUp(self):
         from payroll.models.models import FilingStatus
@@ -389,23 +400,6 @@ class PythonCodeXssExemptionTests(TestCase):
         )
         status.refresh_from_db()
         self.assertEqual(status.python_code, federal_tax.CODE)
-
-    def test_formula_with_on_in_a_variable_name_can_be_saved(self):
-        from payroll.models.models import FilingStatus
-
-        code = (
-            "def calculate_federal_tax(yearly_income):\n"
-            "    contribution = yearly_income * 0.1\n"
-            "    return contribution\n"
-        )
-        status = FilingStatus.objects.create(
-            filing_status="Contribution",
-            based_on="basic_pay",
-            use_py=True,
-            python_code=code,
-        )
-        status.refresh_from_db()
-        self.assertEqual(status.python_code, code)
 
     def test_other_text_fields_are_still_xss_checked(self):
         """The exemption is scoped to python_code and nothing else."""

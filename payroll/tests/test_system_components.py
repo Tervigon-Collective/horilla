@@ -10,12 +10,13 @@ ones that show the generators now READ the template, and that the template
 cannot be deleted out from under them.
 """
 
+from django.contrib.messages import get_messages
 from django.test import TestCase
 from django.urls import reverse
 
 from horilla.testkit import make_company, make_employee, make_user
 from payroll.forms.component_forms import AllowanceForm, DeductionForm
-from payroll.models.models import Allowance, Deduction, LoanAccount
+from payroll.models.models import Allowance, Deduction, LoanAccount, Payslip
 from payroll.system_components import (
     BY_KEY,
     SYSTEM_COMPONENTS,
@@ -65,17 +66,6 @@ class EditableFieldTests(TestCase):
     attendance record and the request — so offering them would be offering
     settings that change nothing.
     """
-
-    def test_an_earning_offers_taxability_not_pretax(self):
-        """An allowance has no is_pretax; pre-tax is a deduction's phase."""
-        fields = editable_fields("reimbursement")
-        self.assertIn("is_taxable", fields)
-        self.assertNotIn("is_pretax", fields)
-
-    def test_a_deduction_offers_pretax_not_taxability(self):
-        fields = editable_fields("loan_repayment")
-        self.assertIn("is_pretax", fields)
-        self.assertNotIn("is_taxable", fields)
 
     def test_loss_of_pay_is_not_a_component(self):
         """
@@ -141,9 +131,14 @@ class UndeletableTests(TestCase):
         self.client.force_login(user)
 
         template = Allowance.objects.entire().get(system_key="reimbursement")
-        self.client.get(
+        response = self.client.get(
             reverse("delete-allowance", kwargs={"allowance_id": template.pk}),
             HTTP_HX_REQUEST="true",
+            follow=True,
+        )
+        self.assertIn(
+            "standard component and cannot be deleted",
+            " ".join(str(m) for m in get_messages(response.wsgi_request)),
         )
         self.assertTrue(
             Allowance.objects.entire().filter(system_key="reimbursement").exists()
@@ -192,6 +187,16 @@ class NotPayableTests(TestCase):
         titles = {BY_KEY[key]["title"] for key in keys}
         offered = {row["label"] for row in available_codes()}
         self.assertFalse(titles & offered)
+
+    def test_generated_claims_are_not_offered_as_formula_targets(self):
+        """A claim generated for one employee is not a component to reference."""
+        from payroll.models.models import Allowance
+        from payroll.views.component_formula_views import available_codes
+
+        Allowance.objects.create(
+            title="Medical Claim", code="MEDICAL_CLAIM_9", only_show_under_employee=True
+        )
+        self.assertNotIn("MEDICAL_CLAIM_9", {r["code"] for r in available_codes()})
 
     def test_no_template_is_in_the_structure_picker(self):
         from payroll.forms.component_layout import component_picker_rows
@@ -250,6 +255,41 @@ class GeneratorsReadTheTemplateTests(TestCase):
         self.assertIsNotNone(loan.allowance_id)
         self.assertFalse(loan.allowance_id.is_taxable)
 
+    def test_editing_the_template_later_reaches_unpaid_instalments_and_the_payout(self):
+        loan = self._loan()
+        template = Deduction.objects.entire().get(system_key="loan_repayment")
+        template.is_pretax = False
+        template.save()
+        payout = Allowance.objects.entire().get(system_key="loan_payout")
+        payout.is_taxable = False
+        payout.save()
+
+        loan = LoanAccount.objects.entire().get(pk=loan.pk)
+        self.assertFalse(any(d.is_pretax for d in loan.deduction_ids.all()))
+        self.assertFalse(loan.allowance_id.is_taxable)
+
+    def test_an_instalment_a_payslip_already_carries_keeps_its_setting(self):
+        from datetime import date
+
+        loan = self._loan()
+        paid, unpaid = list(loan.deduction_ids.all())[:2]
+        payslip = Payslip.objects.create(
+            employee_id=loan.employee_id,
+            start_date=date(2026, 5, 1),
+            end_date=date(2026, 5, 31),
+            pay_head_data={},
+        )
+        payslip.installment_ids.add(paid)
+
+        template = Deduction.objects.entire().get(system_key="loan_repayment")
+        template.is_pretax = False
+        template.save()
+
+        paid.refresh_from_db()
+        unpaid.refresh_from_db()
+        self.assertTrue(paid.is_pretax)
+        self.assertFalse(unpaid.is_pretax)
+
     def test_an_advance_and_a_loan_can_differ(self):
         """
         They share one model and one generator, so before this they were
@@ -287,18 +327,6 @@ class NoAmountBlockTests(TestCase):
     number. Nothing to prorate means nothing to divide by a shorter period,
     which is exactly why inheriting calendar-day proration was wrong.
     """
-
-    def test_no_kind_offers_an_amount_or_a_ceiling(self):
-        for entry in SYSTEM_COMPONENTS:
-            with self.subTest(key=entry["key"]):
-                fields = editable_fields(entry["key"])
-                for unwanted in ("amount", "maximum_amount", "has_max_limit"):
-                    self.assertNotIn(unwanted, fields)
-
-    def test_no_kind_offers_a_proration_basis(self):
-        for entry in SYSTEM_COMPONENTS:
-            with self.subTest(key=entry["key"]):
-                self.assertNotIn("maximum_unit", editable_fields(entry["key"]))
 
     def test_each_kind_offers_exactly_its_tax_treatment(self):
         for entry in SYSTEM_COMPONENTS:

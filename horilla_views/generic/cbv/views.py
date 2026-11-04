@@ -46,6 +46,7 @@ from horilla.nested_group_by import nested_group_by_queryset
 from horilla.signals import post_generic_import, pre_generic_import
 from horilla_views import models
 from horilla_views.cbv_methods import (  # update_initial_cache,
+    WEEK,
     assign_related,
     dedupe_single_value_params,
     export_xlsx,
@@ -61,6 +62,7 @@ from horilla_views.cbv_methods import (  # update_initial_cache,
     sortby,
     split_by_import_reference,
     structured,
+    unauthenticated_response,
     update_saved_filter_cache,
 )
 from horilla_views.forms import DynamicBulkUpdateForm, ToggleColumnForm
@@ -98,6 +100,19 @@ def register_dynamic_url(route: str, view, name: str = None) -> None:
         urlpatterns.append(path(route, view, name=name))
     else:
         urlpatterns.append(path(route, view))
+
+
+# Quick Date menu of list and card views. "This Week" and "Last Week" are
+# calendar weeks (cbv_methods.week_start); the 7-day ranges include today.
+QUICK_DATE_RANGES = [
+    (_("Yesterday"), -1, None),
+    (_("Today"), 0, None),
+    (_("Tomorrow"), 1, None),
+    (_("This Week"), WEEK, 0),
+    (_("Last Week"), WEEK, -1),
+    (_("Last 7 Days"), -6, 0),
+    (_("Next 7 Days"), 0, 6),
+]
 
 
 @method_decorator(hx_request_required, name="dispatch")
@@ -164,12 +179,7 @@ class HorillaListView(ListView):
     show_filter_tags: bool = True
     show_saved_filters: bool = True
     show_quick_date_filters: bool = False
-    quick_date_ranges: list = [
-        (_("Yesterday"), -1, None),
-        (_("Today"), 0, None),
-        (_("Tomorrow"), 1, None),
-        (_("This Week"), 0, 7),
-    ]
+    quick_date_ranges: list = QUICK_DATE_RANGES
     quick_date_fields: tuple = ("", "", "")
     filter_keys_to_remove: list = []
     # {field: value} pairs not shown as filter tags (still applied), e.g. a default
@@ -410,7 +420,7 @@ class HorillaListView(ListView):
 
         hidden_fields = []
         existing_instance = None
-        if self.request:
+        if self.request and self.show_toggle_form:
             existing_instance = models.ToggleColumn.objects.filter(
                 user_id=self.request.user, path=self.request.path_info
             ).first()
@@ -544,6 +554,8 @@ class HorillaListView(ListView):
         if request and len(nested_fields) >= 1:
             self.template_name = "generic/nested_group_by_table.html"
             # Skip flat list pagination; the nested engine paginates top-level groupers itself.
+            # The toolbar's "Select (N)" still counts every record the filter matches.
+            context["grouped_select_total"] = queryset.count()
             context["queryset"] = queryset[:1]
             try:
                 context["nested_groups"] = nested_group_by_queryset(
@@ -574,6 +586,7 @@ class HorillaListView(ListView):
                 self.group_by_template_name or "generic/group_by_table.html"
             )
             # group_by paginates groupers itself; keep a tiny queryset so bulk-select chrome (`queryset|length`) still works.
+            context["grouped_select_total"] = queryset.count()
             context["queryset"] = queryset[:1]
             try:
                 context["groups"] = group_by_queryset(
@@ -692,6 +705,7 @@ class HorillaListView(ListView):
 
         instance_ids = request.POST.get("instance_ids", "[]")
         instance_ids = eval_validate(instance_ids)
+        reload_state = self.bulk_reload_state(instance_ids)
         form = DynamicBulkUpdateForm(
             request.POST,
             request.FILES,
@@ -710,7 +724,12 @@ class HorillaListView(ListView):
                 <script id="{script_id}">
                     $("#{script_id}").closest(".oh-modal--show").removeClass("oh-modal--show");
                     $("#{self.selected_instances_key_id}").attr("data-ids", "[]");
-                    $(".reload-record").click()
+                    if (typeof clearSelectionsOnTabSwitch === "function") {{
+                        // Reset the checkboxes and Unselect/Update/Select buttons
+                        // now; the reload below only lands once the lists re-render.
+                        clearSelectionsOnTabSwitch("{self.view_id}");
+                    }}
+                    {self.bulk_reload_script(request, instance_ids, reload_state)}
                     $("#reloadMessagesButton").click()
                 </script>
                 """
@@ -728,6 +747,22 @@ class HorillaListView(ListView):
                 "instance_ids": instance_ids,
             },
         )
+
+    def bulk_reload_state(self, instance_ids):
+        """
+        Snapshot taken before a bulk update is applied, handed to
+        bulk_reload_script afterwards. Override when the script needs to know
+        what the records looked like before they were changed.
+        """
+        return None
+
+    def bulk_reload_script(self, request, instance_ids, reload_state) -> str:
+        """
+        JS run once a bulk update is saved, to refresh what is on screen.
+        Reloads every list on the page by default; override to reload only
+        the lists the update touched when reloading them all is costly.
+        """
+        return '$(".reload-record").click()'
 
     def get_bulk_form(self):
         """
@@ -1487,6 +1522,7 @@ class HorillaDetailedView(DetailView):
     cols: dict = {}
     instance = None
     empty_template = None
+    detail_note_method: str = ""
 
     # Opt-in: pin the title row and the action row, and give the body between
     # them a bounded height instead of letting the whole dialog scroll. Off by
@@ -1577,6 +1613,7 @@ class HorillaDetailedView(DetailView):
         context["action_method"] = self.action_method
         context["cols"] = self.cols
         context["sticky_chrome"] = self.sticky_chrome
+        context["detail_note_method"] = self.detail_note_method
 
         if instance_ids:
             prev_id, next_id = closest_numbers(instance_ids, pk)
@@ -1744,12 +1781,7 @@ class HorillaCardView(ListView):
 
     show_filter_tags: bool = True
     show_quick_date_filters: bool = False
-    quick_date_ranges: list = [
-        (_("Yesterday"), -1, None),
-        (_("Today"), 0, None),
-        (_("Tomorrow"), 1, None),
-        (_("This Week"), 0, 7),
-    ]
+    quick_date_ranges: list = QUICK_DATE_RANGES
     quick_date_fields: tuple = ("", "", "")
     filter_keys_to_remove: list = []
     # {field: value} pairs not shown as filter tags (still applied), e.g. a default
@@ -2149,24 +2181,37 @@ class HorillaFormView(FormView):
                     if len(dynamic_tuple) == 3:
                         additional_data_fields = dynamic_tuple[2]
                     key = self.request.session.session_key + "cbv" + field
-                    field_instance = form.instance._meta.get_field(field)
-                    field_label = (
-                        form.fields[field].label or field_instance.verbose_name
-                    )
-                    view.display_title = _("Create %(label)s") % {"label": field_label}
                     value = form.initial.get(field, [])
-
-                    form_field = forms.ChoiceField
-                    if isinstance(field_instance, models.models.ManyToManyField):
-                        form_field = forms.MultipleChoiceField
-                        if form.instance.pk is not None:
+                    try:
+                        # Normal case: `field` is a real field on the
+                        # form's model (FK or M2M).
+                        field_instance = form.instance._meta.get_field(field)
+                        field_label = (
+                            form.fields[field].label or field_instance.verbose_name
+                        )
+                        is_multi = isinstance(
+                            field_instance, models.models.ManyToManyField
+                        )
+                        if is_multi and form.instance.pk is not None:
                             value = list(
                                 getattr(form.instance, field).values_list(
                                     "id", flat=True
                                 )
                             )
-                    else:
-                        value = getattr(getattribute(form.instance, field), "pk", value)
+                        elif not is_multi:
+                            value = getattr(
+                                getattribute(form.instance, field), "pk", value
+                            )
+                    except FieldDoesNotExist:
+                        field_label = form.fields[field].label
+                        is_multi = isinstance(
+                            form.fields[field], forms.ModelMultipleChoiceField
+                        )
+
+                    view.display_title = _("Create %(label)s") % {"label": field_label}
+                    form_field = (
+                        forms.MultipleChoiceField if is_multi else forms.ChoiceField
+                    )
                     CACHE.set(
                         key,
                         {
@@ -2298,7 +2343,7 @@ class HorillaNavView(TemplateView):
     actions: list = []
     group_by_fields: list = []
     nested_group_by_fields: list = []
-    filter_form_context_name: str = ""
+    filter_form_context_name: str = "form"
     filter_instance: FilterSet = None
     filter_instance_context_name: str = ""
     filter_body_template: str = ""
@@ -2623,9 +2668,16 @@ class HorillaProfileView(DetailView):
 
         return view
 
+    def get_status_ribbon(self, instance):
+        """
+        Override to show a corner ribbon, e.g. {"label": _("Rejected"), "variant": "danger"}.
+        """
+        return None
+
     def get_context_data(self, **kwargs: Any) -> dict:
         context = super().get_context_data(**kwargs)
         context["instance"] = context["object"]
+        context["status_ribbon"] = self.get_status_ribbon(context["instance"])
         context["tabs"] = self.tabs
         context["view_id"] = self.view_id
         active_tab = models.ActiveTab.objects.filter(
@@ -2757,24 +2809,14 @@ def dispatch_profile_tab(request, tab_key: str, pk: int, *args, **kwargs):
     from horilla.config import import_method
 
     if not request.user.is_authenticated:
-        login_url = reverse("login")
-        params = urlencode(request.GET)
-        url = f"{login_url}?next={request.path}"
-        if params:
-            url += f"&{params}"
-        return redirect(url)
-
+        return unauthenticated_response(request)
     entry = HorillaProfileView._tab_view_registry.get(tab_key)
-    if entry is None:
-        raise Http404(f"No profile tab registered for '{tab_key}'")
-
     if isinstance(entry, dict):
         view_func = entry.get("view")
         accessibility_path = entry.get("accessibility")
     else:
         view_func = entry
         accessibility_path = None
-
     if view_func is None:
         raise Http404(f"No profile tab registered for '{tab_key}'")
 

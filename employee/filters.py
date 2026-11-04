@@ -40,6 +40,7 @@ from horilla.filters import (
     filter_name_or_badge_terms,
 )
 from horilla.horilla_middlewares import _thread_locals
+from horilla.methods import get_accessibility_cache_key
 from horilla_documents.models import Document, DocumentRequest
 from horilla_views.templatetags.generic_template_filters import getattribute
 from horilla_widgets.generic_ajax import register_ajax_field

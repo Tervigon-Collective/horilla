@@ -11,8 +11,10 @@ from payroll import dashboard as pay_dashboard
 from payroll.cbv import (
     contracts,
     dashboard,
+    pay_period,
     payroll_batch,
     payslip_automation,
+    payslip_batch_tabs,
     settings_tabs,
 )
 from payroll.models.models import Contract, Payslip
@@ -409,6 +411,27 @@ urlpatterns = [
         name="pay-slip-automation-update",
     ),
     path(
+        "pay-period-list/",
+        pay_period.PayPeriodListView.as_view(),
+        name="pay-period-list",
+    ),
+    path("pay-period-nav/", pay_period.PayPeriodNav.as_view(), name="pay-period-nav"),
+    path(
+        "pay-period/<int:pk>/",
+        batch_views.pay_period_settings,
+        name="pay-period-update",
+    ),
+    path(
+        "pay-period/<int:pk>/delete/",
+        batch_views.pay_period_delete,
+        name="pay-period-delete",
+    ),
+    path(
+        "pay-period/<int:pk>/generate/",
+        batch_views.pay_period_generate,
+        name="pay-period-generate",
+    ),
+    path(
         "pay-slip-automation-delete/<int:auto_id>/",
         payslip_automation.DeleteAutoPayslipView.as_view(),
         name="pay-slip-automation-delete",
@@ -480,6 +503,21 @@ urlpatterns = [
     # ------------------------------------------------------------------
     path("payroll-runs/", batch_views.batch_home, name="payroll-batch-home"),
     path(
+        "payslips-and-batches/",
+        payslip_batch_tabs.PayslipsAndBatchesTabView.as_view(),
+        name="payslip-batch-tabs",
+    ),
+    path(
+        "payslip-tab-shell/",
+        payslip_batch_tabs.PayslipTabShell.as_view(),
+        name="payslip-tab-shell",
+    ),
+    path(
+        "payroll-batch-tab-shell/",
+        payslip_batch_tabs.PayrollBatchTabShell.as_view(),
+        name="payroll-batch-tab-shell",
+    ),
+    path(
         "payroll-runs-list/",
         payroll_batch.PayrollBatchList.as_view(),
         name="payroll-batch-list",
@@ -499,6 +537,11 @@ urlpatterns = [
         "payroll-runs/<int:batch_id>/delete/",
         batch_views.batch_delete,
         name="payroll-batch-delete",
+    ),
+    path(
+        "payroll-runs/<int:batch_id>/inputs/",
+        batch_views.batch_inputs,
+        name="payroll-batch-inputs",
     ),
     path(
         "payroll-runs/<int:batch_id>/reopen/",

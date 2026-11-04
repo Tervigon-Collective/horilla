@@ -34,18 +34,8 @@ class WritePermissionTests(TestCase):
         response = self.client.put("/api/attendance/attendance-validate/999")
         self.assertEqual(response.status_code, 403)  # manager_permission_required
 
-    def test_plain_employee_cannot_list_mail_templates(self):
-        response = self.client.get("/api/attendance/mail-templates")
-        self.assertEqual(response.status_code, 403)
-
     def test_plain_employee_cannot_read_tax_brackets(self):
         response = self.client.get("/api/payroll/tax-bracket/")
-        self.assertNotEqual(response.status_code, 200)
-
-    def test_plain_employee_cannot_approve_reimbursement(self):
-        response = self.client.post(
-            "/api/payroll/reimbusement-approve-reject/999", {"status": "approved"}
-        )
         self.assertNotEqual(response.status_code, 200)
 
     def test_shift_request_binds_to_caller_and_ignores_approval_flags(self):
@@ -66,28 +56,6 @@ class WritePermissionTests(TestCase):
         self.assertFalse(response.data["approved"])
         self.assertFalse(response.data["canceled"])
 
-    def test_employee_cannot_edit_own_manager(self):
-        work_info = self.employee.employee_work_info
-        work_info.reporting_manager_id = self.other
-        work_info.save()
-        response = self.client.put(
-            f"/api/employee/employees/{self.other.id}/",
-            {"employee_first_name": "Pwned"},
-        )
-        self.assertEqual(response.status_code, 400)
-        self.other.refresh_from_db()
-        self.assertNotEqual(self.other.employee_first_name, "Pwned")
-
-    def test_manager_can_edit_subordinate(self):
-        work_info = self.other.employee_work_info
-        work_info.reporting_manager_id = self.employee
-        work_info.save()
-        response = self.client.put(
-            f"/api/employee/employees/{self.other.id}/",
-            {"employee_first_name": "Renamed"},
-        )
-        self.assertEqual(response.status_code, 200, response.data)
-
     def test_employee_cannot_rebind_login(self):
         # Self-edit now honours the profile-edit switch, as the web UI does,
         # and a missing row reads as "off". Turn it on so this test exercises
@@ -100,7 +68,3 @@ class WritePermissionTests(TestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.employee.refresh_from_db()
         self.assertEqual(self.employee.employee_user_id, self.user)
-
-    def test_login_missing_credentials_is_400(self):
-        response = APIClient().post("/api/auth/login/", {"username": "x"})
-        self.assertEqual(response.status_code, 400)

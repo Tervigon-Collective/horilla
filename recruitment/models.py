@@ -9,6 +9,7 @@ import ast
 import json
 import os
 import re
+import secrets
 from datetime import datetime, timezone
 from functools import lru_cache
 from urllib.parse import urlencode
@@ -18,6 +19,7 @@ import django
 import requests
 from django import forms
 from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.files.storage import default_storage
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -774,6 +776,7 @@ class Candidate(HorillaModel):
         bases=[
             HorillaAuditInfo,
         ],
+        excluded_fields=["portal_password"],
     )
     sequence = models.IntegerField(null=True, default=0)
 
@@ -784,6 +787,16 @@ class Candidate(HorillaModel):
         default="not_sent",
         editable=False,
         verbose_name=_("Offer Letter Status"),
+    )
+    # Hash of the password the candidate logs in to the application tracking
+    # page with. Empty until an invitation has been sent; set only by
+    # `issue_portal_password`, never through a form.
+    portal_password = models.CharField(
+        max_length=128,
+        null=True,
+        blank=True,
+        editable=False,
+        verbose_name=_("Portal Password"),
     )
     objects = HorillaCompanyManager(related_company_field="recruitment_id__company_id")
     last_updated = models.DateField(null=True, auto_now=True)
@@ -797,6 +810,39 @@ class Candidate(HorillaModel):
 
     def __str__(self):
         return f"{self.name}"
+
+    PORTAL_PASSWORD_LENGTH = 10
+    # No look-alikes (0/O, 1/l/I) so the password survives being read off an email.
+    PORTAL_PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+    @classmethod
+    def generate_portal_password(cls):
+        """
+        A new random password for the application tracking page (not stored).
+        """
+        return "".join(
+            secrets.choice(cls.PORTAL_PASSWORD_ALPHABET)
+            for _position in range(cls.PORTAL_PASSWORD_LENGTH)
+        )
+
+    def issue_portal_password(self, raw_password):
+        """
+        Make `raw_password` the one password that opens the tracking page,
+        replacing any earlier one. Only its hash is kept. Written with
+        `update()` so it neither records a history entry nor fires the
+        automations a candidate save does.
+        """
+        hashed = make_password(raw_password)
+        type(self)._base_manager.filter(pk=self.pk).update(portal_password=hashed)
+        self.portal_password = hashed
+
+    def check_portal_password(self, raw_password):
+        """
+        Whether `raw_password` is this candidate's tracking page password.
+        """
+        return bool(self.portal_password) and check_password(
+            raw_password, self.portal_password
+        )
 
     def stage_drop_down(self):
         """
@@ -1054,6 +1100,12 @@ class Candidate(HorillaModel):
         url = reverse_lazy("candidate-conversion", kwargs={"cand_id": self.pk})
         return url
 
+    def get_send_mail_url(self):
+        """
+        This method to get send mail url of the candidate
+        """
+        return reverse_lazy("send-mail", kwargs={"cand_id": self.pk})
+
     def get_add_to_skill(self):
         """
         This method to get add to talent pool employee url
@@ -1096,6 +1148,12 @@ class Candidate(HorillaModel):
         """
         url = reverse_lazy("rec-candidate-delete", kwargs={"cand_id": self.pk})
         return url
+
+    def get_list_url(self):
+        """
+        This method to get the candidate list page url
+        """
+        return reverse_lazy("candidate-view")
 
     def get_self_tracking_url(self):
         """
@@ -1260,7 +1318,7 @@ class Candidate(HorillaModel):
         if self.pk:
             previous = (
                 Candidate.objects.filter(pk=self.pk)
-                .values("recruitment_id", "job_position_id")
+                .values("recruitment_id", "job_position_id", "stage_id")
                 .first()
             )
             if previous:
@@ -1268,6 +1326,17 @@ class Candidate(HorillaModel):
                     previous["recruitment_id"] != self.recruitment_id_id
                     or previous["job_position_id"] != self.job_position_id_id
                 )
+                # Moving a candidate to a stage other than the cancelled one
+                # re-opens a rejected candidate. Without this, `canceled`
+                # stayed True and the block below snapped the candidate
+                # straight back into the cancelled stage.
+                if (
+                    self.canceled
+                    and self.stage_id_id != previous["stage_id"]
+                    and self.stage_id
+                    and self.stage_id.stage_type != "cancelled"
+                ):
+                    self.canceled = False
 
         if not self.recruitment_id.is_event_based and self.job_position_id is None:
             self.job_position_id = self.recruitment_id.job_position_id
@@ -1276,20 +1345,13 @@ class Candidate(HorillaModel):
                 raise ValidationError({"job_position_id": _("Choose valid choice")})
             if self.recruitment_id.is_event_based and self.job_position_id is None:
                 raise ValidationError({"job_position_id": _("This field is required.")})
-        if self.stage_id and self.stage_id.stage_type == "cancelled":
-            self.canceled = True
+
+        if self.stage_id is not None:
+            self.canceled = self.stage_id.stage_type == "cancelled"
+
         if self.canceled:
-            cancelled_stage = Stage.objects.filter(
-                recruitment_id=self.recruitment_id, stage_type="cancelled"
-            ).first()
-            if not cancelled_stage:
-                cancelled_stage = Stage.objects.create(
-                    recruitment_id=self.recruitment_id,
-                    stage="Cancelled Candidates",
-                    stage_type="cancelled",
-                    sequence=50,
-                )
-            self.stage_id = cancelled_stage
+            self.move_to_rejected_stage()
+
         if (
             self.converted_employee_id
             and Candidate.objects.filter(
@@ -1305,6 +1367,24 @@ class Candidate(HorillaModel):
             self.canceled = False
 
         super().save(*args, **kwargs)
+
+    def move_to_rejected_stage(self):
+        """
+        Assign the recruitment's rejected stage, creating it if missing, without saving.
+        """
+        if self.stage_id is not None and self.stage_id.stage_type == "cancelled":
+            return
+        rejected_stage = Stage.objects.filter(
+            recruitment_id=self.recruitment_id, stage_type="cancelled"
+        ).first()
+        if not rejected_stage:
+            rejected_stage = Stage.objects.create(
+                recruitment_id=self.recruitment_id,
+                stage="Rejected Candidates",
+                stage_type="cancelled",
+                sequence=50,
+            )
+        self.stage_id = rejected_stage
 
     def last_email(self):
         """
@@ -1508,6 +1588,16 @@ class RejectedCandidate(HorillaModel):
             HorillaAuditInfo,
         ],
     )
+
+    def save(self, *args, **kwargs):
+        """
+        Move the candidate to the rejected stage when a rejection record is first created.
+        """
+        is_new = self._state.adding
+        super().save(*args, **kwargs)
+        if is_new and not self.candidate_id.canceled:
+            self.candidate_id.move_to_rejected_stage()
+            self.candidate_id.save()
 
     def __str__(self) -> str:
         reasons = ", ".join(self.reject_reason_id.values_list("title", flat=True))

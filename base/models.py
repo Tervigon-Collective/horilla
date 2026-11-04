@@ -2412,6 +2412,40 @@ class MultipleApprovalCondition(HorillaModel):
 
         return managers
 
+    def get_description(self):
+        """
+        Plain-language summary of this approval rule, for the detail view --
+        what has to be true, and who has to approve it, in one sentence.
+        """
+        condition = _("%(field)s %(operator)s %(value)s") % {
+            "field": self.get_condition_field() or "",
+            "operator": (self.get_condition_operator() or "").lower(),
+            "value": self.get_condition_value() or "",
+        }
+        from base.templatetags.basefilters import readable
+
+        manager_names = [
+            (
+                manager.get_full_name()
+                if hasattr(manager, "get_full_name")
+                else readable(str(manager)).strip()
+            )
+            for manager in self.approval_managers()
+        ]
+        if manager_names:
+            return _(
+                "For the %(department)s department, when %(condition)s, "
+                "approval is required in order from: %(managers)s."
+            ) % {
+                "department": self.department,
+                "condition": condition,
+                "managers": ", then ".join(manager_names),
+            }
+        return _(
+            "For the %(department)s department, when %(condition)s, "
+            "approval is required, but no managers are configured yet."
+        ) % {"department": self.department, "condition": condition}
+
 
 class MultipleApprovalManagers(models.Model):
     """
@@ -3133,7 +3167,7 @@ class PenaltyAccounts(HorillaModel):
             verbose_name=_("Leave type"),
         )
         minus_leaves = models.FloatField(
-            default=0.0, null=True, verbose_name=_("Minus Leaves")
+            default=0.0, null=True, verbose_name=_("Deduct Leaves")
         )
         deduct_from_carry_forward = models.BooleanField(
             default=False, verbose_name=_("Deduct from Carry Forward")
@@ -3146,6 +3180,12 @@ class PenaltyAccounts(HorillaModel):
 
     penalty_amount = models.FloatField(
         default=0.0, null=True, verbose_name=_("Penalty Amount")
+    )
+    additional_info = models.JSONField(
+        default=dict,
+        blank=True,
+        editable=False,
+        verbose_name=_("Additional Info"),
     )
 
     def get_delete_url(self):
@@ -3162,10 +3202,32 @@ class PenaltyAccounts(HorillaModel):
         return self.pk
 
     def penalty_type_col(self):
-        if apps.is_installed("attendance"):
-            if self.late_early_id:
-                return "Late come or Early out Penalty"
+        if apps.is_installed("attendance") and self.late_early_id:
+            return "Late come or Early out Penalty"
+        if apps.is_installed("leave") and self.leave_request_id:
             return "Leave Penalty"
+        return "Manual Penalty"
+
+    def penalty_reference_col(self):
+        """Describe the late come / early out record or leave request this penalty was applied for."""
+        if apps.is_installed("attendance") and self.late_early_id:
+            late_early = self.late_early_id
+            return (
+                f"{late_early.get_type()} - {late_early.attendance_id.attendance_date}"
+            )
+        if apps.is_installed("leave") and self.leave_request_id:
+            leave = self.leave_request_id
+            end_date = leave.end_date or leave.start_date
+            return f"{leave.leave_type_id} - {leave.start_date} to {end_date}"
+        return "-"
+
+    def penalty_date_col(self):
+        """Return the attendance date or leave start date this penalty was applied for."""
+        if apps.is_installed("attendance") and self.late_early_id:
+            return self.late_early_id.attendance_id.attendance_date
+        if apps.is_installed("leave") and self.leave_request_id:
+            return self.leave_request_id.start_date
+        return self.created_at.date() if self.created_at else "-"
 
     def clean(self) -> None:
         super().clean()

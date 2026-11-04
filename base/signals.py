@@ -23,6 +23,7 @@ from base.models import (
     PenaltyAccounts,
 )
 from employee.models import Employee, Policy
+from horilla.client_ip import client_ip
 from horilla.methods import get_horilla_model_class
 
 
@@ -98,6 +99,14 @@ def create_deduction_cutleave_from_penalty(sender, instance, created, **kwargs):
             penalty.specific_employees.add(instance.employee_id)
             penalty.save()
 
+            instance.additional_info = {
+                **(instance.additional_info or {}),
+                "deduction_ids": [penalty.pk],
+            }
+            sender._base_manager.filter(pk=instance.pk).update(
+                additional_info=instance.additional_info
+            )
+
         if (
             apps.is_installed("leave")
             and instance.leave_type_id
@@ -126,49 +135,44 @@ def delete_deduction_cutleave_from_penalty(sender, instance, **kwargs):
     if apps.is_installed("payroll"):
         Deduction = get_horilla_model_class(app_label="payroll", model="deduction")
 
-        # A CASCADE delete of the related AttendanceLateComeEarlyOut (e.g.
-        # reset_backfilled_rows_before_reload) deletes this PenaltyAccounts
-        # row as part of the same operation, before this signal fires --
-        # the FK id column is still set, but fetching the related row
-        # raises DoesNotExist instead of returning None like a plain
-        # missing FK would. Resolve it once, tolerating that case, instead
-        # of querying it fresh (and risking the same crash) at each of the
-        # two call sites below.
-        late_early = None
-        if instance.late_early_id_id:
-            try:
-                late_early = instance.late_early_id
-            except ObjectDoesNotExist:
-                late_early = None
-
-        if late_early:
-            title = f"{late_early.get_type_display()} penalty"
-        elif instance.leave_request_id:
-            title = f"Leave penalty {instance.leave_request_id.end_date}"
+        deduction_ids = (instance.additional_info or {}).get("deduction_ids")
+        if deduction_ids:
+            for deduction in Deduction._base_manager.filter(pk__in=deduction_ids):
+                deduction.delete()
         else:
-            title = f"Penalty on {datetime.today()}"
+            late_early = None
+            if instance.late_early_id_id:
+                try:
+                    late_early = instance.late_early_id
+                except ObjectDoesNotExist:
+                    late_early = None
 
-        # Attempt to retrieve the deduction specifically associated with the penalty account
-        deductions = Deduction.objects.filter(
-            specific_employees=instance.employee_id,
-            amount=instance.penalty_amount,
-            title=title,
-        )
+            if late_early:
+                title = f"{late_early.get_type_display()} penalty"
+            elif instance.leave_request_id:
+                title = f"Leave penalty {instance.leave_request_id.end_date}"
+            else:
+                title = f"Penalty on {datetime.today()}"
 
-        # If you have a date or other unique field, add it to the filter
-        if late_early:
-            deductions = deductions.filter(
-                one_time_date=late_early.attendance_id.attendance_date
+            deductions = Deduction.objects.filter(
+                specific_employees=instance.employee_id,
+                amount=instance.penalty_amount,
+                title=title,
             )
-        elif instance.leave_request_id:
-            deductions = deductions.filter(
-                one_time_date=instance.leave_request_id.end_date
-            )
-        else:
-            deductions = deductions.filter(one_time_date=datetime.today())
 
-        for deduction in deductions:
-            deduction.delete()
+            if late_early:
+                deductions = deductions.filter(
+                    one_time_date=late_early.attendance_id.attendance_date
+                )
+            elif instance.leave_request_id:
+                deductions = deductions.filter(
+                    one_time_date=instance.leave_request_id.end_date
+                )
+            else:
+                deductions = deductions.filter(one_time_date=datetime.today())
+
+            for deduction in deductions:
+                deduction.delete()
 
     if apps.is_installed("leave") and instance.leave_type_id and instance.minus_leaves:
         available = instance.employee_id.available_leave.filter(
@@ -296,6 +300,15 @@ _DEFAULT_HRMS_GROUPS = {
             "employee": ("view",),
             "base": ("view",),
         },
+        # Shift planning is attendance work: the Roster Planner is limited to
+        # holders of change_roster (everyone else sees only their own reports).
+        "extra_permissions": (
+            "base.add_roster",
+            "base.change_roster",
+            "base.delete_roster",
+            "base.add_rosterpublishlog",
+            "base.change_rosterpublishlog",
+        ),
     },
     "Leave Manager": {
         "apps": ("leave", "employee"),
@@ -416,6 +429,18 @@ def _resolve_group_permissions(config):
                     codename__startswith=f"{action}_",
                 ).values_list("id", flat=True)
             )
+
+    # Individual permissions a group needs beyond its app-wide actions, as
+    # "app_label.codename". Skipped when the app is not installed yet.
+    for dotted in config.get("extra_permissions", ()):
+        app_label, codename = dotted.split(".", 1)
+        if not _is_app_available(app_label):
+            continue
+        permission_ids.extend(
+            Permission.objects.filter(
+                content_type__app_label=app_label, codename=codename
+            ).values_list("id", flat=True)
+        )
 
     # Admin also needs Django auth group/permission management
     if config.get("apps") == "__all__" and _is_app_available("auth"):
@@ -614,10 +639,13 @@ def log_login_failed(sender, credentials, request, **kwargs):
     ban_duration = getattr(settings, "FAIL2BAN_BAN_TIME", 300)
 
     username = credentials.get("username", "unknown")
-    ip = request.META.get("REMOTE_ADDR", "unknown")
-    session_key = (
-        request.session.session_key or request.session._get_or_create_session_key()
-    )
+    ip = client_ip(request) or "unknown"
+    # Attempts and bans are tracked by session key, so the client must keep
+    # one session from its first failed login on. The middleware doesn't
+    # create sessions, and an unsaved key would not reach the client.
+    if not request.session.session_key:
+        request.session.create()
+    session_key = request.session.session_key
 
     # Check if currently banned
     if session_key in ban_time and ban_time[session_key] > time.time():
@@ -672,9 +700,11 @@ class Fail2BanMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        # Only a session that failed a login can be banned, and
+        # log_login_failed creates that one. Creating a session here wrote a
+        # row for every request without a cookie (health checks, devices,
+        # scripts), and such a request was never bannable anyway.
         session_key = request.session.session_key
-        if not session_key:
-            request.session.create()
 
         # Check ban and enforce it
         if session_key in ban_time and ban_time[session_key] > time.time():

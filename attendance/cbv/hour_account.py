@@ -13,6 +13,7 @@ from django.utils.decorators import method_decorator
 from django.utils.translation import gettext_lazy as _
 
 from attendance.filters import AttendanceOverTimeFilter
+from base.decorators import manager_can_enter
 from attendance.forms import AttendanceOverTimeExportForm, AttendanceOverTimeForm
 from attendance.models import AttendanceOverTime
 from base.methods import (
@@ -23,7 +24,11 @@ from base.methods import (
 )
 from employee.models import EmployeeWorkInformation
 from horilla.methods import handle_no_permission
-from horilla_views.cbv_methods import hx_request_required, login_required
+from horilla_views.cbv_methods import (
+    EmployeeScopeMixin,
+    hx_request_required,
+    login_required,
+)
 from horilla_views.generic.cbv.views import (
     HorillaDetailedView,
     HorillaFormView,
@@ -244,10 +249,16 @@ class HourAccountDetailView(EmployeeRecordAccessMixin, HorillaDetailedView):
 
 
 @method_decorator(login_required, name="dispatch")
-class HourAccountFormView(HorillaFormView):
+@method_decorator(
+    manager_can_enter("attendance.add_attendanceovertime"), name="dispatch"
+)
+class HourAccountFormView(EmployeeScopeMixin, HorillaFormView):
     """
     Form View
     """
+
+    scope_perm = "attendance.add_attendanceovertime"
+    scope_include_self = False
 
     model = AttendanceOverTime
     form_class = AttendanceOverTimeForm

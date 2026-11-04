@@ -166,21 +166,15 @@ def get_diff_dict(first_dict, other_dict, model=None):
 
 def get_client_ip(request):
     """
-    The caller's IP, honoring only as many proxy hops as this deployment has
-    declared trustworthy (AXES_PROXY_COUNT) -- the same setting django-axes
-    itself uses for lockouts. Trusting X-Forwarded-For unconditionally lets
-    any client claim to be calling from an allowed office network, since
-    that header is attacker-supplied unless a trusted reverse proxy is
-    known to overwrite rather than append to it.
+    The caller's IP, the same address django-axes uses for lockouts
+    (horilla.client_ip): X-Forwarded-For counts only when the connection comes
+    from a trusted reverse proxy (HORILLA_TRUSTED_PROXIES). Trusting the
+    header unconditionally lets any client claim to be calling from an
+    allowed office network, since it is attacker-supplied.
     """
-    from ipware import get_client_ip as _get_client_ip
+    from horilla.client_ip import client_ip
 
-    ip, _is_routable = _get_client_ip(
-        request,
-        proxy_count=settings.AXES_IPWARE_PROXY_COUNT,
-        request_header_order=settings.AXES_IPWARE_META_PRECEDENCE_ORDER,
-    )
-    return ip or request.META.get("REMOTE_ADDR")
+    return client_ip(request)
 
 
 def geofence_denial_web(request, company):
@@ -204,8 +198,13 @@ def geofence_denial_web(request, company):
     from geofencing.models import GeoFencing
 
     if company is None:
+        # "All companies" is selected, so the clock-in/out view has no company of its own. The
+        # punch still belongs to the employee, whose own company decides which fence applies.
+        employee = getattr(request.user, "employee_get", None)
+        company = employee.get_company() if employee else None
+    if company is None:
         return None
-    fence = GeoFencing.objects.filter(company_id=company).first()
+    fence = GeoFencing.for_company(company)
     if fence is None or not fence.start:
         return None
 
@@ -256,6 +255,15 @@ def shift_schedule_today(day, shift):
         start_time_sec = strtime_seconds(schedule_today.start_time.strftime("%H:%M"))
         end_time_sec = strtime_seconds(schedule_today.end_time.strftime("%H:%M"))
     return (minimum_hour, start_time_sec, end_time_sec)
+
+
+def real_overtime_seconds(worked, minimum_hour, overtime_second):
+    """The stored overtime, held to what was really worked beyond the minimum hours."""
+    stored = overtime_second or 0
+    if not stored:
+        return 0
+    minimum = strtime_seconds(minimum_hour) if minimum_hour else 0
+    return min(stored, max(0, (worked or 0) - minimum))
 
 
 def overtime_calculation(attendance):

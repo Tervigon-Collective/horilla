@@ -9,9 +9,12 @@ from leave.methods import decide_leave_cancellation, request_leave_cancellation
 from leave.models import AvailableLeave, LeaveRequest, LeaverequestComment, LeaveType
 
 
-class CancellationWorkflowTests(TestCase):
+class CancellationFixtureMixin:
+    """Shared fixtures; mixed into each test class so every test runs once."""
+
     @classmethod
     def setUpTestData(cls):
+        super().setUpTestData()
         company = make_company("Cancel Co")
         cls.owner_user = make_user("cancel_owner", password="secret123")
         cls.owner = make_employee(
@@ -60,6 +63,8 @@ class CancellationWorkflowTests(TestCase):
         self.available.refresh_from_db()
         return self.available.available_days
 
+
+class CancellationWorkflowTests(CancellationFixtureMixin, TestCase):
     def test_request_keeps_leave_in_force(self):
         leave, error = request_leave_cancellation(
             self.leave.pk, "plans changed", self.owner
@@ -131,7 +136,7 @@ class CancellationWorkflowTests(TestCase):
         self.assertEqual(records(), 0)
 
 
-class CancellationViewPermissionTests(CancellationWorkflowTests):
+class CancellationViewPermissionTests(CancellationFixtureMixin, TestCase):
     def _post(self, user, name, **kw):
         self.client.force_login(user)
         from django.urls import reverse
@@ -149,12 +154,15 @@ class CancellationViewPermissionTests(CancellationWorkflowTests):
         self._post(self.owner_user, "user-request-cancel", data={"reason": "x"})
         url = reverse("leave-cancellation-reject", kwargs={"id": self.leave.pk})
         self.client.force_login(self.manager_user)
-        self.assertContains(
-            self.client.get(url, HTTP_HX_REQUEST="true"), "Reason for Rejection"
-        )
+        # The form is recognised by its reason field. The visible label was removed from the modal (the modal
+        # title carries it), so the textarea gets its accessible name from aria-label.
+        response = self.client.get(url, HTTP_HX_REQUEST="true")
+        self.assertContains(response, 'name="reason"')
+        self.assertContains(response, 'aria-label="Rejection Reason"')
+        self.assertNotContains(response, "<label")
         self.client.force_login(self.other_user)
         self.assertNotContains(
-            self.client.get(url, HTTP_HX_REQUEST="true"), "Reason for Rejection"
+            self.client.get(url, HTTP_HX_REQUEST="true"), 'name="reason"'
         )
 
     def test_non_owner_cannot_request(self):

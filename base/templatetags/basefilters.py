@@ -5,6 +5,7 @@ import bleach
 from bleach.css_sanitizer import CSSSanitizer
 from django import template
 from django.core.paginator import Page, Paginator
+from django.utils.html import escapejs
 from django.utils.safestring import mark_safe
 
 from base.methods import get_pagination
@@ -184,12 +185,14 @@ def is_manager_of(user, instance, field_name="employee_id"):
     if not hasattr(user, "_horilla_is_manager_of_cache"):
         user._horilla_is_manager_of_cache = {}
     cache = user._horilla_is_manager_of_cache
-    key = (getattr(employee, "id", None), getattr(target_employee, "id", None))
-    if key not in cache:
-        cache[key] = EmployeeWorkInformation.objects.filter(
-            reporting_manager_id=employee, employee_id=target_employee
-        ).exists()
-    return cache[key]
+    manager_id = getattr(employee, "id", None)
+    if manager_id not in cache:
+        cache[manager_id] = set(
+            EmployeeWorkInformation.objects.filter(
+                reporting_manager_id=employee
+            ).values_list("employee_id", flat=True)
+        )
+    return getattr(target_employee, "id", None) in cache[manager_id]
 
 
 @register.filter(name="is_reportingmanager")
@@ -359,6 +362,31 @@ def unique_breadcrumbs(breadcrumbs):
             seen.add(name)
             unique.append(crumb)
     return unique
+
+
+@register.filter(name="collapse_breadcrumbs")
+def collapse_breadcrumbs(crumbs, threshold=4):
+    """
+    Group a long trail for display: the first crumb, the steps in between folded into a "+N"
+    list, and the last two (the parent and the page itself). A trail of ``threshold`` or fewer
+    is left whole.
+    """
+    crumbs = list(crumbs)
+    if len(crumbs) <= int(threshold):
+        return {
+            "collapsed": False,
+            "all": crumbs,
+            "first": None,
+            "hidden": [],
+            "tail": [],
+        }
+    return {
+        "collapsed": True,
+        "all": crumbs,
+        "first": crumbs[0],
+        "hidden": crumbs[1:-2],
+        "tail": crumbs[-2:],
+    }
 
 
 @register.filter(name="readable")
@@ -628,3 +656,12 @@ def config_perms(user):
                 if user.has_perm(perm):
                     return True
     return False
+
+
+@register.filter
+def escapejs_template(value):
+    """
+    ``escapejs`` for text written inside a JavaScript template literal: also
+    escapes ``$``, which ``escapejs`` leaves alone and which starts ``${...}``.
+    """
+    return mark_safe(escapejs(value).replace("$", "\\u0024"))

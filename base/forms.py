@@ -37,7 +37,7 @@ from django.utils.html import strip_tags
 from django.utils.http import urlsafe_base64_encode
 from django.utils.translation import gettext_lazy as _
 
-from base.methods import get_session_company, reload_queryset
+from base.methods import export_field_label, get_session_company, reload_queryset
 from base.models import (
     Announcement,
     AnnouncementComment,
@@ -920,15 +920,9 @@ class JobPositionMultiForm(ModelForm):
     JobPosition model's form
     """
 
-    department_id = HorillaMultiSelectField(
+    department_id = forms.ModelMultipleChoiceField(
         queryset=Department.objects.all(),
-        label=JobPosition._meta.get_field("department_id").verbose_name,
-        widget=forms.SelectMultiple(
-            attrs={
-                "class": "oh-select oh-select2 w-100",
-                "style": "height:45px;",
-            }
-        ),
+        label=_("Department"),
     )
 
     class Meta:
@@ -1801,18 +1795,20 @@ class EmployeeShiftScheduleForm(ModelForm):
         Validation to day field
         """
         if not self.instance.pk:
-            days = self.cleaned_data["day"]
-            for day in days:
-                attendance = EmployeeShiftSchedule.objects.filter(
-                    day=day, shift_id=self.data["shift_id"]
-                ).first()
-                if attendance is not None:
-                    raise ValidationError(
-                        _("Shift schedule is already exist for {day}").format(
-                            day=_(day.day)
+            days = self.cleaned_data.get("day")
+            shift_id = self.data.get("shift_id")
+            if days and shift_id:
+                for day in days:
+                    attendance = EmployeeShiftSchedule.objects.filter(
+                        day=day, shift_id=shift_id
+                    ).first()
+                    if attendance is not None:
+                        raise ValidationError(
+                            _("Shift schedule is already exist for {day}").format(
+                                day=_(day.day)
+                            )
                         )
-                    )
-            if days.first() is None:
+            if not days or days.first() is None:
                 raise ValidationError(_("Employee not chosen"))
             return days.first()
 
@@ -2569,7 +2565,12 @@ class ResetPasswordForm(SetPasswordForm):
             attrs={
                 "autocomplete": "new-password",
                 "placeholder": _("Enter Strong Password"),
-                "class": "oh-input oh-input--password w-100 mb-2",
+                "class": (
+                    "oh-input--password text-color-600 p-3 pr-[40px] w-full border "
+                    "border-dark-50 rounded-md mt-1 focus-visible:outline-0 "
+                    "placeholder:text-[#00000041] placeholder:font-medium text-xs "
+                    "[transition:.3s] focus:border-primary-600"
+                ),
             }
         ),
         help_text=_("Enter your new password."),
@@ -2581,7 +2582,12 @@ class ResetPasswordForm(SetPasswordForm):
             attrs={
                 "autocomplete": "new-password",
                 "placeholder": _("Re-Enter Password"),
-                "class": "oh-input oh-input--password w-100 mb-2",
+                "class": (
+                    "oh-input--password text-color-600 p-3 pr-[40px] w-full border "
+                    "border-dark-50 rounded-md mt-1 focus-visible:outline-0 "
+                    "placeholder:text-[#00000041] placeholder:font-medium text-xs "
+                    "[transition:.3s] focus:border-primary-600"
+                ),
             }
         ),
         help_text=_("Enter the same password as before, for verification."),
@@ -2633,7 +2639,7 @@ excluded_fields = [
 class ShiftRequestColumnForm(forms.Form):
     model_fields = ShiftRequest._meta.get_fields()
     field_choices = [
-        (field.name, field.verbose_name)
+        (field.name, export_field_label(field.verbose_name))
         for field in model_fields
         if hasattr(field, "verbose_name") and field.name not in excluded_fields
     ]
@@ -2654,7 +2660,7 @@ class ShiftRequestColumnForm(forms.Form):
 class WorkTypeRequestColumnForm(forms.Form):
     model_fields = WorkTypeRequest._meta.get_fields()
     field_choices = [
-        (field.name, field.verbose_name)
+        (field.name, export_field_label(field.verbose_name))
         for field in model_fields
         if hasattr(field, "verbose_name") and field.name not in excluded_fields
     ]
@@ -2675,7 +2681,7 @@ class WorkTypeRequestColumnForm(forms.Form):
 class RotatingShiftAssignExportForm(forms.Form):
     model_fields = RotatingShiftAssign._meta.get_fields()
     field_choices = [
-        (field.name, field.verbose_name)
+        (field.name, export_field_label(field.verbose_name))
         for field in model_fields
         if hasattr(field, "verbose_name") and field.name not in excluded_fields
     ]
@@ -2697,7 +2703,7 @@ class RotatingShiftAssignExportForm(forms.Form):
 class RotatingWorkTypeAssignExportForm(forms.Form):
     model_fields = RotatingWorkTypeAssign._meta.get_fields()
     field_choices = [
-        (field.name, field.verbose_name)
+        (field.name, export_field_label(field.verbose_name))
         for field in model_fields
         if hasattr(field, "verbose_name") and field.name not in excluded_fields
     ]
@@ -2815,6 +2821,24 @@ class DynamicMailConfForm(ModelForm):
     # def clean(self):
     #     from_mail = self.from_email
     #     return super().clean()
+    def full_clean(self):
+        """
+        `company_id` is a hidden field and the form never shows a hidden field's
+        errors, so a company that already has its mail server (the field is
+        unique) made Save fail without a word. Show that error on the form.
+        """
+        super().full_clean()
+        company_errors = self._errors.pop("company_id", None) if self._errors else None
+        for error in company_errors.as_data() if company_errors else []:
+            if error.code == "unique":
+                error = ValidationError(
+                    _(
+                        "A mail server is already set up for this company. "
+                        "Edit the existing one instead."
+                    )
+                )
+            self.add_error(None, error)
+
     def as_p(self):
         """
         Render the form fields as HTML table rows with Bootstrap styling.
@@ -2936,6 +2960,14 @@ class MultipleApproveConditionForm(ModelForm):
         "multi_approval_manager": 12,
     }
 
+    # "Contains" (icontains) is left out here deliberately -- every
+    # condition_field this form offers (base/models.py's FIELD_CHOICE) is a
+    # numeric/choice value (days, leave type, etc.), not free text, so a
+    # substring match never made sense as a selectable operator. Still kept
+    # in base/models.py's own CONDITION_CHOICE (the model field's full
+    # choice list), so an existing record already saved with it continues
+    # to display correctly via get_condition_operator() -- only new/edited
+    # conditions can no longer choose it from this form.
     CONDITION_CHOICE = [
         ("equal", _("Equal (==)")),
         ("notequal", _("Not Equal (!=)")),
@@ -2944,7 +2976,6 @@ class MultipleApproveConditionForm(ModelForm):
         ("gt", _("Greater Than (>)")),
         ("le", _("Less Than or Equal To (<=)")),
         ("ge", _("Greater Than or Equal To (>=)")),
-        ("icontains", _("Contains")),
     ]
 
     multi_approval_manager = forms.ChoiceField(
@@ -2960,7 +2991,7 @@ class MultipleApproveConditionForm(ModelForm):
                 "class": "oh-select oh-select-2 mb-2",
                 "hx-trigger": "change",
                 "hx-target": "#conditionValueDiv",
-                "hx-get": "condition-value-fields",
+                "hx-get": reverse_lazy("condition-value-fields"),
             },
         ),
         label=_("Condition Operator"),
@@ -2975,9 +3006,11 @@ class MultipleApproveConditionForm(ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        choices = [("reporting_manager_id", _("Reporting Manager"))] + [
-            (employee.pk, str(employee)) for employee in Employee.objects.all()
-        ]
+        choices = (
+            [("", "---------")]
+            + [("reporting_manager_id", _("Reporting Manager"))]
+            + [(employee.pk, str(employee)) for employee in Employee.objects.all()]
+        )
         self.fields["multi_approval_manager"].choices = choices
 
 
@@ -3341,19 +3374,19 @@ class PassWordResetForm(forms.Form):
     @staticmethod
     def get_branding(employee):
         """
-        The name and logo the mail is sent under: the employee's company when
-        WHITE_LABELLING is on (else the headquarters company), Horilla when it
-        is off or no company has one.
+        The name and logo the mail is sent under: the headquarters company
+        when WHITE_LABELLING is on, Horilla when it is off or there is no HQ
+        company.
+
+        Always the HQ company -- never the employee's own company or
+        whichever company a user has switched to in the company picker, so
+        a white-labelled client's mail always reads as coming from their
+        own organisation regardless of who triggers it.
         """
         name = "Horilla"
         logo_path = finders.find("images/ui/horilla-sticker-round.png")
         if getattr(settings, "WHITE_LABELLING", False):
-            company = None
-            try:
-                company = employee.get_company()
-            except Exception:
-                company = None
-            company = company or Company.objects.filter(hq=True).last()
+            company = Company.objects.filter(hq=True).last()
             if company:
                 name = company.company
                 icon = company.icon
@@ -3781,6 +3814,7 @@ class PenaltyAccountForm(ModelForm):
     def __init__(self, *args, **kwargs):
         employee = kwargs.pop("employee", None)
         super().__init__(*args, **kwargs)
+        self.employee = employee
         if apps.is_installed("leave") and employee:
             LeaveType = get_horilla_model_class(app_label="leave", model="leavetype")
             available_leaves = employee.available_leave.all()
@@ -3788,6 +3822,68 @@ class PenaltyAccountForm(ModelForm):
                 id__in=available_leaves.values_list("leave_type_id", flat=True)
             )
             self.fields["leave_type_id"].queryset = assigned_leave_types
+
+    def clean(self):
+        """Reject deduct leaves that exceed the employee's available or carry forward balance."""
+        cleaned_data = super().clean()
+        leave_type = cleaned_data.get("leave_type_id")
+        minus_leaves = cleaned_data.get("minus_leaves")
+        if not (apps.is_installed("leave") and self.employee and leave_type):
+            return cleaned_data
+        if not minus_leaves:
+            return cleaned_data
+
+        self.instance.leave_type_id = leave_type
+        self.instance.minus_leaves = minus_leaves
+
+        available = self.employee.available_leave.filter(
+            leave_type_id=leave_type
+        ).first()
+        if not available:
+            raise ValidationError(
+                {
+                    "leave_type_id": _(
+                        "This employee has no balance for the selected leave type."
+                    )
+                }
+            )
+
+        unit = round(minus_leaves * 2) / 2
+        if cleaned_data.get("deduct_from_carry_forward"):
+            balance = available.carryforward_days
+            label = _("carry forward days")
+        else:
+            balance = available.available_days
+            label = _("available days")
+        if unit > balance:
+            raise ValidationError(
+                {
+                    "minus_leaves": _(
+                        "Deduct leaves cannot exceed the %(label)s (%(balance)s)."
+                    )
+                    % {"label": label, "balance": balance}
+                }
+            )
+        return cleaned_data
+
+
+class PenaltyAccountCreateForm(PenaltyAccountForm):
+    """
+    Form to add a penalty for an employee from the Penalty tab.
+    """
+
+    employee_id = forms.ModelChoiceField(
+        queryset=Employee.objects.filter(is_active=True),
+        label=_("Employee"),
+    )
+    field_order = ["employee_id"]
+
+    def clean(self):
+        employee = self.cleaned_data.get("employee_id")
+        self.employee = employee
+        if employee:
+            self.instance.employee_id = employee
+        return super().clean()
 
 
 # ---------------------------------------------------------------------------

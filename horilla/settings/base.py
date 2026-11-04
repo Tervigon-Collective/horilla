@@ -209,6 +209,7 @@ MIDDLEWARE = [
     "horilla.canonical_host.CanonicalHostMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
+    "django.middleware.gzip.GZipMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "corsheaders.middleware.CorsMiddleware",
@@ -228,6 +229,8 @@ MIDDLEWARE = [
     "horilla.horilla_middlewares.SVGSecurityMiddleware",
     "horilla.horilla_middlewares.MissingParameterMiddleware",
     "horilla.horilla_middlewares.BulkDeleteSummaryMiddleware",
+    "horilla.horilla_middlewares.ExportDownloadCookieMiddleware",
+    "horilla.horilla_middlewares.ExportOptionsMiddleware",
     "auditlog.middleware.AuditlogMiddleware",
     # Last: needs request.user from AuthenticationMiddleware, and
     # converts a PermissionDenied from the Axes backend into the
@@ -337,11 +340,6 @@ X_FRAME_OPTIONS = "SAMEORIGIN"
 # ========================================
 # TEMPLATES
 # ========================================
-# In production (DEBUG=False) these are wrapped in the cached template
-# loader so Django compiles each template once per process instead of
-# re-parsing it (and re-running horilla_dbtemplate's DB-lookup chain) on
-# every include, on every request. Left uncached in DEBUG so template
-# edits during development are picked up without restarting the server.
 _TEMPLATE_LOADERS = [
     "horilla_dbtemplate.loaders.Loader",
     ("django.template.loaders.filesystem.Loader", [BASE_DIR / THEME_APP / "templates"]),
@@ -381,11 +379,7 @@ TEMPLATES = [
                 "horilla_tour.context_processors.pending_tours_flag",
                 "horilla_crumbs.context_processors.breadcrumbs",
             ],
-            "loaders": (
-                _TEMPLATE_LOADERS
-                if DEBUG
-                else [("django.template.loaders.cached.Loader", _TEMPLATE_LOADERS)]
-            ),
+            "loaders": [("django.template.loaders.cached.Loader", _TEMPLATE_LOADERS)],
         },
     },
 ]
@@ -397,6 +391,11 @@ WSGI_APPLICATION = "horilla.wsgi.application"
 # ========================================
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = env("TIME_ZONE", default="Asia/Kolkata")
+# First day of the week for calendar-week ranges such as the Quick Date
+# "This Week" / "Last Week": 0 = Sunday, 1 = Monday ... 6 = Saturday.
+# Monday matches the attendance dashboard and the other week filters.
+# Read as text: an empty or invalid value falls back to Monday (see week_start).
+HORILLA_FIRST_DAY_OF_WEEK = env("HORILLA_FIRST_DAY_OF_WEEK", default="1")
 USE_I18N = True
 USE_TZ = True
 
@@ -518,6 +517,9 @@ TWO_FACTORS_AUTHENTICATION = False
 # When True, /ready/ returns 503 until run_scheduler has registered jobs.
 # Off by default so Docker CI (web without the scheduler service) still passes.
 HORILLA_REQUIRE_SCHEDULER = env.bool("HORILLA_REQUIRE_SCHEDULER", default=False)
+# Days of scheduler job-run history (django_apscheduler's DjangoJobExecution)
+# kept by the daily trim_scheduler_history job; older rows are deleted.
+HORILLA_SCHEDULER_HISTORY_DAYS = env.int("HORILLA_SCHEDULER_HISTORY_DAYS", default=7)
 
 SIDEBARS = [
     "employee",
@@ -564,6 +566,14 @@ DB_INIT_PASSWORD = env(
 # When False, legacy behavior: user.groups grant permissions globally.
 # Instant rollback switch: set the COMPANY_SCOPED_PERMISSIONS env var to False.
 COMPANY_SCOPED_PERMISSIONS = env.bool("COMPANY_SCOPED_PERMISSIONS", default=True)
+
+# Whether new Python tax formulas can be created, saved or test-run. Off by
+# default: a formula is code that runs on the server for every payslip, so it is
+# opt-in. Formulas already stored keep being evaluated either way, so turning
+# this off never stops a payroll run; it only stops new code going in.
+HORILLA_ALLOW_PYTHON_TAX_FORMULAS = env.bool(
+    "HORILLA_ALLOW_PYTHON_TAX_FORMULAS", default=False
+)
 
 NO_PERMISSION_MODALS = [
     "companygroupassignment",
@@ -709,17 +719,13 @@ AXES_RESET_ON_SUCCESS = True
 # Count only real failures; a lockout response is not itself a new attempt.
 AXES_LOCKOUT_TEMPLATE = None
 AXES_ENABLE_ADMIN = True
-# Behind nginx/ELB the client IP is in X-Forwarded-For. Only trust it when the
-# deployment actually sets a proxy count, otherwise a client can spoof the
-# header and dodge the IP half of the lock.
-AXES_IPWARE_PROXY_COUNT = env.int("AXES_PROXY_COUNT", default=None)
-# With no proxy count declared, ipware takes the first X-Forwarded-For value
-# as-is, so a client could send a fresh header per attempt and the IP half of
-# the lock never matches. Read the header only when AXES_PROXY_COUNT is set;
-# the shipped compose sets it to 1 for its nginx.
-AXES_IPWARE_META_PRECEDENCE_ORDER = (
-    ["HTTP_X_FORWARDED_FOR"] if AXES_IPWARE_PROXY_COUNT else []
-) + ["REMOTE_ADDR"]
+# Behind nginx the client IP is in X-Forwarded-For, but a client can write
+# that header too. horilla/client_ip.py believes it only for a connection from
+# one of these reverse proxies (IPs, CIDR ranges or hostnames; the Docker setup
+# uses "nginx"), reading the entry the proxy itself appended. Empty: no proxy,
+# the header is ignored. Also used for the attendance office-IP restriction.
+HORILLA_TRUSTED_PROXIES = env.list("HORILLA_TRUSTED_PROXIES", default=[])
+AXES_CLIENT_IP_CALLABLE = "horilla.client_ip.client_ip"
 
 
 # ========================================

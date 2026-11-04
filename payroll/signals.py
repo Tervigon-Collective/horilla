@@ -2,7 +2,7 @@ from datetime import datetime
 
 from django.apps import apps
 from django.db.models import Q
-from django.db.models.signals import m2m_changed, post_save, pre_save
+from django.db.models.signals import m2m_changed, post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from employee.models import Employee, EmployeeWorkInformation
@@ -21,6 +21,7 @@ from payroll.models.payroll_run import (  # noqa: F401
     PayrollRun,
     PayrollRunSnapshot,
 )
+from payroll.models.tax_models import PayrollSettings
 
 
 @receiver(m2m_changed, sender=EncashmentGeneralSettings.employees.through)
@@ -76,6 +77,20 @@ def employeeworkinformation_post_save(sender, instance, **_kwargs):
             )
             contract.contract_status = "active"
             contract.save()
+
+
+@receiver(post_save, sender=Allowance)
+@receiver(post_save, sender=Deduction)
+def standard_component_saved(sender, instance, **kwargs):
+    """
+    Editing a standard component (Loan, Fine, Reimbursement ...) reaches the rows it generated that
+    no payslip carries yet, so its Taxable / Pre-Tax setting applies to them and not only to new ones.
+    """
+    if kwargs.get("raw") or not (instance.is_system and instance.system_key):
+        return
+    from payroll.methods.system_sync import align
+
+    align(keys={instance.system_key})
 
 
 @receiver(post_save, sender=LoanAccount)
@@ -183,3 +198,28 @@ def create_installments(sender, instance, created, **kwargs):
                         installments.append(installment)
 
                 instance.deduction_ids.add(*installments)
+
+
+@receiver(post_save, sender=PayrollSettings)
+@receiver(post_delete, sender=PayrollSettings)
+def forget_remembered_payroll_settings(sender, **kwargs):
+    """A currency change shows at once, even later in the same request."""
+    PayrollSettings.forget_remembered()
+
+
+@receiver(post_delete, sender=Payslip)
+@receiver(post_save, sender=Payslip)
+def keep_batch_summary_current(sender, instance, created=False, **kwargs):
+    """A batch follows the payslips inside it: edits and deletes change its summary, and it goes with its last payslip."""
+    if kwargs.get("raw") or created or not instance.payroll_batch_id:
+        return
+    from payroll.models.payroll_batch import PayrollBatch
+
+    batch = PayrollBatch._base_manager.filter(pk=instance.payroll_batch_id).first()
+    if batch is None:
+        return
+    if kwargs.get("signal") is post_delete and not batch.payslips.exists():
+        # Its last payslip is gone, so there is nothing left for the batch to describe.
+        batch.delete()
+        return
+    batch.refresh_totals()

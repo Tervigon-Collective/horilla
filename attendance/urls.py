@@ -30,7 +30,7 @@ from base.forms import AttendanceAllowedIPForm
 from base.models import AttendanceAllowedIP
 from base.views import add_remove_dynamic_fields
 
-from .views import regularisation_import, summary, views
+from .views import daywise_import, regularisation_import, summary, views
 
 urlpatterns = [
     path(
@@ -581,6 +581,11 @@ urlpatterns = [
         name="update-fields-based-shift",
     ),
     path(
+        "get-shift-based-fields/",
+        views.get_shift_based_fields,
+        name="get-shift-based-fields",
+    ),
+    path(
         "update-worked-hour-field/",
         views.update_worked_hour_field,
         name="update-worked-hour-field",
@@ -688,7 +693,7 @@ urlpatterns = [
         views.delete_comment_file,
         name="delete-comment-file",
     ),
-    path("work-records/", views.work_records, name="work-records"),
+    path("work-status/", views.work_records, name="work-records"),
     path("work-record-export/", views.work_record_export, name="work-record-export"),
     path(
         "work-records-change-month/",
@@ -1089,6 +1094,11 @@ urlpatterns = [
         name="attendance-monthly-summary",
     ),
     path(
+        "monthly-summary/default-range/",
+        summary.monthly_summary_default_range,
+        name="attendance-monthly-summary-default-range",
+    ),
+    path(
         "monthly-summary/table/",
         summary.attendance_monthly_summary_table,
         name="attendance-monthly-summary-table",
@@ -1125,6 +1135,16 @@ urlpatterns = [
     # Bulk regularisation by spreadsheet: download the days awaiting a
     # decision, fill one column, upload. See regularisation_import for why the
     # template is pre-filled rather than empty.
+    path(
+        "monthly-summary/day-wise-template/",
+        daywise_import.daywise_template,
+        name="attendance-daywise-template",
+    ),
+    path(
+        "monthly-summary/day-wise-import/",
+        daywise_import.daywise_import,
+        name="attendance-daywise-import",
+    ),
     path(
         "monthly-summary/regularisation-template/",
         regularisation_import.regularisation_template,

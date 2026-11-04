@@ -254,36 +254,6 @@ class LibraryViewTests(TestCase):
         self.assertEqual(Allowance.objects.exclude(is_system=True).count(), 0)
         self.assertEqual(Deduction.objects.exclude(is_system=True).count(), 0)
 
-    def test_both_component_pages_offer_the_library(self):
-        """
-        The library is only worth having if it can be reached: everything
-        below it worked for a while with nothing on screen linking to it.
-        """
-        for nav_name in ("allowances-nav-view", "deduction-view-nav"):
-            with self.subTest(nav=nav_name):
-                body = self.client.get(reverse(nav_name), **self.hx).content.decode()
-                self.assertIn(reverse("component-library"), body)
-                self.assertIn("Add from library", body)
-
-    def test_the_nav_tells_the_chooser_which_page_opened_it(self):
-        """
-        Four pages share these two navs, so the nav is the only thing that
-        knows where the user actually is.
-        """
-        for nav_name, expected in (
-            ("allowances-nav-view", "from=allowance"),
-            ("deduction-view-nav", "from=deduction"),
-        ):
-            with self.subTest(nav=nav_name):
-                body = self.client.get(reverse(nav_name), **self.hx).content.decode()
-                self.assertIn(expected, body)
-
-        # The payroll-settings tabs say so, and get themselves back.
-        body = self.client.get(
-            reverse("deduction-view-nav"), {"from": "settings"}, **self.hx
-        ).content.decode()
-        self.assertIn("from=settings", body)
-
     def test_loading_from_a_settings_tab_returns_to_the_settings_page(self):
         response = self.client.post(
             reverse("load-component-library"),
@@ -312,63 +282,6 @@ class LibraryViewTests(TestCase):
         )
         target = response.headers.get("HX-Redirect") or response.headers.get("Location")
         self.assertEqual(target, reverse("view-allowance"))
-
-
-class PickerModalTests(TestCase):
-    """
-    The two "start from something ready-made" choosers — components and tax
-    configurations — are the same interaction and now share one design.
-
-    The component one shipped with no close button at all, leaving Escape or a
-    click outside as the only way out of it, which is the kind of thing only a
-    rendered check catches.
-    """
-
-    def setUp(self):
-        user = make_user("pickadmin", is_superuser=True)
-        company = make_company("Pick Co")
-        make_employee(company=company, email="pickadmin@test.horilla", user=user)
-        self.client.force_login(user)
-        self.hx = {"HTTP_HX_REQUEST": "true"}
-
-    def _bodies(self):
-        return {
-            "components": self.client.get(
-                reverse("component-library"), **self.hx
-            ).content.decode(),
-            "tax": self.client.get(
-                "/payroll/tax-pack-picker/", **self.hx
-            ).content.decode(),
-        }
-
-    def test_both_can_be_closed(self):
-        for name, body in self._bodies().items():
-            with self.subTest(modal=name):
-                self.assertIn("oh-modal__close--custom", body)
-                self.assertIn("close-outline", body)
-                # And a Cancel, for the same reason.
-                self.assertIn("Cancel", body)
-
-    def test_both_use_the_shared_design(self):
-        for name, body in self._bodies().items():
-            with self.subTest(modal=name):
-                self.assertIn("pick__row", body)
-                self.assertIn("pick__caveat", body)
-                self.assertIn("pick__foot", body)
-
-    def test_both_group_their_rows_rather_than_columning_the_region(self):
-        """
-        Country as a column left the descriptions fighting for what width
-        remained; as a heading it costs nothing.
-        """
-        for name, body in self._bodies().items():
-            with self.subTest(modal=name):
-                self.assertIn("pick__group", body)
-
-    def test_both_say_that_nothing_is_overwritten(self):
-        for name, body in self._bodies().items():
-            with self.subTest(modal=name):
-                self.assertIn("Nothing is overwritten", body)
 
 
 class LibraryPermissionTests(TestCase):

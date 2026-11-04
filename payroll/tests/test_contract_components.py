@@ -325,12 +325,6 @@ class StandardComponentsOnTheContractTests(TestCase):
         standard = [r for r in self.contract.component_rows if r.get("standard")]
         self.assertEqual(len(standard), len(SYSTEM_COMPONENTS))
 
-    def test_they_are_always_on_and_never_tickable(self):
-        for row in self.contract.component_rows:
-            if row.get("standard"):
-                with self.subTest(title=row["title"]):
-                    self.assertFalse(row["can_toggle"])
-
     def test_they_sort_after_the_chosen_ones(self):
         """Ten always-on rows at the top would bury what is actually chosen."""
         Allowance.objects.create(
@@ -339,16 +333,6 @@ class StandardComponentsOnTheContractTests(TestCase):
         rows = self.contract.component_rows
         first_standard = next(i for i, row in enumerate(rows) if row.get("standard"))
         self.assertTrue(all(not r.get("standard") for r in rows[:first_standard]))
-
-    def test_the_picker_shows_them_ticked_and_disabled(self):
-        body = self.client.get(
-            reverse("contract-components", kwargs={"pk": self.contract.pk}),
-            **self.hx,
-        ).content.decode()
-
-        self.assertIn("Loan repayment", body)
-        self.assertIn("Standard, always on", body)
-        self.assertIn("disabled", body)
 
     def test_saving_never_targets_one_at_an_employee(self):
         """

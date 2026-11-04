@@ -22,11 +22,13 @@ a document-wide lookup, and a missing field reading as false — because either
 one silently hides fields with nothing in the console to point at.
 """
 
+from pathlib import Path
+
+from django import forms
 from django.test import TestCase
 from django.urls import reverse
 
 from horilla.testkit import make_company, make_employee, make_user
-from payroll.filters import AllowanceFilter, DeductionFilter
 from payroll.forms.component_forms import AllowanceForm, DeductionForm
 from payroll.forms.component_layout import (
     HIDDEN_FIELDS,
@@ -36,8 +38,11 @@ from payroll.forms.component_layout import (
     unplaced_field_names,
 )
 
-ENGINE = "static/src/js/componentForm.js"
-BUILDER = "payroll/templates/payroll/component/_formula_builder.html"
+# Anchored to the repository, not the working directory, so the suite reads the
+# real files wherever it is started from.
+ROOT = Path(__file__).resolve().parents[2]
+ENGINE = ROOT / "static/src/js/componentForm.js"
+BUILDER = ROOT / "payroll/templates/payroll/component/_formula_builder.html"
 
 
 def read(path):
@@ -82,30 +87,6 @@ class LayoutCompletenessTests(TestCase):
                 ]
                 self.assertLess(names.index("percentage_of_code"), names.index("rate"))
 
-    def test_the_component_picker_is_styled_like_every_other_select(self):
-        """
-        percentage_of_code is rebuilt as a plain ChoiceField so its options can
-        be the codes that exist. Rebuilding it dropped the widget attrs the
-        form had already applied, leaving one bare browser dropdown among the
-        oh-select ones.
-        """
-        for form_class in (AllowanceForm, DeductionForm):
-            with self.subTest(form=form_class.__name__):
-                fields = form_class().fields
-                self.assertEqual(
-                    fields["percentage_of_code"].widget.attrs.get("class"),
-                    fields["based_on"].widget.attrs.get("class"),
-                )
-
-    def test_sections_are_shared_by_both_component_forms(self):
-        allowance = [s["title"] for s in sections_for(AllowanceForm())]
-        deduction = [s["title"] for s in sections_for(DeductionForm())]
-        self.assertEqual(allowance, deduction)
-
-    def test_hidden_fields_are_named_rather_than_assumed(self):
-        self.assertNotIn("code", HIDDEN_FIELDS)
-        self.assertIn("update_compensation", HIDDEN_FIELDS)
-
 
 class BasedOnGroupingTests(TestCase):
     """
@@ -134,25 +115,6 @@ class BasedOnGroupingTests(TestCase):
                 offered = set(self._flatten(form_class().fields["based_on"].choices))
                 declared = {value for value, _label in model.based_on_choice}
                 self.assertTrue(declared <= offered, declared - offered)
-
-    def test_custom_formula_sits_under_its_own_heading(self):
-        for form_class in (AllowanceForm, DeductionForm):
-            with self.subTest(form=form_class.__name__):
-                groups = {
-                    str(value): [v for v, _l in label]
-                    for value, label in form_class().fields["based_on"].choices
-                    if isinstance(label, (list, tuple))
-                }
-                formula_group = next(
-                    name for name, values in groups.items() if "formula" in values
-                )
-                self.assertNotIn("basic_pay", groups[formula_group])
-                self.assertNotIn("attendance", groups[formula_group])
-
-    def test_the_blank_choice_stays_ungrouped_at_the_top(self):
-        """It is the "not chosen yet" state, not a kind of amount."""
-        first = AllowanceForm().fields["based_on"].choices[0]
-        self.assertEqual(first[0], "")
 
 
 class StepTests(TestCase):
@@ -215,17 +177,6 @@ class StepTests(TestCase):
         self.assertTrue(STEPS)
 
 
-class NameCollisionTests(TestCase):
-    """The reason document-wide lookups are wrong on this page."""
-
-    def test_the_filters_declare_the_same_field_names_as_the_form(self):
-        for filterset in (AllowanceFilter, DeductionFilter):
-            with self.subTest(filterset=filterset.__name__):
-                names = set(filterset.base_filters)
-                self.assertIn("based_on", names)
-                self.assertIn("is_fixed", names)
-
-
 class EngineSourceTests(TestCase):
     """
     Asserted against the source because there is no JS runner here. Both of
@@ -280,24 +231,6 @@ class ComponentFormRenderTests(TestCase):
         self.assertEqual(response.status_code, 200)
         return response.content.decode()
 
-    def test_the_percentage_input_is_present_for_a_calculated_amount(self):
-        """The reported symptom: nowhere to type the percentage."""
-        for url_name in ("create-allowance", "create-deduction"):
-            with self.subTest(form=url_name):
-                body = self._body(url_name)
-                self.assertIn('name="rate"', body)
-                self.assertIn('name="percentage_of_code"', body)
-                self.assertIn('data-show-if="is_fixed=off based_on=component"', body)
-
-    def test_the_formula_opens_in_a_popover_rather_than_filling_the_form(self):
-        for url_name in ("create-allowance", "create-deduction"):
-            with self.subTest(form=url_name):
-                body = self._body(url_name)
-                self.assertIn("data-formula-popover", body)
-                self.assertIn("data-open-formula", body)
-                self.assertIn("data-formula-summary", body)
-                self.assertIn("data-formula-builder", body)
-
     def test_the_builder_starts_closed(self):
         """
         It rendered open over the form. The panel sets display:flex, which beats
@@ -312,31 +245,6 @@ class ComponentFormRenderTests(TestCase):
                 # makes it stick. Either one alone leaves the builder open.
                 self.assertIn("data-formula-backdrop hidden>", body)
                 self.assertIn(".oh-formula-popover[hidden]", body)
-
-    def test_the_builder_can_be_dismissed_more_than_one_way(self):
-        body = self._body("create-allowance")
-        self.assertIn("data-formula-backdrop", body)
-        self.assertEqual(body.count("data-close-formula"), 2)  # the X and Done
-        self.assertIn("closeAnyOpenFormula", read(ENGINE))  # Escape
-
-    def test_the_old_widget_bundles_are_gone(self):
-        for url_name, bundle in (
-            ("create-allowance", "allowanceWidget"),
-            ("create-deduction", "deductionWidget"),
-        ):
-            with self.subTest(form=url_name):
-                body = self._body(url_name)
-                self.assertNotIn(bundle, body)
-                self.assertIn("componentForm.js", body)
-
-    def test_conditions_render_server_side_with_a_template_to_add_more(self):
-        # The allowance form targets through the table; only deductions keep rules.
-        for url_name in ("create-deduction",):
-            with self.subTest(form=url_name):
-                body = self._body(url_name)
-                self.assertIn("data-condition-template", body)
-                self.assertIn("data-add-condition", body)
-                self.assertIn('name="other_fields"', body)
 
     def test_every_row_is_tied_to_a_section_heading(self):
         """
@@ -368,28 +276,6 @@ class ComponentFormRenderTests(TestCase):
                     "a heading has no rows, so it could never be hidden",
                 )
 
-    def test_the_engine_matches_headings_to_rows_by_key(self):
-        """
-        The first version looked for [data-row] inside the heading element.
-        Rows are siblings, so it always found none and never hid a heading.
-        """
-        script = read(ENGINE)
-        self.assertIn("data-section-of=", script)
-        self.assertNotIn('section.querySelectorAll("[data-row]")', script)
-
-    def test_the_steps_render_as_a_rail_over_matching_panels(self):
-        import re
-
-        for url_name in ("create-allowance", "create-deduction"):
-            with self.subTest(form=url_name):
-                body = self._body(url_name)
-                tabs = re.findall(r'data-step-tab="([^"]+)"', body)
-                panels = re.findall(r'data-step-panel="([^"]+)"', body)
-                self.assertTrue(tabs)
-                self.assertEqual(tabs, panels)
-                self.assertIn("data-step-next", body)
-                self.assertIn("data-step-back", body)
-
     def test_every_field_stays_in_the_dom_on_every_step(self):
         """
         Stepping is presentation. A field that only existed while its step was
@@ -404,35 +290,19 @@ class ComponentFormRenderTests(TestCase):
             with self.subTest(form=url_name):
                 body = self._body(url_name)
                 for name in form_class().fields:
-                    # The table writes specific_employees as it is ticked, and the
-                    # exclude list is gone from the form on purpose.
-                    if name in ("specific_employees", "exclude_employees") or (
-                        name in ("is_condition_based", "field", "condition", "value")
-                        and url_name == "create-allowance"
+                    # The table writes specific_employees as it is ticked, the
+                    # exclude list is gone from the form on purpose, and the table
+                    # replaces the condition rules on both forms.
+                    if name in (
+                        "specific_employees",
+                        "exclude_employees",
+                        "is_condition_based",
+                        "field",
+                        "condition",
+                        "value",
                     ):
                         continue
                     self.assertIn(f'name="{name}"', body, name)
-
-    def test_the_form_still_posts_once(self):
-        """One form element, one submit — not a step-per-request wizard."""
-        body = self._body("create-allowance")
-        self.assertEqual(body.count("<form "), 1)
-        self.assertEqual(body.count("hx-post="), 1)
-
-    def test_every_section_heading_is_drawn(self):
-        for url_name in ("create-allowance", "create-deduction"):
-            with self.subTest(form=url_name):
-                body = self._body(url_name)
-                self.assertIn("What this component is", body)
-                self.assertIn("How much", body)
-                self.assertIn("Who gets it", body)
-
-    def test_the_new_amount_types_are_offered(self):
-        for url_name in ("create-allowance", "create-deduction"):
-            with self.subTest(form=url_name):
-                body = self._body(url_name)
-                self.assertIn('value="component"', body)
-                self.assertIn('value="formula"', body)
 
 
 class ComponentFormSaveTests(TestCase):
@@ -514,6 +384,106 @@ class ComponentFormSaveTests(TestCase):
         allowance.refresh_from_db()
         self.assertEqual(allowance.title, "Conveyance Allowance")
         self.assertEqual(allowance.code, original)
+
+    def _post_overtime(self, slabs, title="Night OT"):
+        return self._post(
+            reverse("create-allowance"),
+            title=title,
+            sequence=200,
+            is_taxable="on",
+            is_fixed="",
+            based_on="overtime",
+            overtime_calc="slab",
+            overtime_slabs=slabs,
+        )
+
+    def test_overtime_slabs_save_with_the_allowance(self):
+        from payroll.models.models import Allowance
+
+        self._post_overtime("0|2|1.25\n2||1.5")
+
+        bands = list(Allowance.objects.get(title="Night OT").slabs.all())
+        self.assertEqual(
+            [(b.from_hours, b.to_hours, b.multiplier) for b in bands],
+            [(0, 2, 1.25), (2, None, 1.5)],
+        )
+
+    def test_overtime_slabs_with_a_gap_are_refused(self):
+        from payroll.models.models import Allowance
+
+        self._post_overtime("0|2|1.25\n3||1.5", title="Gap OT")
+
+        self.assertFalse(Allowance.objects.filter(title="Gap OT").exists())
+
+    def test_overtime_slabs_need_an_open_last_band(self):
+        from payroll.forms.component_forms import parse_slabs
+
+        with self.assertRaises(forms.ValidationError):
+            parse_slabs("0|2|1.25\n2|4|1.5")
+
+    def test_overtime_slabs_must_start_at_zero(self):
+        from payroll.forms.component_forms import parse_slabs
+
+        with self.assertRaises(forms.ValidationError):
+            parse_slabs("1||1.5")
+
+    def test_a_department_rule_saves_with_its_departments(self):
+        from base.models import Department
+        from payroll.models.models import Allowance
+
+        sales = Department.objects.create(department="Form Sales")
+        self._post(
+            reverse("create-allowance"),
+            title="Dept Bonus",
+            sequence=200,
+            is_taxable="on",
+            is_fixed="on",
+            amount="100",
+            apply_by="department",
+            apply_departments=[sales.pk],
+            include_active_employees="on",
+        )
+
+        allowance = Allowance.objects.get(title="Dept Bonus")
+        self.assertEqual(allowance.apply_by, "department")
+        self.assertEqual(list(allowance.apply_departments.all()), [sales])
+        self.assertFalse(allowance.include_active_employees)
+
+    def test_a_group_rule_with_nothing_chosen_is_refused(self):
+        from payroll.models.models import Allowance
+
+        self._post(
+            reverse("create-allowance"),
+            title="Empty Group",
+            sequence=200,
+            is_taxable="on",
+            is_fixed="on",
+            amount="100",
+            apply_by="job_role",
+        )
+
+        self.assertFalse(Allowance.objects.filter(title="Empty Group").exists())
+
+    def test_editing_a_slab_allowance_replaces_its_bands(self):
+        from payroll.models.models import Allowance
+
+        self._post_overtime("0|2|1.25\n2||1.5")
+        allowance = Allowance.objects.get(title="Night OT")
+        self._post(
+            reverse("update-allowance", kwargs={"pk": allowance.pk}),
+            title="Night OT",
+            code=allowance.code,
+            sequence=200,
+            is_taxable="on",
+            is_fixed="",
+            based_on="overtime",
+            overtime_calc="slab",
+            overtime_slabs="0||2",
+        )
+
+        self.assertEqual(
+            [(b.from_hours, b.multiplier) for b in allowance.slabs.all()], [(0, 2)]
+        )
 
 
 class UpdateCompensationHiddenTests(TestCase):

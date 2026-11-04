@@ -18,6 +18,11 @@
   border-bottom: 1px solid #cbd5e1;
   background: #f1f5f9;
 }
+/* Hovering a summary chip lights up its days and dims the rest. */
+.cal-summary-item[data-group] { cursor: default; transition: background-color .12s; }
+.cal-summary-item[data-group]:hover { background-color: #f3f4f6; }
+.cal-cell { transition: opacity .12s, filter .12s, box-shadow .12s; }
+.cal-cell.cal-dim { opacity: .2; filter: grayscale(.6); }
 .cal-summary-item {
   flex: 1 1 70px;
   display: flex;
@@ -81,7 +86,12 @@
 }
 
 /* ── Calendar body ────────────────────────────────────────────────────────── */
-.cal-body { padding: 16px 20px 20px; overflow-y: auto; max-height: calc(90vh - 200px); position: relative; }
+/* In the modal the header, the two summary strips and the legend stay put; only the months
+   scroll, in one scrollbar. (The read-only dashboard copy keeps its plain flow.) */
+#cal-modal-content > .cal-header, #cal-modal-content > .cal-summary,
+#cal-modal-content > .cal-hours-strip, #cal-modal-content > .cal-legend { flex: 0 0 auto; }
+#cal-modal-content > .cal-body { flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; }
+.cal-body { padding: 16px 24px 24px; overflow-y: auto; max-height: calc(94vh - 220px); position: relative; }
 .cal-month-label {
   font-size: .8rem;
   font-weight: 700;
@@ -108,9 +118,9 @@
 }
 .cal-cell {
   border-radius: 6px;
-  min-height: 44px;
-  padding: 4px 5px;
-  font-size: .72rem;
+  min-height: 62px;
+  padding: 6px 8px;
+  font-size: .76rem;
   position: relative;
   cursor: pointer;
   transition: opacity .12s, outline .12s;
@@ -173,6 +183,7 @@
   background: #10b981;
   border: 1.5px solid rgba(255,255,255,.85);
 }
+.cal-resolved-dot.with-ot { right: 30px; top: 4px; }
 /* Regular / HO / WO overtime badge */
 .cal-ot-badge {
   position: absolute;
@@ -189,6 +200,7 @@
 }
 .cal-ot-badge.wo  { background: #be185d; }
 .cal-ot-badge.reg { background: #b45309; }
+.cal-ot-badge.pending { opacity: .45; }
 
 .cal-cell .cal-day-num {
   font-size: .75rem;
@@ -236,7 +248,7 @@
 .cal-half_absent    { background: linear-gradient(135deg, #fca5a5 50%, #86efac 50%); color: #1f2937; }
 .cal-split          { background: linear-gradient(135deg, var(--h1, #86efac) 50%, var(--h2, #fca5a5) 50%); color: #1f2937; }
 .cal-partial_hours  { background: #67e8f9; color: #155e75; }
-.cal-short          { background: #f9a8d4; color: #831843; }
+.cal-short          { background: #fca5a5; color: #7f1d1d; }
 .cal-absent         { background: #fca5a5; color: #7f1d1d; }
 /* Not happened yet and nothing recorded: greyed, not counted, not clickable. */
 .cal-upcoming     { background: transparent; color: #9ca3af; }
@@ -244,6 +256,8 @@
 .cal-future       { background: #f1f5f9; color: #94a3b8; opacity: .75; cursor: not-allowed !important; pointer-events: none; }
 .dark .cal-future { background: #2a2a2a; color: #6b7280; }
 .cal-paid_leave   { background: #93c5fd; color: #1e3a8a; }
+.dark .cal-split--ahead { --cal-upcoming: #2a2a2a; }
+.cal-split--ahead { background: linear-gradient(135deg, var(--h1) 50%, var(--h2) 50%); color: #1e3a8a; }
 .cal-unpaid_leave { background: #fdba74; color: #7c2d12; }
 .cal-week_off     { background: #c4b5fd; color: #4c1d95; }
 .cal-holiday      { background: #5eead4; color: #134e4a; }
@@ -347,36 +361,38 @@
 
 <!-- ── Summary strip ─────────────────────────────────────────────────────── -->
 <div class="cal-summary">
-  <div class="cal-summary-item">
+  <div class="cal-summary-item" data-group="present">
     <span class="cal-summary-val cal-stat-present">{{ cal_summary.present }}</span>
     <span class="cal-summary-lbl">{% trans "Present" %}</span>
   </div>
-  <div class="cal-summary-item">
-    <span class="cal-summary-val cal-stat-short">{{ cal_summary.short }}</span>
-    <span class="cal-summary-lbl">{% trans "Short Hours" %}</span>
-  </div>
-  <div class="cal-summary-item">
+  <div class="cal-summary-item" data-group="absent" title="{% trans 'Absent, missing clock-out and short hours' %}">
     <span class="cal-summary-val cal-stat-absent">{{ cal_summary.absent }}</span>
-    <span class="cal-summary-lbl">{% trans "Absent / MO" %}</span>
+    <span class="cal-summary-lbl">{% trans "Absent / MO / Short" %}</span>
   </div>
-  <div class="cal-summary-item">
+  <div class="cal-summary-item" data-group="paid_leave">
     <span class="cal-summary-val cal-stat-paid">{{ cal_summary.paid_leave }}</span>
     <span class="cal-summary-lbl">{% trans "Paid Leave" %}</span>
   </div>
-  <div class="cal-summary-item">
+  <div class="cal-summary-item" data-group="unpaid_leave">
     <span class="cal-summary-val cal-stat-unpaid">{{ cal_summary.unpaid_leave }}</span>
     <span class="cal-summary-lbl">{% trans "Unpaid Leave" %}</span>
   </div>
-  <div class="cal-summary-item">
+  <div class="cal-summary-item" data-group="week_off">
     <span class="cal-summary-val cal-stat-weekoff">{{ cal_summary.week_off }}</span>
     <span class="cal-summary-lbl">{% trans "Week Off" %}</span>
   </div>
-  <div class="cal-summary-item">
+  <div class="cal-summary-item" data-group="holiday">
     <span class="cal-summary-val cal-stat-holiday">{{ cal_summary.holiday }}</span>
     <span class="cal-summary-lbl">{% trans "Holiday" %}</span>
   </div>
+  {% if cal_summary.upcoming %}
+  <div class="cal-summary-item">
+    <span class="cal-summary-val" style="color:#6b7280;">{{ cal_summary.upcoming }}</span>
+    <span class="cal-summary-lbl">{% trans "Upcoming" %}</span>
+  </div>
+  {% endif %}
   {% if cal_summary.conflict %}
-  <div class="cal-summary-item" style="background:#fff4ed;">
+  <div class="cal-summary-item" data-group="conflict" style="background:#fff4ed;">
     <span class="cal-summary-val" style="color:#e85d04;">{{ cal_summary.conflict }}</span>
     <span class="cal-summary-lbl" style="color:#92400e;">{% trans "Conflicts" %}</span>
   </div>
@@ -407,6 +423,7 @@
       {% if cal_summary.ot_regular_seconds %}<span>R {{ cal_summary.ot_regular_label }}</span>{% endif %}
       {% if cal_summary.ot_week_off_seconds %}<span>{% if cal_summary.ot_regular_seconds %} &#183; {% endif %}WO {{ cal_summary.ot_week_off_label }}</span>{% endif %}
       {% if cal_summary.ot_holiday_seconds %}<span>{% if cal_summary.ot_regular_seconds or cal_summary.ot_week_off_seconds %} &#183; {% endif %}HO {{ cal_summary.ot_holiday_label }}</span>{% endif %}
+      {% if cal_summary.ot_pending_seconds %}<span>{% if cal_summary.ot_regular_seconds or cal_summary.ot_week_off_seconds or cal_summary.ot_holiday_seconds %} &#183; {% endif %}{% trans "Pending Approval" %} {{ cal_summary.ot_pending_label }}</span>{% endif %}
     </div>
   </div>
 </div>
@@ -433,23 +450,28 @@
             <div class="cal-day-num">{{ cell.day }}</div>
           </div>
         {% else %}
-          <div class="cal-cell cal-{{ cell.status }}{% if cell.is_conflict %} cal-has-conflict{% elif cell.resolution %} cal-resolved-conflict{% endif %}"
+          <div class="cal-cell cal-{{ cell.status }}{% if cell.future_part %} cal-split cal-split--ahead{% endif %}{% if cell.is_conflict %} cal-has-conflict{% elif cell.resolution %} cal-resolved-conflict{% endif %}"
                data-date="{{ cell.date|date:'Y-m-d' }}"
-               title="{{ cell.date|date:'d M Y' }}{% if cell.split_label %} — {{ cell.split_label }}{% elif cell.detail %} — {{ cell.detail }}{% endif %}{% if cell.conflict_with == 'paid_leave' or cell.conflict_with == 'unpaid_leave' %} ⚠ conflicts with {{ cell.conflict_with }}{% elif cell.conflict_with == 'holiday_ot' %} HO — Holiday Overtime{% elif cell.conflict_with == 'week_off_ot' %} WO — Week Off Overtime{% elif cell.conflict_with == 'regular_ot' %} OT — Overtime{% elif cell.resolution %} ✓ resolved{% endif %}{% if not readonly %}{% trans ' — Ctrl/Shift-click to select multiple days' %}{% endif %}"
+               data-groups="{{ cell.groups }}"
+               data-halves="{{ cell.halves_data }}"
+               title="{{ cell.date|date:'d M Y' }}{% if cell.split_label %} — {{ cell.split_label }}{% elif cell.detail %} — {{ cell.detail }}{% endif %}{% if cell.conflict_with == 'paid_leave' or cell.conflict_with == 'unpaid_leave' %} ⚠ {% if cell.conflict_reason %}{{ cell.conflict_reason }}{% else %}conflicts with {{ cell.conflict_with }}{% endif %}{% elif cell.conflict_with == 'holiday_ot' %} HO — Holiday Overtime{% elif cell.conflict_with == 'week_off_ot' %} WO — Week Off Overtime{% elif cell.conflict_with == 'regular_ot' %} OT — Overtime{% elif cell.resolution %} ✓ resolved{% endif %}{% if not readonly %}{% trans ' — Ctrl/Shift-click to select multiple days' %}{% endif %}"
                {% if not readonly %}onclick="msCalCellClick(event, this, '{{ cell.date|date:'Y-m-d' }}', '{{ cell.conflict_with|default:'' }}', '{{ cell.detail|default:''|escapejs }}')"{% endif %}
                {% if cell.split_style %}style="{{ cell.split_style }}{% if readonly %};cursor:default{% endif %}"{% elif readonly %}style="cursor:default;"{% endif %}>
             <div class="cal-day-num">{{ cell.day }}</div>
             {% if cell.split_label %}{% elif cell.detail %}<div class="cal-day-detail">{{ cell.detail }}</div>{% endif %}
             {% if cell.conflict_with == "paid_leave" or cell.conflict_with == "unpaid_leave" %}
               <div class="cal-conflict-dot" title="{% trans 'Leave conflict — click to regularize' %}"></div>
-            {% elif cell.conflict_with == "holiday_ot" %}
-              <div class="cal-ot-badge" title="{% trans 'Holiday Overtime' %}">HO</div>
-            {% elif cell.conflict_with == "week_off_ot" %}
-              <div class="cal-ot-badge wo" title="{% trans 'Week Off Overtime' %}">WO</div>
-            {% elif cell.conflict_with == "regular_ot" %}
-              <div class="cal-ot-badge reg" title="{% trans 'Overtime' %}">OT</div>
-            {% elif cell.resolution %}
-              <div class="cal-resolved-dot" title="{% trans 'Resolved — click to undo or change' %}"></div>
+            {% else %}
+              {% if cell.ot_kind == "holiday" %}
+                <div class="cal-ot-badge{% if cell.ot_pending %} pending{% endif %}" title="{% if cell.ot_pending %}{% trans 'Holiday Overtime, Pending Approval' %}{% else %}{% trans 'Holiday Overtime' %}{% endif %}">HO</div>
+              {% elif cell.ot_kind == "week_off" %}
+                <div class="cal-ot-badge wo{% if cell.ot_pending %} pending{% endif %}" title="{% if cell.ot_pending %}{% trans 'Week Off Overtime, Pending Approval' %}{% else %}{% trans 'Week Off Overtime' %}{% endif %}">WO</div>
+              {% elif cell.ot_kind == "regular" %}
+                <div class="cal-ot-badge reg{% if cell.ot_pending %} pending{% endif %}" title="{% if cell.ot_pending %}{% trans 'Overtime, Pending Approval' %}{% else %}{% trans 'Overtime' %}{% endif %}">OT</div>
+              {% endif %}
+              {% if cell.resolution %}
+                <div class="cal-resolved-dot{% if cell.ot_kind %} with-ot{% endif %}" title="{% trans 'Resolved — click to undo or change' %}"></div>
+              {% endif %}
             {% endif %}
             {% if cell.show_hours %}
             <div id="cal-day-hours-{{ employee.pk }}-{{ cell.date|date:'Y-m-d' }}" class="cal-day-hours">
@@ -472,8 +494,7 @@
 <div class="cal-legend">
   <div class="cal-legend-item"><div class="cal-legend-dot cal-present"></div> {% trans "Present (Full)" %}</div>
   <div class="cal-legend-item"><div class="cal-legend-dot cal-split" style="--h1:#86efac;--h2:#93c5fd"></div> {% trans "Split Day (two halves)" %}</div>
-  <div class="cal-legend-item"><div class="cal-legend-dot cal-short"></div> {% trans "Short Hours" %}</div>
-  <div class="cal-legend-item"><div class="cal-legend-dot cal-absent"></div> {% trans "Absent / Missing Out" %}</div>
+  <div class="cal-legend-item"><div class="cal-legend-dot cal-absent"></div> {% trans "Absent / Missing Out / Short Hours" %}</div>
   <div class="cal-legend-item"><div class="cal-legend-dot cal-paid_leave"></div> {% trans "Paid Leave" %}</div>
   <div class="cal-legend-item"><div class="cal-legend-dot cal-unpaid_leave"></div> {% trans "Unpaid Leave" %}</div>
   <div class="cal-legend-item"><div class="cal-legend-dot cal-week_off"></div> {% trans "Week Off" %}</div>

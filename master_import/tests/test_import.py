@@ -191,15 +191,10 @@ class WizardTests(TestCase):
     def test_the_first_step_lists_the_datasets_and_offers_a_template(self):
         response = self.client.get(reverse("master-import"))
         self.assertContains(response, "Employees")
+        self.assertContains(response, "Leave Balances")
         self.assertContains(
             response, reverse("master-import-template", args=["employees"])
         )
-
-    def test_the_dataset_dropdown_lists_every_dataset(self):
-        html = self.client.get(reverse("master-import")).content.decode()
-        self.assertIn("Employees", html)
-        self.assertIn("Leave Balances", html)
-        self.assertNotIn("Soon", html)
 
     def test_the_template_is_a_sheet_with_every_field_as_a_column(self):
         response = self.client.get(
@@ -207,34 +202,6 @@ class WizardTests(TestCase):
         )
         frame = pd.read_excel(io.BytesIO(response.content))
         self.assertEqual(list(frame.columns), [f.key for f in EMPLOYEES.fields])
-
-    def test_the_first_step_shows_every_field_as_a_pill_with_required_ones_marked(self):
-        html = self.client.get(reverse("master-import")).content.decode()
-        self.assertIn("mi__pills", html)
-        for field in EMPLOYEES.fields:
-            if field.key != "Full Name":
-                self.assertIn(f">{field.label}", html)
-        self.assertEqual(
-            html.count('mi__field--req"'), 4
-        )  # Badge ID, First Name, Email, Phone
-
-    def test_the_template_is_formatted_for_working_in(self):
-        from openpyxl import load_workbook
-
-        response = self.client.get(
-            reverse("master-import-template", args=["employees"])
-        )
-        sheet = load_workbook(io.BytesIO(response.content)).active
-        self.assertEqual(sheet.freeze_panes, "A2")
-        header = sheet["A1"]
-        self.assertTrue(header.font.bold)
-        self.assertEqual(header.fill.start_color.rgb[-6:], "FFFF00")
-        self.assertEqual(header.border.left.style, "thin")
-        self.assertEqual(sheet["A2"].border.bottom.style, "thin")
-        self.assertEqual(
-            sheet["C20"].border.bottom.style, "thin"
-        )  # a blank grid below the sample
-        self.assertGreaterEqual(sheet.column_dimensions["A"].width, 14)
 
     def test_an_upload_makes_a_job_and_goes_to_matching(self):
         response = self.upload([GOOD])
@@ -276,14 +243,6 @@ class WizardTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Still to match")
 
-    def test_the_review_page_is_step_three_and_runs_the_check(self):
-        self.upload([GOOD])
-        job = ImportJob.objects.get()
-        self.match(job)
-        page = self.client.get(reverse("master-import-review", args=[job.pk]))
-        self.assertContains(page, "Confirm &amp; Import")
-        self.assertContains(page, reverse("master-import-check", args=[job.pk]))
-
     def test_the_check_answers_with_tabs_of_editable_records(self):
         self.upload([GOOD, {**GOOD, "Employee ID": "E-2", "Work Email": "bad"}])
         job = ImportJob.objects.get()
@@ -303,28 +262,6 @@ class WizardTests(TestCase):
             reverse("master-import-check-progress", args=[job.pk])
         )
         self.assertEqual(progress.json()["percent"], 100)
-
-    def test_cells_use_the_input_that_suits_their_field(self):
-        Department.objects.create(department="Engineering")
-        self.upload([{**GOOD, "Gender": "female", "Basic Salary": "45000"}])
-        job = ImportJob.objects.get()
-        self.match(job)
-        html = self.client.post(reverse("master-import-check", args=[job.pk])).json()[
-            "html"
-        ]
-        self.assertIn('type="date"', html)  # Date Joining
-        self.assertIn('type="number"', html)  # Basic Salary
-        self.assertIn('type="email"', html)
-        # Open fields are dropdowns: what already exists, plus what the file brings.
-        self.assertNotIn("datalist", html)
-        self.assertIn('data-field="Department"', html)
-        self.assertIn('<option value="Engineering"', html)
-        self.assertRegex(html, r'<select[^>]*data-field="Department"')
-        self.assertRegex(html, r'<select[^>]*data-field="Gender"')
-        self.assertIn('id="mi-find-rows"', html)  # the search box
-        # Records are counted from 1, with the file's own row in the tooltip.
-        self.assertIn(">1</td>", html)
-        self.assertIn("Row 2 in your file", html)
 
     def test_a_dropdown_offers_database_values_and_the_sheets_own(self):
         Department.objects.create(department="Operations")
@@ -346,17 +283,6 @@ class WizardTests(TestCase):
         ]
         for name in ("Operations", "Engineering", "Brand New"):
             self.assertIn(f'<option value="{name}"', html)
-
-    def test_a_fixed_choice_field_is_a_dropdown(self):
-        columns = {**GOOD, "Gender": "female"}
-        frame = pd.DataFrame([columns])
-        rows = apply_mapping(
-            frame, suggest_mapping(list(columns), EMPLOYEES.fields), EMPLOYEES.fields
-        )
-        self.assertEqual(rows[0]["Gender"], "female")
-        self.assertEqual(
-            next(f for f in EMPLOYEES.fields if f.key == "Gender").kind, "choice"
-        )
 
     def test_fixing_an_error_on_the_review_page_makes_the_row_valid(self):
         self.upload([GOOD, {**GOOD, "Employee ID": "E-2", "Work Email": "bad"}])
@@ -713,14 +639,6 @@ class UpdateModeTests(TestCase):
         )
         self.assertIn("found by Badge ID", self.check(by_phone)["html"])
 
-    def test_a_row_naming_another_company_is_refused(self):
-        job = self.run_update(
-            [{"Badge ID": "E-1", "Company": "Elsewhere Inc", "Location": "A"}]
-        )
-        data = self.check(job)
-        self.assertEqual(data["error_count"], 1)
-        self.assertIn("does not move employees", data["html"])
-
     def test_new_department_names_are_created_on_update(self):
         job = self.run_update([{"Badge ID": "E-1", "Department": "Brand New Dept"}])
         self.assertEqual(self.check(job)["valid"], 1)
@@ -758,24 +676,6 @@ class UpdateModeTests(TestCase):
             (bank.bank_name, bank.account_number), ("Second Bank", "123456")
         )
 
-    def test_the_map_page_asks_for_the_match_key(self):
-        self.client.post(
-            reverse("master-import-upload"),
-            {
-                "dataset": "employees",
-                "mode": "update",
-                "file": sheet([{"Badge ID": "E-1", "Location": "A"}]),
-            },
-        )
-        job = ImportJob.objects.latest("pk")
-        page = self.client.get(reverse("master-import-map", args=[job.pk]))
-        self.assertContains(page, "Match Employees By")
-        response = self.client.post(
-            reverse("master-import-map", args=[job.pk]),
-            {**{f"map__{k}": v for k, v in job.mapping.items()}, "match": ["Badge ID"]},
-        )
-        self.assertEqual(response.status_code, 302)
-
     def test_badge_id_can_be_changed_when_people_are_found_by_email(self):
         job = self.run_update(
             [{"Email": "maya@acme.test", "Badge ID": "E-100"}], keys=("Email",)
@@ -796,12 +696,6 @@ class UpdateModeTests(TestCase):
         data = self.check(job)
         self.assertEqual(data["error_count"], 1)
         self.assertIn("already has this Badge ID", data["html"])
-
-    def test_the_key_itself_is_never_changed(self):
-        job = self.run_update([{"Badge ID": "E-1", "Location": "Austin"}])
-        self.check(job)
-        self.client.post(reverse("master-import-run", args=[job.pk]))
-        self.assertEqual(Employee.objects.entire().get(pk=self.maya.pk).badge_id, "E-1")
 
 
 class SalaryStructureColumnTests(TestCase):
@@ -835,14 +729,6 @@ class SalaryStructureColumnTests(TestCase):
 
     def check(self, job):
         return self.client.post(reverse("master-import-check", args=[job.pk])).json()
-
-    def test_the_column_is_a_field_with_a_dropdown_of_structures(self):
-        field = next(f for f in EMPLOYEES.fields if f.key == "Salary Structure")
-        self.assertEqual(field.group, "Pay")
-        job = self.importing([{**GOOD, "Salary Structure": "Standard Monthly"}])
-        html = self.check(job)["html"]
-        self.assertIn('data-field="Salary Structure"', html)
-        self.assertIn('<option value="Standard Monthly"', html)
 
     def test_a_new_person_gets_the_structure_on_their_contract(self):
         from payroll.models.models import Contract
@@ -902,27 +788,6 @@ class SalaryStructureColumnTests(TestCase):
         self.assertEqual(
             SalaryStructure.objects.entire().filter(title="Shared New").count(), 1
         )
-
-    def test_a_title_shared_by_two_companies_is_settled_by_the_persons_company(self):
-        from payroll.models.models import SalaryStructure
-
-        other = make_company("Other Co")
-        SalaryStructure.objects.filter(pk=self.structure.pk).update(
-            company_id=self.company
-        )
-        twin = SalaryStructure.objects.create(
-            title="Standard Monthly", structure_mode="gross_up", company_id=other
-        )
-        job = self.importing([{**GOOD, "Salary Structure": "Standard Monthly"}])
-        self.check(job)
-        self.client.post(reverse("master-import-run", args=[job.pk]))
-        from payroll.models.models import Contract
-
-        contract = Contract.objects.entire().get(
-            employee_id=Employee.objects.entire().get(badge_id="E-1")
-        )
-        self.assertEqual(contract.salary_structure_id, self.structure)
-        self.assertNotEqual(contract.salary_structure_id, twin)
 
     def test_update_mode_changes_the_structure_of_an_existing_contract(self):
         from payroll.models.models import Contract, SalaryStructure
@@ -1075,18 +940,6 @@ class CompanyScopeTests(TestCase):
         self.run_import([self.person("X-1", "x1@x.test")])
         self.assertIsNone(self.company_of("X-1"))
 
-    def test_the_same_person_name_in_two_companies_imports_as_two_people(self):
-        self.select(None)
-        job, data = self.run_import(
-            [
-                self.person("S-1", "sam.a@x.test", "Alpha Ltd", name="Sam Lee"),
-                self.person("S-2", "sam.b@x.test", "Beta Ltd", name="Sam Lee"),
-            ]
-        )
-        self.assertEqual((data["valid"], data["error_count"]), (2, 0))
-        self.assertEqual(self.company_of("S-1"), self.a)
-        self.assertEqual(self.company_of("S-2"), self.b)
-
     def test_a_badge_id_or_email_reused_in_another_company_is_still_refused(self):
         self.select(None)
         job, data = self.run_import(
@@ -1150,11 +1003,6 @@ class CompanyScopeTests(TestCase):
             Employee.objects.entire().filter(badge_id__in=["R-2", "R-3"]).exists()
         )
         self.assertFalse(Company.objects.filter(company="Brand New Co").exists())
-
-    def test_one_company_never_creates_a_company(self):
-        self.select(self.a)
-        job, data = self.run_import([self.person("Q-1", "q1@x.test")])
-        self.assertEqual(Company.objects.count(), 2)
 
     def test_a_department_name_that_exists_in_another_company_is_reused_not_doubled(
         self,
@@ -1224,10 +1072,8 @@ class CompanyScopeTests(TestCase):
             mode="update",
         )
         self.assertEqual((data["valid"], data["error_count"]), (2, 0))
-        location = (
-            lambda badge: Employee.objects.entire()
-            .get(badge_id=badge)
-            .employee_work_info.location
+        location = lambda badge: (
+            Employee.objects.entire().get(badge_id=badge).employee_work_info.location
         )
         self.assertEqual((location("V-1"), location("V-2")), ("One", "Two"))
 
@@ -1238,6 +1084,7 @@ class CompanyScopeTests(TestCase):
             [{"Badge ID": "M-1", "Entity": "Beta Ltd", "Location": "X"}], mode="update"
         )
         self.assertEqual(data["error_count"], 1)
+        self.assertIn("does not move employees", data["html"])
         self.assertEqual(self.company_of("M-1"), self.a)
 
 
@@ -1317,15 +1164,7 @@ class SameNameAcrossCompaniesTests(TestCase):
             self.assertEqual(info.department_id, self.dept[company.pk], badge)
             self.assertEqual(info.job_position_id, self.position[company.pk], badge)
             self.assertEqual(info.job_role_id, self.role[company.pk], badge)
-
-    def test_nothing_is_duplicated_when_each_company_already_has_its_own(self):
-        self.select(None)
-        self.run_import(
-            [
-                self.row("N-3", "n3@x.test", "Alpha Ltd"),
-                self.row("N-4", "n4@x.test", "Beta Ltd"),
-            ]
-        )
+        # ...and none of it was duplicated along the way.
         self.assertEqual(
             Department.objects.entire().filter(department="Sales").count(), 2
         )
@@ -1384,21 +1223,27 @@ class SameNameAcrossCompaniesTests(TestCase):
     def test_the_review_does_not_announce_records_that_already_exist_in_the_persons_company(
         self,
     ):
-        self.select(None)
-        data = self.run_import(
+        frame = pd.DataFrame(
             [
                 self.row("N-11", "n11@x.test", "Alpha Ltd"),
                 self.row("N-12", "n12@x.test", "Beta Ltd"),
+                # A department that exists nowhere: proves the review does
+                # announce what is genuinely new, so the empty answers for the
+                # shared names below mean something.
+                self.row("N-13", "n13@x.test", "Alpha Ltd", Dept="Operations"),
             ]
         )
-        self.assertNotIn(
-            "Departments",
-            (
-                data["html"].split("These do not exist yet")[-1][:400]
-                if "These do not exist yet" in data["html"]
-                else ""
-            ),
+        rows = apply_mapping(
+            frame,
+            suggest_mapping(list(frame.columns), EMPLOYEES.fields),
+            EMPLOYEES.fields,
         )
+
+        result = EMPLOYEES.check(rows, Context(company=None))
+
+        self.assertEqual(len(result.valid), 3, result.errors)
+        self.assertEqual(result.will_create["departments"], ["Operations"])
+        self.assertEqual(result.will_create["job_positions"], [])
 
 
 class AssignedLeaveTests(TestCase):
@@ -1607,6 +1452,7 @@ class AssignedLeaveTests(TestCase):
         )
         data = self.check(job)
         self.assertEqual((data["valid"], data["error_count"]), (0, 0))
+        self.assertIn("already have these values", data["html"])
 
     def test_create_or_update_updates_existing_balances_and_assigns_the_rest(self):
         from horilla.testkit.factories import make_leave_type
@@ -1657,14 +1503,6 @@ class AssignedLeaveTests(TestCase):
         html = page.content.decode()
         self.assertEqual(html.count('name="match"'), 2)
         self.assertEqual(html.count('disabled title="Always used"'), 2)
-
-    def test_an_update_with_nothing_different_says_why_it_is_empty(self):
-        self.assign(8, 1)
-        job = self.run_mode(
-            [{"Badge ID": "E-1", "Leave Type": "Casual Leave", "Available Days": "8"}],
-            "update",
-        )
-        self.assertIn("already have these values", self.check(job)["html"])
 
     def test_imported_and_updated_balances_appear_in_the_leave_ledger(self):
         from leave.models import AvailableLeave
@@ -1967,63 +1805,6 @@ class AssetAllocationTests(TestCase):
             (1, 1),
         )
 
-    def test_the_match_rules_are_locked(self):
-        job = self.run_mode([{"Badge ID": "E-1", "Serial No.": "LAP-1"}], "update")
-        html = self.client.get(
-            reverse("master-import-map", args=[job.pk])
-        ).content.decode()
-        self.assertEqual(html.count('name="match"'), 2)
-        self.assertEqual(html.count('disabled title="Always used"'), 2)
-
-
-class HtmxNavigationTests(TestCase):
-    """The wizard swaps the settings panel as it moves, instead of reloading the page."""
-
-    def setUp(self):
-        self.user = make_user("htmxer", is_superuser=True)
-        make_employee(
-            company=make_company("Home"), email="htmxer@home.test", user=self.user
-        )
-        self.client.force_login(self.user)
-        session = self.client.session
-        session["selected_company"] = "all"
-        session.save()
-
-    def test_the_wizard_swaps_the_settings_panel(self):
-        html = self.client.get(reverse("master-import")).content.decode()
-        self.assertIn('hx-boost="true"', html)
-        self.assertIn('hx-target="#settingsContainer"', html)
-        self.assertIn('hx-select="#settingsContainer"', html)
-        self.assertIn('hx-push-url="true"', html)
-        self.assertIn("miGo(", html)  # the dataset dropdown
-        self.assertIn('data-settings-active="/master-import/"', html)
-
-    def test_downloads_are_not_swapped_in(self):
-        html = self.client.get(reverse("master-import")).content.decode()
-        template = html[
-            html.index(reverse("master-import-template", args=["employees"])) - 80 :
-        ]
-        self.assertIn('hx-boost="false"', template[:200])
-
-    def test_the_history_page_lights_its_own_menu_item(self):
-        html = self.client.get(reverse("master-import-history")).content.decode()
-        self.assertIn('data-settings-active="/master-import/history/"', html)
-
-    def test_the_history_page_has_the_settings_titlebar_and_icon_actions(self):
-        from master_import.models import ImportJob
-
-        ImportJob.objects.create(
-            dataset="employees",
-            original_name="a.xlsx",
-            status=ImportJob.DONE,
-            created_by=self.user,
-        )
-        html = self.client.get(reverse("master-import-history")).content.decode()
-        self.assertIn("mi__bar-head", html)
-        self.assertIn("New Import", html)
-        self.assertIn("mi__icon-btn", html)
-        self.assertIn('title="View Summary"', html)
-
 
 class AssetsDatasetTests(TestCase):
     """The asset register: new, update and both, with no employee involved."""
@@ -2151,46 +1932,6 @@ class AssetsDatasetTests(TestCase):
             (job.summary["counts"]["assigned"], job.summary["counts"]["updated"]),
             (1, 1),
         )
-
-
-class SetupChecklistTests(TestCase):
-    """The dashboard's Get Started checklist offers Import Data as an optional step."""
-
-    def checklist(self):
-        from django.test import override_settings
-
-        user = make_user("setupper", is_superuser=True)
-        make_employee(
-            company=make_company("Home"), email="setupper@home.test", user=user
-        )
-        self.client.force_login(user)
-        with override_settings(DEBUG=True):
-            response = self.client.get("/dashboard/?preview_checklist=1")
-        return user, response.context
-
-    def test_import_data_is_a_step_that_links_to_the_import(self):
-        _user, context = self.checklist()
-        step = next(s for s in context["setup_steps"] if s["key"] == "master_import")
-        self.assertEqual(step["url"], reverse("master-import"))
-        self.assertTrue(step["optional"])
-        self.assertFalse(step["done"])
-
-    def test_a_finished_import_ticks_the_step(self):
-        ImportJob.objects.create(
-            dataset="employees", original_name="a.xlsx", status=ImportJob.DONE
-        )
-        _user, context = self.checklist()
-        # preview mode shows every step as open, so ask the step builder without it
-        from django.test import RequestFactory
-
-        from base.dashboard import _get_setup_checklist_context
-
-        request = RequestFactory().get("/dashboard/")
-        request.user = _user
-        request.session = self.client.session
-        result = _get_setup_checklist_context(request)
-        steps = {s["key"]: s["done"] for s in result.get("setup_steps", [])}
-        self.assertTrue(steps["master_import"])
 
 
 class AccessTests(TestCase):

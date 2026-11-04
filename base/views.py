@@ -127,6 +127,7 @@ from base.methods import (
     check_manager,
     choosesubordinates,
     closest_numbers,
+    employees_in_scope,
     export_data,
     filtersubordinates,
     filtersubordinatesemployeemodel,
@@ -2153,60 +2154,20 @@ def mail_server_conf(request):
 @permission_required("base.view_dynamicemailconfiguration")
 def mail_server_test_email(request):
     instance_id = request.GET.get("instance_id")
-    white_labelling = getattr(settings, "WHITE_LABELLING", False)
-    image_path = path.join(settings.STATIC_ROOT, "images/ui/horilla-logo.png")
-    company_name = "Horilla"
-
-    if white_labelling:
-        hq = Company.objects.filter(hq=True).last()
-        try:
-            company = (
-                request.user.employee_get.get_company()
-                if request.user.employee_get.get_company()
-                else hq
-            )
-        except:
-            company = hq
-
-        if company:
-            company_name = company.company
-            image_path = path.join(settings.MEDIA_ROOT, company.icon.name)
+    employee = getattr(request.user, "employee_get", None)
+    company_name, image_path = PassWordResetForm.get_branding(employee)
 
     form = DynamicMailTestForm()
     if request.method == "POST":
         form = DynamicMailTestForm(request.POST)
         if form.is_valid():
             email_to = form.cleaned_data["to_email"]
-            subject = _("Test mail from Horilla")
+            subject = _("Test mail from %(company)s") % {"company": company_name}
 
-            # HTML content
-            html_content = f"""
-            <html>
-                <body style="font-family: Arial, sans-serif; margin: 0; padding: 0;">
-                    <table align="center" width="600" cellpadding="0" cellspacing="0" border="0" style="border: 1px solid #e0e0e0; border-radius: 10px; overflow: hidden;">
-                        <tr>
-                            <td align="center" bgcolor="#4CAF50" style="padding: 20px 0;">
-                                <h1 style="color: #ffffff; margin: 0;">{company_name}</h1>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td style="padding: 20px;">
-                                <h3 style="color: #4CAF50;">Email tested successfully</h3>
-                                <b><p style="font-size: 14px;">Hi,<br>
-                                    This email is being sent as part of mail sever testing from {company_name}.</p></b>
-                                <img src="cid:unique_image_id" alt="Test Image" style="width: 200px; height: auto; margin: 20px 0;">
-                            </td>
-                        </tr>
-                        <tr>
-                            <td bgcolor="#f0f0f0" style="padding: 10px; text-align: center;">
-                                <p style="font-size: 12px; color: black;">&copy; {datetime.today().year} {company_name}</p>
-                            </td>
-                        </tr>
-                    </table>
-                </body>
-            </html>
-            """
-
+            html_content = render_to_string(
+                "base/mail_templates/mail_server_test_email.html",
+                {"company_name": company_name, "logo_path": image_path},
+            )
             # Plain text content (fallback for email clients that do not support HTML)
             text_content = strip_tags(html_content)
 
@@ -2226,10 +2187,11 @@ def mail_server_test_email(request):
                 )
                 msg.attach_alternative(html_content, "text/html")
 
-                with open(image_path, "rb") as img:
-                    msg_img = MIMEImage(img.read())
-                    msg_img.add_header("Content-ID", "<unique_image_id>")
-                    msg.attach(msg_img)
+                if image_path:
+                    with open(image_path, "rb") as img:
+                        msg_img = MIMEImage(img.read())
+                        msg_img.add_header("Content-ID", "<company_logo>")
+                        msg.attach(msg_img)
 
                 msg.send()
             except Exception as e:
@@ -3778,6 +3740,24 @@ def rotating_shift_assign_import(request):
             pd.read_csv(file) if file_extension == "csv" else pd.read_excel(file)
         )
         work_info_dicts = data_frame.to_dict("records")
+        # manager_can_enter admits any manager of anybody, so refuse the whole
+        # import if it names an employee outside the caller's team. This runs
+        # before any row is processed, because rows create rotating shifts, and
+        # because rows are paired with employees by position, so employees
+        # cannot be dropped one by one without misaligning the rest.
+        badge_ids = [
+            str(row["Badge Id"]) for row in work_info_dicts if "Badge Id" in row
+        ]
+        named_ids = list(
+            Employee.objects.filter(badge_id__in=badge_ids).values_list("id", flat=True)
+        )
+        if not employees_in_scope(request, named_ids, "base.add_rotatingshiftassign"):
+            from horilla.methods import handle_no_permission
+
+            return handle_no_permission(
+                request,
+                message=_("The file names employees outside your team."),
+            )
         try:
             keys_list = list(work_info_dicts[0].keys())
             error_dict = {key: [] for key in keys_list}
@@ -7150,33 +7130,25 @@ def add_more_approval_managers(request):
         "next_hx_target": next_hx_target,
         "current_hx_target": current_hx_target,
     }
-    if managers_count:
-        managers_count = int(managers_count) + 1
-        field_name = f"multi_approval_manager_{managers_count}"
-        choices = [("reporting_manager_id", _("Reporting Manager"))] + [
-            (employee.pk, str(employee)) for employee in Employee.objects.all()
-        ]
-        form.fields[field_name] = forms.ChoiceField(
-            choices=choices,
-            widget=forms.Select(
-                attrs={
-                    "class": "oh-select oh-select-2 mb-3",
-                    "name": field_name,
-                    "id": f"id_{field_name}",
-                }
-            ),
-            required=False,
-        )
-        context["managers_count"] = managers_count
-        context["field_html"] = form[field_name].as_widget()
-    else:
-        form.fields["multi_approval_manager"].widget.attrs.update(
-            {
-                "name": f"multi_approval_manager_{str(int(hx_target_split[-1]) + 1)}",
-                "id": f"id_multi_approval_manager_{str(int(hx_target_split[-1]) + 1)}",
+    next_index = (
+        int(managers_count) + 1 if managers_count else int(hx_target_split[-1]) + 1
+    )
+    field_name = f"multi_approval_manager_{next_index}"
+    choices = [("reporting_manager_id", _("Reporting Manager"))] + [
+        (employee.pk, str(employee)) for employee in Employee.objects.all()
+    ]
+    form.fields[field_name] = forms.ChoiceField(
+        choices=choices,
+        widget=forms.Select(
+            attrs={
+                "class": "oh-select oh-select-2 mb-3",
+                "id": f"id_{field_name}",
             }
-        )
-        context["form"] = form
+        ),
+        required=False,
+    )
+    context["managers_count"] = next_index
+    context["field_html"] = form[field_name].as_widget()
 
     field_html = render_to_string(
         "multi_approval_condition/add_more_approval_manager.html", context
@@ -8844,7 +8816,7 @@ def view_penalties(request):
 
 @login_required
 @permission_required("base.delete_penaltyaccounts")
-def delete_penalities(request, penalty_id):
+def delete_penalties(request, penalty_id):
     penalty = PenaltyAccounts.objects.filter(id=penalty_id).first()
     if not penalty:
         return HorillaRedirect(

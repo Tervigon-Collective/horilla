@@ -2,6 +2,7 @@
 This page handles the cbv methods for document request page
 """
 
+import json
 import os
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
@@ -34,6 +35,7 @@ from horilla_documents.forms import DocumentRequestForm, DocumentUpdateForm
 from horilla_documents.models import Document, DocumentRequest
 from horilla_views import models as horilla_views_models
 from horilla_views.cbv_methods import (
+    EmployeeScopeMixin,
     hx_request_required,
     login_required,
     saved_filter_path_query,
@@ -95,10 +97,13 @@ def htmx_refresh_document_request_container(request) -> Optional[HttpResponse]:
 @method_decorator(
     manager_can_enter("horilla_documents.add_documentrequest"), name="dispatch"
 )
-class DocumentRequestCreateForm(HorillaFormView):
+class DocumentRequestCreateForm(EmployeeScopeMixin, HorillaFormView):
     """
     form view for create and update document request
     """
+
+    scope_perm = "horilla_documents.add_documentrequest"
+    scope_include_self = False
 
     form_class = DocumentRequestForm
     model = DocumentRequest
@@ -151,10 +156,13 @@ class DocumentRequestCreateForm(HorillaFormView):
 
 
 @method_decorator(login_required, name="dispatch")
-class DocumentCreateForm(HorillaFormView):
+class DocumentCreateForm(EmployeeScopeMixin, HorillaFormView):
     """
     form view for upload document
     """
+
+    scope_perm = "horilla_documents.add_document"
+    scope_include_self = True
 
     form_class = DocumentForm
     model = Document
@@ -433,13 +441,35 @@ class DocumentRequestPipelineView(Pipeline):
         context["search_url"] = context["groups_search_url"]
         context["pd"] = context["groups_preserved_query"]
 
+        all_ids = []
         for group in context["groups"]:
-            group.filtered_document_count = DocumentRequestFilter(
-                self.request.GET, queryset=group.document_set.all()
-            ).qs.count()
+            group_ids = list(
+                DocumentRequestFilter(
+                    self.request.GET, queryset=group.document_set.all()
+                ).qs.values_list("pk", flat=True)
+            )
+            group.filtered_document_count = len(group_ids)
+            # Every matching document of the group (all its pages), for the
+            # select-all checkbox in the group's header.
+            group.select_ids = json.dumps(group_ids)
+            all_ids.extend(group_ids)
+            # Pages of rows the group will show (DocumentListView.records_per_page),
+            # so its pager can sit in the group header before the group is opened.
+            group.doc_pages = max(
+                -(-group.filtered_document_count // DocumentListView.records_per_page),
+                1,
+            )
+
+        # Every document the header "Select All" checkbox must pick, including
+        # those of groups that are collapsed (their rows are not in the page yet).
+        context["select_all_ids"] = json.dumps(all_ids)
+        context["select_total_count"] = len(all_ids)
 
         context["bulk_select_option"] = True
+        # "Select (N)" picks every document of every group on the page (see
+        # select_all_ids), not the group rows the pipeline paginates.
         context["hide_select"] = True
+        context["group_select"] = True
         context["selected_instances_key_id"] = "selectedInstances"
         return context
 
@@ -464,6 +494,13 @@ class DocumentListView(HorillaListView):
     default_columns = columns
 
     action_method = "document_actions"
+
+    # Each group on the Document Requests pipeline is its own list, loaded when
+    # the group is opened; showing every row of every group made each one heavy
+    # (hundreds of KB, ~1s of page scripts). Ten per page, paged inside the
+    # group like the group-by lists. DocumentIndividualTabList restores the
+    # normal page size.
+    records_per_page = 10
 
     # One instance of this view loads per expanded document-type group on the
     # Document Requests pipeline page (employee/templates/cbv/documents/pipeline.html),
@@ -508,6 +545,8 @@ class DocumentIndividualTabList(DocumentListView):
     """
     List view for the Documents tab in employee individual & profile view
     """
+
+    records_per_page = 0
 
     show_saved_filters = False
 

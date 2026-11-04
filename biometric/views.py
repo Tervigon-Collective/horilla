@@ -1841,7 +1841,7 @@ def add_biometric_user(request, device_id):
 @login_required
 @install_required
 @hx_request_required
-@permission_required("biometric.change_biometricemployees")
+@permission_required("biometric.add_biometricemployees")
 def map_biometric_users(request, device_id):
     """
     Maps an horilla employee to a biometric user on a specified biometric device.

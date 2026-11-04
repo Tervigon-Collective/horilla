@@ -70,6 +70,7 @@
                         type="text"
                         class="text-color-600 ps-8 p-1.5 pb-2 placeholder:text-xs w-full border border-primary-500 rounded-md focus-visible:outline-0 placeholder:text-dark-100 text-sm [transition:.3s] focus:border-primary-600"
                         name="search"
+                        value="{{ form.search.value|default_if_none:'' }}"
                         aria-label="{% trans 'Search Input' %}"
                         placeholder="{% trans 'Search' %}"
                         autocomplete="false"
@@ -116,8 +117,15 @@
                                 <a {{ type.attrs|safe }}><ion-icon name="{{ type.icon }}"></ion-icon></a>
                                 {% if active_view.type == type.type %}
                                     <script>
-                                        $(".navFilterForm").attr('hx-get', '{{ type.url }}');
-                                        $(".nav-view-btn[data-type={{ type.type }}]").addClass("oh-view-btn--active")
+                                        // Scoped to this script's own form: a page can hold several
+                                        // .navFilterForm (page-level Nav + one per tab), and pointing
+                                        // them all at this tab's URL made the page-level form swap
+                                        // its whole container with this tab's list.
+                                        (function () {
+                                            var $form = $(document.currentScript).closest("form");
+                                            $form.attr('hx-get', '{{ type.url|escapejs }}');
+                                            $form.find(".nav-view-btn[data-type={{ type.type }}]").addClass("oh-view-btn--active");
+                                        })();
                                     </script>
                                 {% endif %}
                             </li>

@@ -100,7 +100,7 @@ class StructureConfigurationError(TaxComputationError):
 
 
 def payroll_calculation(
-    employee, start_date, end_date, structure_override=None, month_summary=None
+    employee, start_date, end_date, structure_override=None, month_summary=None, prorate_slice=False
 ):
     """
     Calculate payroll components for the specified employee within the given date range.
@@ -127,6 +127,7 @@ def payroll_calculation(
         end_date,
         wage=wage_override,
         month_summary=month_summary,
+        prorate_slice=prorate_slice,
     )
 
     if not basic_pay_details:

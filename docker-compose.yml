@@ -17,8 +17,8 @@ services:
     environment:
       - DEBUG=1
       - DB_HOST=db
-      # nginx is the single proxy hop; lets django-axes read the real client IP
-      - AXES_PROXY_COUNT=1
+      # Believe X-Forwarded-For only from the nginx service (horilla/client_ip.py)
+      - HORILLA_TRUSTED_PROXIES=nginx
       - SECRET_KEY=dev-secret-key-change-in-production
       - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0
       - CSRF_TRUSTED_ORIGINS=http://localhost:8000
@@ -34,7 +34,10 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
       interval: 30s
       timeout: 30s
-      start_period: 60s
+      # First boot applies every migration and collectstatic before gunicorn
+      # binds (about 5 minutes on an empty database). nginx waits for this
+      # check, so a shorter window makes a fresh `make prod` abort as unhealthy.
+      start_period: 10m
       retries: 3
 
   # Background jobs run here, NOT in the web workers. Keep this at exactly one
@@ -49,8 +52,8 @@ services:
     environment:
       - DEBUG=1
       - DB_HOST=db
-      # nginx is the single proxy hop; lets django-axes read the real client IP
-      - AXES_PROXY_COUNT=1
+      # Believe X-Forwarded-For only from the nginx service (horilla/client_ip.py)
+      - HORILLA_TRUSTED_PROXIES=nginx
       - SECRET_KEY=dev-secret-key-change-in-production
       - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0
       - DATABASE_URL=postgres://horilla_user:horilla_pass@db:5432/horilla_db

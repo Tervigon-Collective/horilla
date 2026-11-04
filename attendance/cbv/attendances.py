@@ -34,6 +34,7 @@ from employee.filters import EmployeeFilter
 from employee.models import Employee
 from horilla.filters import HorillaFilterSet
 from horilla_views.cbv_methods import (
+    EmployeeScopeMixin,
     hx_request_required,
     login_required,
     render_template,
@@ -709,14 +710,18 @@ class ValidatedDetailView(GenericAttendancesDetailView):
 
 @method_decorator(login_required, name="dispatch")
 @method_decorator(manager_can_enter("attendance.add_attendance"), name="dispatch")
-class AttendancesFormView(HorillaFormView):
+class AttendancesFormView(EmployeeScopeMixin, HorillaFormView):
     """
     form view
     """
 
+    scope_perm = "attendance.add_attendance"
+    scope_include_self = False
+
     form_class = AttendanceForm
     model = Attendance
     new_display_title = _("Add Attendances")
+    template_name = "requests/attendance/attendance_form.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -749,6 +754,7 @@ class AttendanceUpdateFormView(HorillaFormView):
 
     model = Attendance
     form_class = AttendanceUpdateForm
+    template_name = "requests/attendance/attendance_form.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -815,8 +821,9 @@ class PenaltyAccountListView(HorillaListView):
         (_("Minus Days"), "minus_leaves"),
         (_("Deducted From CFD"), "get_deduct_from_carry_forward"),
         (_("Penalty amount"), "penalty_amount"),
-        (_("Created Date"), "created_at"),
+        (_("Date"), "penalty_date_col"),
         (_("Penalty Type"), "penalty_type_col"),
+        (_("Applied For"), "penalty_reference_col"),
     ]
 
     confirm_text = _("Are you sure you want to delete this penalty?")

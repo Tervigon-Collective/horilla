@@ -50,6 +50,7 @@ class MyAttendancesListView(HorillaListView):
         (_("Missing Punch"), "missing_punch_col"),
         (_("Pending Hour"), "hours_pending"),
         (_("Overtime"), "attendance_overtime"),
+        (_("Penalties"), "penalty_col"),
     ]
     default_columns = [
         (_("Employee"), "employee_id", "employee_id__get_avatar"),
@@ -61,6 +62,7 @@ class MyAttendancesListView(HorillaListView):
         (_("Shift"), "shift_id"),
         (_("At Work"), "worked_hour_display_col"),
         (_("Missing Punch"), "missing_punch_col"),
+        (_("Penalties"), "penalty_col"),
     ]
 
     row_attrs = """

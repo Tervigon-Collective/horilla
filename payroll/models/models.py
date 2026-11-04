@@ -22,7 +22,7 @@ from django.utils.translation import gettext_lazy as _
 from django.utils.translation import ngettext
 
 from base.horilla_company_manager import HorillaCompanyManager
-from base.methods import get_next_month_same_date
+from base.methods import get_nth_month_same_date
 from base.models import (
     Company,
     Department,
@@ -710,6 +710,9 @@ class Contract(HorillaModel):
                     "pk", flat=True
                 )
             )
+            from payroll.methods.component_engine import group_targeted
+
+            grouped = set(group_targeted(employee, model).values_list("pk", flat=True))
             reachable = (
                 (
                     model.objects.filter(pk__in=targeted)
@@ -719,6 +722,7 @@ class Contract(HorillaModel):
                     | model.objects.filter(include_active_employees=True).exclude(
                         pk__in=excluded
                     )
+                    | model.objects.filter(pk__in=grouped)
                 )
                 .exclude(is_system=True)
                 .distinct()
@@ -731,6 +735,10 @@ class Contract(HorillaModel):
                     source, source_label = "targeted", _("Added to this employee")
                 elif component.include_active_employees:
                     source, source_label = "everyone", _("Applies to all employees")
+                elif component.pk in grouped:
+                    source, source_label = "group", _(
+                        "Applies to their department, job position or job role"
+                    )
                 else:
                     source, source_label = "conditional", _("Condition based")
 
@@ -1614,6 +1622,30 @@ class Allowance(HorillaModel):
         related_name="allowance_excluded",
         blank=True,
     )
+    # Who it reaches when it is not a hand-picked list: everyone in a department,
+    # job position or job role. Evaluated when a payslip is calculated, so a new
+    # joiner in one of them is covered without being added anywhere.
+    APPLY_BY_CHOICES = [
+        ("employees", _("Selected Employees")),
+        ("department", _("Department")),
+        ("job_position", _("Job Position")),
+        ("job_role", _("Job Role")),
+    ]
+    apply_by = models.CharField(
+        max_length=20,
+        default="employees",
+        choices=APPLY_BY_CHOICES,
+        verbose_name=_("Applies By"),
+    )
+    apply_departments = models.ManyToManyField(
+        Department, blank=True, related_name="allowance_apply"
+    )
+    apply_job_positions = models.ManyToManyField(
+        JobPosition, blank=True, related_name="allowance_apply"
+    )
+    apply_job_roles = models.ManyToManyField(
+        JobRole, blank=True, related_name="allowance_apply"
+    )
     is_taxable = models.BooleanField(
         default=True,
         verbose_name=_("Taxable"),
@@ -1782,6 +1814,27 @@ class Allowance(HorillaModel):
         default=0.00,
         blank=True,
         validators=[min_zero],
+    )
+    # How an overtime allowance turns hours into money. "flat" pays
+    # amount_per_one_hr for every hour; "slab" pays the contract's hourly wage
+    # times a multiplier that steps up with the hours worked in a day.
+    OVERTIME_CALC_CHOICES = [
+        ("flat", _("Flat Amount Per Hour")),
+        ("slab", _("Multiplier Slabs On The Hourly Wage")),
+    ]
+    overtime_calc = models.CharField(
+        max_length=10,
+        default="flat",
+        choices=OVERTIME_CALC_CHOICES,
+        verbose_name=_("Overtime Pay"),
+    )
+    prorate_partial_days = models.BooleanField(
+        default=False,
+        verbose_name=_("Prorate Half Days"),
+        help_text=_(
+            "Pay a half day at half the per attendance amount, instead of the "
+            "full amount."
+        ),
     )
     work_type_id = models.ForeignKey(
         WorkType,
@@ -2262,6 +2315,33 @@ class Allowance(HorillaModel):
         return super().delete(*args, **kwargs)
 
 
+class AllowanceSlab(models.Model):
+    """
+    One band of an overtime slab: the hours of a single day it covers, and the
+    multiplier of the contract's hourly wage paid for each hour inside it.
+    """
+
+    allowance_id = models.ForeignKey(
+        Allowance, on_delete=models.CASCADE, related_name="slabs"
+    )
+    from_hours = models.FloatField(validators=[min_zero], verbose_name=_("From Hour"))
+    to_hours = models.FloatField(
+        null=True,
+        blank=True,
+        validators=[min_zero],
+        verbose_name=_("To Hour"),
+        help_text=_("Leave Empty For The Last Band, Which Has No Upper End."),
+    )
+    multiplier = models.FloatField(validators=[min_zero], verbose_name=_("Multiplier"))
+
+    class Meta:
+        ordering = ["from_hours"]
+
+    def __str__(self):
+        end = self.to_hours if self.to_hours is not None else "+"
+        return f"{self.from_hours}-{end}h x{self.multiplier}"
+
+
 class Deduction(HorillaModel):
     """
     Deduction model
@@ -2306,6 +2386,22 @@ class Deduction(HorillaModel):
         verbose_name=_("Exclude Employees"),
         related_name="deduction_exclude",
         blank=True,
+    )
+    # Who it reaches by department, job position or job role; see Allowance.
+    apply_by = models.CharField(
+        max_length=20,
+        default="employees",
+        choices=Allowance.APPLY_BY_CHOICES,
+        verbose_name=_("Applies By"),
+    )
+    apply_departments = models.ManyToManyField(
+        Department, blank=True, related_name="deduction_apply"
+    )
+    apply_job_positions = models.ManyToManyField(
+        JobPosition, blank=True, related_name="deduction_apply"
+    )
+    apply_job_roles = models.ManyToManyField(
+        JobRole, blank=True, related_name="deduction_apply"
     )
 
     is_tax = models.BooleanField(
@@ -3527,6 +3623,18 @@ class Payslip(HorillaModel):
         """
         return dict(self.status_choices).get(self.status)
 
+    @property
+    def status_locked(self):
+        """True while the batch this payslip is in is approved or paid: only the batch moves it."""
+        batch = self.payroll_batch
+        return bool(batch and batch.status in batch.PAYSLIP_STATUS_LOCKED)
+
+    @property
+    def status_lock_message(self):
+        return _(
+            "This payslip is in a batch that is %(status)s. Change the status of the batch instead."
+        ) % {"status": self.payroll_batch.get_status_display().lower()}
+
     def get_download_url(self):
         """
         This method to get download url
@@ -3826,11 +3934,9 @@ class LoanAccount(HorillaModel):
 
         installment_schedule = {}
 
-        installment_date = installment_start_date
-        installment_schedule = {}
-        for _unused in range(total_installments):
+        for index in range(total_installments):
+            installment_date = get_nth_month_same_date(installment_start_date, index)
             installment_schedule[str(installment_date)] = installment_amount
-            installment_date = get_next_month_same_date(installment_date)
 
         return installment_schedule
 
@@ -4455,7 +4561,8 @@ DAYS = [
 
 class PayslipAutoGenerate(models.Model):
     """
-    Model for generating payslip automatically
+    Deprecated: payslip automation now lives on PayPeriodSettings.auto_generate.
+    Kept so existing rows survive; nothing reads it any more.
     """
 
     generate_day = models.CharField(
@@ -4534,11 +4641,6 @@ class PayslipAutoGenerate(models.Model):
                 )
 
     def save(self, *args, **kwargs):
-        from payroll.scheduler import auto_payslip_generate
-
-        if self.auto_generate:
-            auto_payslip_generate()
-
         super().save(*args, **kwargs)
 
     def __str__(self) -> str:

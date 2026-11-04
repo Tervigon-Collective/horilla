@@ -95,13 +95,13 @@ class EligibilityTests(Fixture):
         self.assertEqual(len(ok), 3)
         self.assertEqual(excluded, [])
 
-    def test_no_active_contract_is_excluded_with_a_reason(self):
+    def test_no_contract_in_force_is_excluded_with_a_reason(self):
         Contract.objects.filter(employee_id=self.people[0]).delete()
         ok, excluded = batch_run.eligible_employees(self.people, START, END)
 
         self.assertEqual(len(ok), 2)
         self.assertEqual(excluded[0][0], self.people[0])
-        self.assertIn("No active contract", str(excluded[0][1]))
+        self.assertIn("No contract in force in this period", str(excluded[0][1]))
 
     def test_a_contract_starting_after_the_period_is_excluded(self):
         contract = Contract.objects.get(employee_id=self.people[1])
@@ -226,14 +226,9 @@ class BatchCreationTests(Fixture):
         )
         self.assertEqual(batch.employee_count, 3)
         self.assertEqual(batch.lines.count(), 3)
+        self.assertEqual(batch.lines.filter(status=PayrollBatchLine.QUEUED).count(), 3)
         self.assertEqual(batch.progress_state, PayrollBatch.PENDING)
         self.assertEqual(Payslip.objects.count(), 0)
-
-    def test_every_employee_is_queued(self):
-        batch = batch_run.create_batch(
-            name="April", start_date=START, end_date=END, employees=self.people
-        )
-        self.assertEqual(batch.lines.filter(status=PayrollBatchLine.QUEUED).count(), 3)
 
 
 class GenerationTests(Fixture):

@@ -3,11 +3,14 @@ This page handles the cbv of leave requests page
 """
 
 import contextlib
+from collections import defaultdict
 from datetime import date
 from typing import Any
 
+from django.apps import apps
 from django.contrib import messages
-from django.db.models import Q
+from django.db.models import Count, OuterRef, Q, Subquery
+from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.urls import resolve, reverse, reverse_lazy
@@ -25,7 +28,13 @@ from base.methods import (
     is_reportingmanager,
 )
 from base.models import PenaltyAccounts
-from horilla_views.cbv_methods import hx_request_required, login_required
+from horilla.horilla_middlewares import _thread_locals
+from horilla.methods import get_horilla_model_class
+from horilla_views.cbv_methods import (
+    EmployeeScopeMixin,
+    hx_request_required,
+    login_required,
+)
 from horilla_views.generic.cbv.views import (
     HorillaDetailedView,
     HorillaFormView,
@@ -72,9 +81,67 @@ class LeaveRequestsListView(HorillaListView):
         queryset = filter_conditional_leave_request(self.request)
         qs = data.filter(id__in=queryset.values_list("id", flat=True))
         data = filtersubordinates(self.request, data, "leave.view_leaverequest") | qs
-        return data.distinct().select_related(
-            "employee_id", "employee_id__employee_work_info", "leave_type_id"
+        balance = AvailableLeave.objects.filter(
+            employee_id=OuterRef("employee_id"),
+            leave_type_id=OuterRef("leave_type_id"),
+        ).values("total_leave_days")[:1]
+        penalties = (
+            PenaltyAccounts.objects.filter(leave_request_id=OuterRef("pk"))
+            .order_by()
+            .values("leave_request_id")
+            .annotate(total=Count("pk"))
+            .values("total")
         )
+        return (
+            data.distinct()
+            .select_related(
+                "employee_id", "employee_id__employee_work_info", "leave_type_id"
+            )
+            .annotate(
+                available_balance=Subquery(balance),
+                penalties_count=Coalesce(Subquery(penalties), 0),
+            )
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        self.preload_interview_clashes(context.get("queryset"))
+        return context
+
+    def preload_interview_clashes(self, page):
+        """
+        Fill the per-request interview clash cache for the whole page in one query.
+        """
+        request = getattr(_thread_locals, "request", None)
+        if (
+            request is None
+            or not hasattr(page, "object_list")
+            or not apps.is_installed("recruitment")
+        ):
+            return
+        rows = [row for row in page if row.end_date is not None]
+        if not rows:
+            return
+        Schedule = get_horilla_model_class(
+            app_label="recruitment", model="interviewschedule"
+        )
+        interview_dates = defaultdict(list)
+        for employee_id, interview_date in Schedule.objects.filter(
+            employee_id__in={row.employee_id_id for row in rows},
+            interview_date__range=[
+                min(row.start_date for row in rows),
+                max(row.end_date for row in rows),
+            ],
+        ).values_list("employee_id", "interview_date"):
+            interview_dates[employee_id].append(interview_date)
+        cache = getattr(request, "_horilla_interview_clash_cache", None)
+        if cache is None:
+            cache = request._horilla_interview_clash_cache = {}
+        for row in rows:
+            cache[(row.employee_id_id, row.start_date, row.end_date)] = any(
+                row.start_date <= interview_date <= row.end_date
+                for interview_date in interview_dates[row.employee_id_id]
+            )
 
     filter_class = LeaveRequestFilter
     model = LeaveRequest
@@ -84,10 +151,11 @@ class LeaveRequestsListView(HorillaListView):
         (_("Start Date"), "start_date"),
         (_("End Date"), "end_date"),
         (_("Requested Days"), "requested_days"),
+        (_("Available Balance"), "available_balance_col"),
         (_("Leave Clash"), "leave_clash_col"),
         (_("Status"), "custom_status_col"),
         (_("Comment"), "comment_sidebar"),
-        (_("Penalities"), "penality_col"),
+        (_("Penalties"), "penalty_col"),
     ]
 
     default_columns = [
@@ -121,7 +189,7 @@ class LeaveRequestsListView(HorillaListView):
     header_attrs = {
         "leave_requests_custom_emp_col": """ style="width:200px !important;" """,
         "option": """ style="width:200px !important;" """,
-        "penality_col": """ style="width:160px !important;" """,
+        "penalty_col": """ style="width:160px !important;" """,
     }
 
     row_status_indications = [
@@ -426,16 +494,21 @@ class LeaveRequestsDetailView(HorillaDetailedView):
             return context
         body = list(self.body)
 
+        insert_index = 7
+        if self.instance.get_penalties_count():
+            body.insert(insert_index, (_("Penalties"), "penalty_detail_col", True))
+            self.cols["penalty_detail_col"] = 12
+            insert_index += 1
+
         if self.instance.multiple_approvals:
-            insert_index = 7
             body.insert(
                 insert_index,
                 (_("Multiple Approvals"), "multiple_approval_action", True),
             )
+            insert_index += 1
             self.cols["multiple_approval_action"] = 12
 
         if self.instance.reject_reason:
-            insert_index = 8
             body.insert(
                 insert_index, (_("Reason for Rejection"), "rejected_action", True)
             )
@@ -447,15 +520,44 @@ class LeaveRequestsDetailView(HorillaDetailedView):
 
 @method_decorator(login_required, name="dispatch")
 @method_decorator(manager_can_enter("leave.add_leaverequest"), name="dispatch")
-class LeaveRequestFormView(HorillaFormView):
+class LeaveRequestFormView(EmployeeScopeMixin, HorillaFormView):
     """
     form view
     """
+
+    scope_perm = "leave.add_leaverequest"
+    scope_include_self = True
 
     model = LeaveRequest
     form_class = LeaveRequestCreationForm
     template_name = "cbv/leave_requests/form/inherit.html"
     new_display_title = _("Leave Request")
+
+    def get_scoped_employee_ids(self, request):
+        """
+        On the edit route, who may open the record is decided by
+        ``get_queryset`` below, which also admits a manager that a
+        multiple-approval condition nominated for this request. The scope check
+        must not override that, so the record's own employee is left out here;
+        any other employee posted (moving the request to someone else) is
+        still checked.
+        """
+        pk = self.kwargs.get("pk")
+        if not pk:
+            return super().get_scoped_employee_ids(request)
+        from leave.views import _may_act_on_leave_request
+
+        instance = LeaveRequest.objects.filter(pk=pk).first()
+        if instance is None or not _may_act_on_leave_request(
+            request, instance, "leave.change_leaverequest", owner_allowed=True
+        ):
+            return super().get_scoped_employee_ids(request)
+        posted = request.POST.getlist("employee_id") if request.method == "POST" else []
+        return [
+            value
+            for value in posted
+            if value and str(value) != str(instance.employee_id_id)
+        ]
 
     def get_queryset(self):
         # The base class loads any pk; manager_can_enter above only checks
@@ -537,6 +639,16 @@ class LeaveRequestFormView(HorillaFormView):
 
         context["form"] = self.form
         context["view_id"] = "leaverequest"
+        # Leave types whose configuration makes an attachment mandatory; the
+        # form template toggles the "*" indicator from this on type change.
+        context["attachment_required_type_ids"] = list(
+            LeaveType.objects.filter(require_attachment="yes").values_list(
+                "id", flat=True
+            )
+        )
+        context["has_existing_attachment"] = bool(
+            self.form.instance.pk and self.form.instance.attachment
+        )
 
         return context
 
@@ -635,6 +747,15 @@ class LeaveClashListView(LeaveRequestsListView):
     list view of leave clash col
     """
 
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        # Distinct from the page's own "leaveRequest" list sitting behind
+        # this modal -- the inherited __init__ would otherwise give both the
+        # same id, and now that the column-picker is enabled here too its
+        # per-column toggle lookups need a container id that is actually
+        # unique in the DOM.
+        self.view_id = "leaveClash"
+
     def dispatch(self, request, *args, **kwargs):
         if not LeaveRequest.objects.filter(id=kwargs.get("pk")).exists():
             return HttpResponse()
@@ -646,29 +767,30 @@ class LeaveClashListView(LeaveRequestsListView):
         record = LeaveRequest.objects.filter(id=pk).first()
         if not record:
             return queryset.none()
-        if record.status != "rejected" or record.status != "cancelled":
-            queryset = (
-                queryset.filter(
-                    Q(
-                        employee_id__employee_work_info__department_id=record.employee_id.employee_work_info.department_id
-                    )
-                    | Q(
-                        employee_id__employee_work_info__job_position_id=record.employee_id.employee_work_info.job_position_id
-                    ),
-                    start_date__lte=record.end_date,
-                    end_date__gte=record.start_date,
-                )
-                .exclude(id=pk)
-                .exclude(Q(status="cancelled") | Q(status="rejected"))
-            )
+        queryset = queryset.filter(
+            id__in=record.clashing_requests().values_list("id", flat=True)
+        )
 
         return queryset.distinct()
 
+    # Trimmed to the columns that actually matter for comparing a clash at a
+    # glance -- the full leave-list column set (Available Balance, Comment,
+    # ...) made this modal too wide/cluttered for what is meant to be a
+    # quick side-by-side check.
     columns = [
         col
         for col in LeaveRequestsListView.columns
-        if col[1] not in ["leave_clash_col", "penality_col", "actions_col"]
+        if col[1]
+        not in [
+            "leave_clash_col",
+            "penalty_col",
+            "actions_col",
+            "available_balance_col",
+            "comment_sidebar",
+        ]
     ] + [(_("Clashed Due To"), "clashed_due_to")]
+    default_columns = columns
+    show_toggle_form = True
 
     row_status_class = ""
     row_status_indications = None

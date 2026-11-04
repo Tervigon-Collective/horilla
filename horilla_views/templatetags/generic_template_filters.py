@@ -83,10 +83,13 @@ def cell_tooltip(value) -> str:
     Tooltip text for a list-table cell: plain text collapsed to single spaces.
     Cells rendering interactive widgets get no tooltip — stripping their tags
     would concatenate hidden text (e.g. every option of a select).
+    A cell carrying a data-no-tooltip attribute opts out of the tooltip too.
     """
     from django.utils.html import strip_tags
 
     text = str(value)
+    if "data-no-tooltip" in text:
+        return ""
     if re.search(r"<\s*(select|input|textarea|button|form)\b", text, re.IGNORECASE):
         return ""
     # strip_tags removes tag markup but not the text content of <style>/<script>
@@ -301,6 +304,30 @@ def id_list_json(queryset):
             return "[]"
     except TypeError:
         return "[]"
+
+
+@register.filter("node_ids_json")
+def node_ids_json(node):
+    """
+    JSON-encode the pks of every record under a nested group-by node (all of
+    its leaf groups, every page of each), for the group header's select-all
+    checkbox.
+    """
+    ids = []
+
+    def collect(n):
+        if n.get("children"):
+            for child in n["children"]:
+                collect(child)
+        elif n.get("list") is not None:
+            for obj in n["list"].paginator.object_list:
+                ids.append(obj.pk)
+
+    try:
+        collect(node)
+    except (AttributeError, TypeError):
+        return "[]"
+    return mark_safe(json.dumps(ids))
 
 
 @register.filter("get_id")

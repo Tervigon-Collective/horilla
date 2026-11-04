@@ -1537,6 +1537,20 @@ def asset_excel(_request):
         return HttpResponse(exception)
 
 
+# (field on Asset, column heading in the file) -- also the column picker in the
+# export modal.
+ASSET_EXPORT_COLUMNS = [
+    ("asset_name", "Asset name"),
+    ("asset_description", "Description"),
+    ("asset_tracking_id", "Serial No."),
+    ("asset_purchase_date", "Purchase date"),
+    ("asset_purchase_cost", "Purchase cost"),
+    ("asset_category_id", "Category"),
+    ("asset_status", "Status"),
+    ("asset_lot_number_id", "Batch number"),
+]
+
+
 @login_required
 @permission_required("asset.view_assetcategory")
 def asset_export_excel(request):
@@ -1627,25 +1641,24 @@ def asset_export_excel(request):
 
         # Convert any date fields to the desired format
         # Rename the columns as needed
-        dataframe = dataframe.rename(
-            columns={
-                "asset_name": "Asset name",
-                "asset_description": "Description",
-                "asset_tracking_id": "Serial No.",
-                "asset_purchase_date": "Purchase date",
-                "asset_purchase_cost": "Purchase cost",
-                "asset_category_id": "Category",
-                "asset_status": "Status",
-                "asset_lot_number_id": "Batch number",
-            }
-        )
+        dataframe = dataframe.rename(columns=dict(ASSET_EXPORT_COLUMNS))
+
+        chosen = request.POST.getlist("selected_fields")
+        columns_map = dict(ASSET_EXPORT_COLUMNS)
+        headings = [columns_map[field] for field in chosen if field in columns_map] or [
+            heading for _field, heading in ASSET_EXPORT_COLUMNS
+        ]
+        dataframe = dataframe[headings]
 
         # Write the DataFrame to an Excel file
         response = HttpResponse(content_type="application/vnd.ms-excel")
         response["Content-Disposition"] = 'attachment; filename="assets.xlsx"'
         dataframe.to_excel(response, index=False)
         return response
-    context = {"asset_export_filter": asset_export_filter}
+    context = {
+        "asset_export_filter": asset_export_filter,
+        "export_columns": ASSET_EXPORT_COLUMNS,
+    }
     return render(request, "category/asset_filter_export.html", context)
 
 

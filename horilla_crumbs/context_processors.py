@@ -121,7 +121,7 @@ BREADCRUMB_URL_NAMES = {
     "performance-settings-view": "Configuration",
     "user-group-view": "Roles and Permissions",
     "employee-permission-assign": "Roles and Permissions",
-    "payroll-runs": _("Payroll Runs"),
+    "payroll-runs": _("Payroll Batches"),
     "employee-view-update": _("Employees"),
     "components": _("Pay Components"),
     "compensation-templates": _("Pay Structures"),
@@ -137,6 +137,16 @@ BREADCRUMB_URL_NAMES = {
     "configuration": _("Configuration"),
     "standard": "Standard Reports",
     "explorer": "Explorer",
+    "work-status": _("Work Status"),
+}
+
+# Pages whose crumb is named by the page, not by the URL word it ends in: the steps of a new
+# payroll batch would otherwise read "new", "review" and "progress".
+CRUMB_NAMES_BY_URL_NAME = {
+    "payroll-batch-scope": _("New Batch"),
+    "payroll-batch-review": _("Review"),
+    "payroll-batch-progress": _("Progress"),
+    "payroll-batch-inputs": _("Inputs"),
 }
 
 sidebar_urls = [
@@ -163,7 +173,7 @@ sidebar_urls = [
     "view-payslip",
     "filing-status-view",
     "attendance-view",
-    "work-records",
+    "work-status",
     "request-attendance-view",
     "attendance-overtime-view",
     "monthly-summary",
@@ -320,6 +330,7 @@ remove_urls = [
     "task-view",
     "dashboard",
     "login",
+    "employee-bulk-reset-password-admin",
 ]
 
 user_breadcrumbs = {}
@@ -658,6 +669,11 @@ def build_breadcrumbs(request):
             "found": found,
             "clickable": clickable,
         }
+        step_name = CRUMB_NAMES_BY_URL_NAME.get(
+            getattr(resolver_match, "url_name", None)
+        )
+        if step_name:
+            crumb["name"] = str(step_name)
 
         if i == 0:
             if section_override:
@@ -772,6 +788,11 @@ def breadcrumbs(request):
     """
     Active breadcrumbs context processor.
     """
+    user = getattr(request, "user", None)
+    if not (user and user.is_authenticated):
+        # The trail is only shown to logged-in users; keeping one for a
+        # logged-out page (the login page) would create a session row.
+        return {"breadcrumbs": []}
     try:
         current_language = get_language()
         if request.session.get("breadcrumbs_lang") != current_language:

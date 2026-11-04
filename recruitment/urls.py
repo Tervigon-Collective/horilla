@@ -823,6 +823,16 @@ urlpatterns = [
         name="candidate-login",
     ),
     path(
+        "candidate-send-invitation/<int:cand_id>/",
+        views.candidate_send_invitation,
+        name="candidate-send-invitation",
+    ),
+    path(
+        "candidate-logout/",
+        views.candidate_logout,
+        name="candidate-logout",
+    ),
+    path(
         "create-reject-reason/", views.create_reject_reason, name="create-reject-reason"
     ),
     path(
@@ -1035,6 +1045,11 @@ urlpatterns = [
         "candidate-document-delete/<int:id>/",
         views.document_delete,
         name="candidate-document-delete",
+    ),
+    path(
+        "candidate-tracking-items/<int:cand_id>/<str:section>/",
+        views.candidate_tracking_items,
+        name="candidate-tracking-items",
     ),
     path(
         "candidate-add-notes/<int:cand_id>/",
