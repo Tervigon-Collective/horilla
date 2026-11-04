@@ -19,15 +19,13 @@
         --is-surface-2: rgba(255, 255, 255, 0.04);
     }
 
-    /* Full-bleed page shell (matches payroll dashboard) */
+    /* Sit in the normal content padding. A negative margin slid these
+       pages under the fixed header and out past the sidebar. */
     .is-page {
-        margin: -24px;
-        padding: 24px;
-        min-height: calc(100vh - 80px);
-        background: var(--is-surface);
+        margin: 0;
+        padding: 0;
         color: inherit;
     }
-    .dark .is-page { background: #000000; }
     .is-page__content { max-width: 100%; }
 
     .is-page-head { margin-bottom: 16px; }
@@ -106,6 +104,7 @@
     .dark .is-section,
     .dark .is-section-card { background: #242424; }
     .is-section__header,
+    .is-section__head,
     .is-section-card__header {
         display: flex;
         align-items: center;
@@ -149,9 +148,10 @@
 
     .is-tabs {
         display: flex;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         gap: 6px;
         margin-bottom: 20px;
+        overflow-x: auto;
     }
     .is-tabs__link {
         display: inline-flex;
@@ -165,6 +165,8 @@
         text-decoration: none;
         border: 1px solid var(--is-border);
         background: var(--is-surface);
+        flex-shrink: 0;
+        white-space: nowrap;
         transition: border-color 0.15s, color 0.15s, background 0.15s;
     }
     .dark .is-tabs__link { background: #242424; }
@@ -260,6 +262,12 @@
         border-bottom: none;
     }
     .is-table .is-actions { text-align: right; white-space: nowrap; }
+    .is-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .is-label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+    .is-inline-upload { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+    .is-toolbar__form .oh-select,
+    .is-toolbar__form select,
+    .is-toolbar__form .oh-input { width: auto; min-width: 8rem; max-width: 16rem; }
 
     .is-empty {
         display: flex;
@@ -523,7 +531,7 @@
         .is-form-grid--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 640px) {
-        .is-page { margin: -16px; padding: 16px; }
+        .is-page { margin: 0; padding: 0; }
         .is-kpi-grid,
         .is-kpi-grid--3,
         .is-summary-grid,
