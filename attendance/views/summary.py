@@ -1111,63 +1111,63 @@ def build_monthly_summary(from_date, to_date, employee_qs):
         daily_manual_map[_dh["employee_id_id"]][_dh["date"]] = _dh["hours_second"]
 
     # -- 3. Approved leave requests overlapping the range (single DB hit) ----
+    # Horilla 2.3 half-day leave: a first/second half is 0.5, and a leave type
+    # that excludes holidays or week-offs does not take those days.
     leave_qs = (
         LeaveRequest.objects.filter(
             employee_id__in=emp_pks,
             status__in=["approved", "cancel_requested"],
             start_date__lte=count_end_date,
         )
-        .filter(Q(end_date__gte=from_date) | Q(end_date__isnull=True))
+        .filter(
+            end_date__isnull=False,
+            end_date__gte=from_date,
+        )
         .select_related("leave_type_id")
     )
-    all_leaves = list(leave_qs)
+    single_day_qs = LeaveRequest.objects.filter(
+        employee_id__in=emp_pks,
+        status__in=["approved", "cancel_requested"],
+        start_date__range=(from_date, count_end_date),
+        end_date__isnull=True,
+    ).select_related("leave_type_id")
+    all_leaves = list(chain(leave_qs, single_day_qs))
 
-    # Per-employee per-date leave: {emp_pk: {date: [paid_fraction, unpaid_fraction, skip_off, skip_holiday]}}.
-    # A half-day leave (first/second half) takes 0.5 of its day; a leave type
-    # set to exclude company leaves / holidays doesn't take those days (they
-    # stay week off / holiday) -- applied per employee below.
-    leave_info_per_emp = defaultdict(dict)
-    for _lr in all_leaves:
-        _s = max(_lr.start_date, from_date)
-        _e = min(_lr.end_date or count_end_date, count_end_date)
-        _lt = _lr.leave_type_id
-        for _d in _iter_dates(_s, _e):
-            if _d == _lr.start_date and _lr.start_date_breakdown in ("first_half", "second_half"):
-                _frac = 0.5
-            elif (
-                _d == _lr.end_date
-                and _lr.end_date != _lr.start_date
-                and _lr.end_date_breakdown in ("first_half", "second_half")
-            ):
-                _frac = 0.5
-            else:
-                _frac = 1.0
-            _info = leave_info_per_emp[_lr.employee_id_id].get(_d)
-            if _info is None:
-                _info = [
-                    0.0,
-                    0.0,
-                    getattr(_lt, "exclude_company_leave", "no") == "yes",
-                    getattr(_lt, "exclude_holiday", "no") == "yes",
-                ]
-                leave_info_per_emp[_lr.employee_id_id][_d] = _info
-            # Two half-day leaves on one day (e.g. half paid + half unpaid)
-            # each keep their own kind; together they cannot exceed the day.
-            _kind = 0 if _lt.payment == "paid" else 1
-            _info[_kind] = min(1.0 - _info[1 - _kind], _info[_kind] + _frac)
-
-    # -- 4. Roster-based week-off per employee (single DB hit) ---------------
+    # Week-offs first: a leave may exclude the employee's own week-off days.
     roster_qs = Roster.objects.filter(
         employee_id__in=emp_pks,
         date__range=(from_date, count_end_date),
     ).values("employee_id", "is_off", "date")
-    roster_has = set()
-    roster_off_dates = defaultdict(set)  # {emp_pk: set(week_off_dates)}
+    roster_rows_per_emp = defaultdict(list)  # {emp_pk: [(date, is_off)]}
     for entry in roster_qs:
-        pk = entry["employee_id"]
-        roster_has.add(pk)
-        if entry["is_off"]:
-            roster_off_dates[pk].add(entry["date"])
+        roster_rows_per_emp[entry["employee_id"]].append(
+            (entry["date"], entry["is_off"])
+        )
+
+    leave_dates_per_emp = defaultdict(set)
+    paid_day_dates_per_emp = defaultdict(set)
+    unpaid_day_dates_per_emp = defaultdict(set)
+    part_leave_per_emp = defaultdict(dict)
+    _leaves_by_emp = defaultdict(list)
+    for _lr in all_leaves:
+        _leaves_by_emp[_lr.employee_id_id].append(_lr)
+    _company_off = {d for d in raw_cl if from_date <= d <= count_end_date}
+    for _pk, _lrs in _leaves_by_emp.items():
+        _own_off = employee_week_off_dates(
+            roster_rows_per_emp.get(_pk, ()),
+            _company_off,
+            from_date,
+            count_end_date,
+        )
+        _partial, _paid_full, _unpaid_full = partial_leave_days(
+            _lrs, from_date, count_end_date, holiday_dates_set, _own_off
+        )
+        part_leave_per_emp[_pk] = _partial
+        paid_day_dates_per_emp[_pk] |= _paid_full
+        unpaid_day_dates_per_emp[_pk] |= _unpaid_full
+        leave_dates_per_emp[_pk] |= _paid_full | _unpaid_full
+        # Half paid plus half unpaid fills the day, so attendance on it is a clash too.
+        leave_dates_per_emp[_pk] |= {d for d, p in _partial.items() if p[0] + p[1] >= 1}
 
     # -- 5. Batch-fetch conflict resolutions (with type) for all employees ----
     from attendance.models import AttendanceConflictResolution
@@ -1216,20 +1216,15 @@ def build_monthly_summary(from_date, to_date, employee_qs):
     ):
         _att_vals = dict(att_date_value_map.get(emp.pk, {}))
         _att_secs = att_date_secs_map.get(emp.pk, {})
-        _emp_off = (
-            roster_off_dates.get(emp.pk, set())
-            if emp.pk in roster_has
-            else company_off_dates
+        _paid_dates = paid_day_dates_per_emp.get(emp.pk, set())
+        _unpaid_dates = unpaid_day_dates_per_emp.get(emp.pk, set())
+        _part_leave = part_leave_per_emp.get(emp.pk, {})
+        _emp_off = employee_week_off_dates(
+            roster_rows_per_emp.get(emp.pk, ()),
+            company_off_dates,
+            from_date,
+            count_end_date,
         )
-        _leave = {}  # {date: (fraction, paid_part, unpaid_part)} -- leave days this employee takes
-        for _d, (_paid_part, _unpaid_part, _skip_off, _skip_hol) in leave_info_per_emp.get(
-            emp.pk, {}
-        ).items():
-            if (_skip_hol and _d in holiday_dates_set) or (_skip_off and _d in _emp_off):
-                continue
-            _leave[_d] = (_paid_part + _unpaid_part, _paid_part, _unpaid_part)
-        _paid_dates = {_d for _d, (_f, _pp, _up) in _leave.items() if _pp >= _f}
-        _unpaid_dates = {_d for _d, (_f, _pp, _up) in _leave.items() if _pp < _f}
         _work_info = getattr(emp, "employee_work_info", None)
         _joined = getattr(_work_info, "date_joining", None)
         _resolutions = resolutions_per_emp.get(emp.pk, {})
@@ -1245,6 +1240,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
                 and _d not in _emp_off
                 and _d not in _paid_dates
                 and _d not in _unpaid_dates
+                and _d not in _part_leave
                 and _d not in _resolutions
                 and _meta["real_punches"]
             )
@@ -1382,20 +1378,38 @@ def build_monthly_summary(from_date, to_date, employee_qs):
 
             # Legacy "attendance" / "leave" — fall through to natural
             # No resolution — natural computation
-            _lv = _leave.get(d)
+
+            # Half-day leave from Horilla 2.3: the leave covers its half. The other
+            # half is present when attendance reaches it, otherwise absent.
+            _part = _part_leave.get(d)
+            if (
+                _part
+                and d not in off_set
+                and d not in holiday_dates_set
+                and d not in _emp_off
+                and (_part[0] + _part[1] < 1 or d not in _att_vals)
+            ):
+                paid_leave += _part[0]
+                unpaid_leave += _part[1]
+                _rest = 1.0 - _part[0] - _part[1]
+                if _rest > 0:
+                    _got = min(_att_vals.get(d, 0.0), _rest)
+                    present += _got
+                    absent += _rest - _got
+                    if d > _today_d:
+                        upcoming_days += _rest - _got
+                _day_manual = _daily_hrs.get(d)
+                hours_second += (
+                    _day_manual if _day_manual is not None else _att_secs.get(d, 0)
+                )
+                continue
+
             if d in _att_vals:
                 val = _att_vals[d]
                 if d in holiday_dates_set:
                     holiday_c += 1.0  # HO — attendance on holiday
                 elif d in _emp_off:
                     week_off += 1.0  # WO — attendance on week-off
-                elif _lv and _lv[0] < 1.0:
-                    # Half-day leave and worked the other half.
-                    _worked = min(val, 1.0 - _lv[0])
-                    present += _worked
-                    paid_leave += _lv[1]
-                    unpaid_leave += _lv[2]
-                    absent += max(0.0, 1.0 - _lv[0] - _worked)
                 else:
                     present += val
                     # Half the shift or more but not all of it: the other half fell
@@ -1411,11 +1425,10 @@ def build_monthly_summary(from_date, to_date, employee_qs):
                 hours_second += (
                     _day_manual if _day_manual is not None else _att_secs.get(d, 0)
                 )
-            elif _lv:
-                paid_leave += _lv[1]
-                unpaid_leave += _lv[2]
-                if _lv[0] < 1.0 and d not in holiday_dates_set and d not in _emp_off:
-                    absent += 1.0 - _lv[0]  # half-day leave, other half not worked
+            elif d in _paid_dates:
+                paid_leave += 1.0
+            elif d in _unpaid_dates:
+                unpaid_leave += 1.0
             elif d in holiday_dates_set:
                 holiday_c += 1.0
             elif d in _emp_off:
@@ -1431,8 +1444,7 @@ def build_monthly_summary(from_date, to_date, employee_qs):
         # holiday/week-off is normal overtime work, not a data discrepancy —
         # only attendance overlapping approved leave counts as a conflict.
         att_dates = att_dates_map.get(emp.pk, set())
-        # A half-day leave with work in the other half is not a conflict.
-        emp_leave_dates = {_d for _d, (_f, _pp, _up) in _leave.items() if _f >= 1.0}
+        emp_leave_dates = leave_dates_per_emp.get(emp.pk, set())
         conflict_date_set = att_dates & emp_leave_dates
         # Attendance inside the half of a day that is on leave is a clash too.
         for _d, _p in _part_leave.items():
@@ -1640,6 +1652,19 @@ def _parse_date(value, fallback):
         return fallback
 
 
+def _open_range(request, today=None):
+    """The range the summary opens on.
+
+    A saved Default Date Range (Horilla 2.3) wins. With none saved, the
+    26th-25th payroll cycle still applies: no pay period is configured, and
+    Horilla's own default is the calendar month.
+    """
+    today = today or datetime.date.today()
+    if request.COOKIES.get(RANGE_COOKIE) in RANGE_MODES:
+        return default_range(request, today)
+    return cycle_bounds(today)
+
+
 @login_required
 @manager_can_enter("attendance.view_attendance")
 def attendance_monthly_summary(request):
@@ -1649,7 +1674,7 @@ def attendance_monthly_summary(request):
     The table is populated via HTMX on load.
     """
     today = datetime.date.today()
-    from_date_default, to_date_default = cycle_bounds(today)
+    from_date_default, to_date_default = _open_range(request, today)
 
     # Employee/Department/Job Position/Shift/Work Type render as AJAX-
     # searched Select2 comboboxes now (see monthly_summary.html) rather
@@ -2095,11 +2120,9 @@ def attendance_monthly_summary_table(request):
     Triggered by the Filter button and on initial page load.
     """
     today = datetime.date.today()
-    from_date = _parse_date(request.GET.get("from_date"), cycle_bounds(today)[0])
-    to_date = _parse_date(
-        request.GET.get("to_date"),
-        cycle_bounds(today)[1],
-    )
+    _open_from, _open_to = _open_range(request, today)
+    from_date = _parse_date(request.GET.get("from_date"), _open_from)
+    to_date = _parse_date(request.GET.get("to_date"), _open_to)
 
     if from_date > to_date:
         from_date, to_date = to_date, from_date
@@ -2241,11 +2264,9 @@ def attendance_monthly_summary_export(request):
     Accepts the same GET params as the table view (no pagination).
     """
     today = datetime.date.today()
-    from_date = _parse_date(request.GET.get("from_date"), cycle_bounds(today)[0])
-    to_date = _parse_date(
-        request.GET.get("to_date"),
-        cycle_bounds(today)[1],
-    )
+    _open_from, _open_to = _open_range(request, today)
+    from_date = _parse_date(request.GET.get("from_date"), _open_from)
+    to_date = _parse_date(request.GET.get("to_date"), _open_to)
 
     if from_date > to_date:
         from_date, to_date = to_date, from_date
@@ -2747,33 +2768,84 @@ def attendance_monthly_summary_detail(request):
         )
         att_by_date = {r["attendance_date"]: r for r in att_rows}
 
-        # Approved leave date → (leave_type_name, payment)
+        # Approved leave date → (leave_type_name, payment). Half days come from
+        # Horilla 2.3: a clash only when the punch is inside the leave half.
         leave_date_info = {}
+        _clash_leaves = list(
+            _LR.objects.filter(
+                employee_id=emp,
+                status__in=["approved", "cancel_requested"],
+                start_date__lte=to_date,
+                end_date__isnull=False,
+                end_date__gte=from_date,
+            ).select_related("leave_type_id")
+        ) + list(
+            _LR.objects.filter(
+                employee_id=emp,
+                status__in=["approved", "cancel_requested"],
+                start_date__range=(from_date, to_date),
+                end_date__isnull=True,
+            ).select_related("leave_type_id")
+        )
+        _hol, _wo = exclusion_sets(emp, from_date, to_date)
+        for _lr in _clash_leaves:
+            for _d, (_frac, _lead) in leave_day_fractions(
+                _lr, from_date, to_date, leave_skip(_lr, _hol, _wo)
+            ).items():
+                if _frac >= 1:
+                    leave_date_info[_d] = (
+                        _lr.leave_type_id.name,
+                        _lr.leave_type_id.payment,
+                    )
+
         half_leave_info = {}
-        for _lr in _LR.objects.filter(
-            employee_id=emp,
-            status__in=["approved", "cancel_requested"],
-            start_date__lte=to_date,
-        ).filter(Q(end_date__gte=from_date) | Q(end_date__isnull=True)).select_related(
-            "leave_type_id"
-        ):
-            for _d in _iter_dates(
-                max(_lr.start_date, from_date),
-                min(_lr.end_date or to_date, to_date),
-            ):
-                # Half a day of leave leaves the other half free for attendance.
-                if (
-                    _d == _lr.start_date
-                    and _lr.start_date_breakdown in ("first_half", "second_half")
-                ) or (
-                    _d == _lr.end_date
-                    and _lr.end_date != _lr.start_date
-                    and _lr.end_date_breakdown in ("first_half", "second_half")
-                ):
-                    continue
-                leave_date_info[_d] = (
-                    _lr.leave_type_id.name,
-                    _lr.leave_type_id.payment,
+        _partial, _pf, _uf = partial_leave_days(
+            _clash_leaves, from_date, to_date, _hol, _wo
+        )
+        _wi = _EWI_d.objects.filter(employee_id=emp).values("shift_id_id").first()
+        _own_shift = _wi["shift_id_id"] if _wi else None
+        from base.models import EmployeeShiftSchedule as _ESS_d
+
+        _shift_ids = {r["shift_id_id"] for r in att_rows if r["shift_id_id"]} | {
+            _own_shift
+        }
+        _shift_times = {}
+        for x in _ESS_d.objects.filter(
+            shift_id__in=[i for i in _shift_ids if i]
+        ).values("shift_id_id", "day__day", "start_time", "end_time"):
+            _shift_times[(x["shift_id_id"], x["day__day"])] = (
+                x["start_time"],
+                x["end_time"],
+            )
+        _names = [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        ]
+        for _d, _p in _partial.items():
+            _r = att_by_date.get(_d)
+            if _p[0] + _p[1] >= 1 or not _r:
+                continue
+            _t = _shift_times.get(
+                (_r["shift_id_id"] or _own_shift, _names[_d.weekday()])
+            )
+            _why = half_leave_conflict(
+                _p[2],
+                _r["attendance_clock_in"],
+                _r["attendance_clock_out"],
+                _t,
+                _r["at_work_second"] or 0,
+                _ss(_r["minimum_hour"]) if _r.get("minimum_hour") else 0,
+            )
+            if _why:
+                half_leave_info[_d] = (
+                    _p[3],
+                    "paid" if _p[0] >= _p[1] else "unpaid",
+                    f"{half_leave_label(_p[2], _t)}. {_why}",
                 )
 
         # Holiday date → name
@@ -3607,10 +3679,9 @@ def attendance_monthly_summary_calendar(request):
     for a single employee over the selected date range.
     """
     emp_id = request.GET.get("employee_id")
-    from_date = _parse_date(
-        request.GET.get("from_date"), cycle_bounds()[0]
-    )
-    to_date = _parse_date(request.GET.get("to_date"), datetime.date.today())
+    _open_from, _open_to = _open_range(request)
+    from_date = _parse_date(request.GET.get("from_date"), _open_from)
+    to_date = _parse_date(request.GET.get("to_date"), _open_to)
 
     # Reading an employee's attendance: themselves, one of their reports, or
     # a holder of the view permission.
@@ -3653,12 +3724,13 @@ def attendance_monthly_summary_conflict_resolve(request):
 
     emp_id = request.POST.get("employee_id") or request.GET.get("employee_id")
     date_str = request.POST.get("date") or request.GET.get("date")
+    _open_from, _open_to = _open_range(request)
     from_date = _parse_date(
         request.POST.get("from_date") or request.GET.get("from_date"),
-        cycle_bounds()[0],
+        _open_from,
     )
     to_date = _parse_date(
-        request.POST.get("to_date") or request.GET.get("to_date"), datetime.date.today()
+        request.POST.get("to_date") or request.GET.get("to_date"), _open_to
     )
     date = _parse_date(date_str, None)
 
