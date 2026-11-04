@@ -1176,7 +1176,7 @@ reloadSelectedCount($('.count_msAttendance'),'selectedInstances');">
         '{% trans "Undo"|escapejs %}' +
       '</button>' +
       '<button onclick="document.getElementById(\'ms-undo-bar\').remove()" ' +
-              'style="background:none;color:#64748b;border:none;cursor:pointer;font-size:1.05rem;padding:0 3px;line-height:1;">âœ•</button>';
+              'style="background:none;color:#64748b;border:none;cursor:pointer;font-size:1.05rem;padding:0 3px;line-height:1;" aria-label="Close">&times;</button>';
     document.body.appendChild(bar);
 
     // Use window.msUndoBulk indirectly so post-refresh IIFE version is called
