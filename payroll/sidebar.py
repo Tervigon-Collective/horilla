@@ -107,46 +107,9 @@ SUBMENUS = [
         "menu": _("India Statutory"),
         "redirect": reverse("india-statutory-settings"),
         "accessibility": "payroll.sidebar.india_statutory_accessibility",
-    },
-    {
-        "menu": _("Form 16"),
-        "redirect": reverse("form16-list"),
-        "accessibility": "payroll.sidebar.india_statutory_accessibility",
-    },
-    {
-        "menu": _("Statutory Challans"),
-        "redirect": reverse("challan-list"),
-        "accessibility": "payroll.sidebar.india_statutory_accessibility",
-    },
-    {
-        "menu": _("Statutory Registers"),
-        "redirect": reverse("statutory-register"),
-        "accessibility": "payroll.sidebar.india_statutory_accessibility",
-    },
-    {
-        "menu": _("Form 24Q"),
-        "redirect": reverse("form24q-list"),
-        "accessibility": "payroll.sidebar.india_statutory_accessibility",
-    },
-    {
-        "menu": _("TRACES e-Filing"),
-        "redirect": reverse("traces-efiling"),
-        "accessibility": "payroll.sidebar.india_statutory_accessibility",
-    },
-    {
-        "menu": _("EPF ECR"),
-        "redirect": reverse("epf-ecr-list"),
-        "accessibility": "payroll.sidebar.india_statutory_accessibility",
-    },
-    {
-        "menu": _("Accounting Export"),
-        "redirect": reverse("accounting-export-list"),
-        "accessibility": "payroll.sidebar.india_statutory_accessibility",
-    },
-    {
-        "menu": _("Statutory Excel"),
-        "redirect": reverse("statutory-excel-hub"),
-        "accessibility": "payroll.sidebar.india_statutory_accessibility",
+        # Form 16, challans, registers, 24Q, TRACES, ECR and the Excel hub
+        # are tabs on this page. Horilla has no sidebar entries for them.
+        "match_prefixes": ["/payroll/india-statutory/"],
     },
     {
         "menu": _("Configuration"),
