@@ -1,29 +1,44 @@
+{% extends "index.html" %}
 {% load i18n %}
-<div class="oh-wrapper">
-  <h3>{% trans "Create payroll run" %}</h3>
-  <p>{% trans "Company" %}: {{ company }}</p>
-  <form method="post" class="oh-profile-section">
-    {% csrf_token %}
-    <div class="oh-input-group">
-      <label>{% trans "Year" %}</label>
-      <input class="oh-input" type="number" name="year" value="{{ year }}" required>
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+<div class="is-page">
+  <div class="is-page-head">
+    <h1 class="is-page-head__title">{% trans "Create payroll run" %}</h1>
+    <p class="is-page-head__desc">{% trans "Company" %}: {{ company }}</p>
+  </div>
+  <div class="is-section">
+    <div class="is-section__body">
+      <form method="post">
+        {% csrf_token %}
+        <div class="is-form-grid is-form-grid--2">
+          <div class="is-field">
+            <label class="oh-label">{% trans "Year" %}</label>
+            <input class="oh-input" type="number" name="year" value="{{ year }}" required>
+          </div>
+          <div class="is-field">
+            <label class="oh-label">{% trans "Month" %}</label>
+            <input class="oh-input" type="number" name="month" min="1" max="12" value="{{ month }}" required>
+          </div>
+          <div class="is-field">
+            <label class="oh-label">{% trans "Proration method" %}</label>
+            <select class="oh-select" name="proration_method">
+              <option value="calendar">{% trans "Calendar-day" %}</option>
+              <option value="working_day">{% trans "Working-day" %}</option>
+            </select>
+          </div>
+          <div class="is-field" style="grid-column:1 / -1;">
+            <label class="oh-label">{% trans "Notes" %}</label>
+            <textarea class="oh-input" name="notes" rows="2"></textarea>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px;">
+          <button type="submit" class="oh-btn oh-btn--secondary">{% trans "Create / open run" %}</button>
+          <a href="{% url 'payroll-run-list' %}" class="oh-btn oh-btn--light">{% trans "Cancel" %}</a>
+        </div>
+      </form>
     </div>
-    <div class="oh-input-group">
-      <label>{% trans "Month" %}</label>
-      <input class="oh-input" type="number" name="month" min="1" max="12" value="{{ month }}" required>
-    </div>
-    <div class="oh-input-group">
-      <label>{% trans "Proration method" %}</label>
-      <select class="oh-select" name="proration_method">
-        <option value="calendar">{% trans "Calendar-day" %}</option>
-        <option value="working_day">{% trans "Working-day" %}</option>
-      </select>
-    </div>
-    <div class="oh-input-group">
-      <label>{% trans "Notes" %}</label>
-      <textarea class="oh-input" name="notes" rows="2"></textarea>
-    </div>
-    <button type="submit" class="oh-btn oh-btn--secondary mt-2">{% trans "Create / open run" %}</button>
-    <a href="{% url 'payroll-run-list' %}" class="oh-btn oh-btn--light mt-2">{% trans "Cancel" %}</a>
-  </form>
+  </div>
 </div>
+{% endblock content %}

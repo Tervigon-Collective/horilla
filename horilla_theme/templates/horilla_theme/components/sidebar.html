@@ -1195,7 +1195,8 @@
         document.addEventListener("htmx:beforeRequest", function (evt) {
           try {
             var trigger = evt && evt.detail && evt.detail.elt;
-            if (!(sidebarEl && trigger && sidebarEl.contains(trigger))) return;
+            var fromNav = trigger && ((sidebarEl && sidebarEl.contains(trigger)) || (flyoutEl && flyoutEl.contains(trigger)));
+            if (!fromNav) return;
             var requestPath =
               (evt.detail.pathInfo && evt.detail.pathInfo.requestPath) ||
               trigger.getAttribute("href") ||
@@ -1276,7 +1277,8 @@
         document.addEventListener("htmx:beforeSwap", function (evt) {
           try {
             var trigger = evt && evt.detail && evt.detail.elt;
-            if (!(sidebarEl && trigger && sidebarEl.contains(trigger))) return;
+            var fromNav = trigger && ((sidebarEl && sidebarEl.contains(trigger)) || (flyoutEl && flyoutEl.contains(trigger)));
+            if (!fromNav) return;
             var xhr = evt.detail.xhr;
             if (!xhr || xhr.status < 200 || xhr.status >= 400) return;
             if (!shouldFallbackToFullNav(xhr.responseText)) return;
@@ -1289,7 +1291,8 @@
         function sidebarNavError(evt) {
           try {
             var trigger = evt && evt.detail && evt.detail.elt;
-            if (!(sidebarEl && trigger && sidebarEl.contains(trigger))) return;
+            var fromNav = trigger && ((sidebarEl && sidebarEl.contains(trigger)) || (flyoutEl && flyoutEl.contains(trigger)));
+            if (!fromNav) return;
             fullNavigateFromEvent(evt);
           } catch (_) {}
         }

@@ -1,18 +1,24 @@
+{% extends "index.html" %}
 {% load i18n %}
-<div class="oh-wrapper">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h3>{% trans "Payroll run" %} {{ run.period_label }} v{{ run.version }}</h3>
-    <a href="{% url 'payroll-run-list' %}">{% trans "All runs" %}</a>
-  </div>
-  <p>
-    <strong>{% trans "Status" %}:</strong> {{ run.get_status_display }}
-    · <strong>{% trans "Batch" %}:</strong> {{ run.group_name }}
-    · {{ run.period_start }} → {{ run.period_end }}
-    · <strong>{% trans "Attendance" %}:</strong>
-      {% if run.attendance_locked %}{% trans "Locked" %}{% else %}{% trans "Open" %}{% endif %}
-  </p>
 
-  <div class="oh-btn-group mb-3" style="display:flex;flex-wrap:wrap;gap:8px;">
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+<div class="is-page">
+  <div class="is-page-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+    <div>
+      <h1 class="is-page-head__title">{% trans "Payroll run" %} {{ run.period_label }} v{{ run.version }}</h1>
+      <p class="is-page-head__desc">
+        <strong>{% trans "Status" %}:</strong> {{ run.get_status_display }}
+        · <strong>{% trans "Batch" %}:</strong> {{ run.group_name }}
+        · {{ run.period_start }} → {{ run.period_end }}
+        · <strong>{% trans "Attendance" %}:</strong>
+        {% if run.attendance_locked %}{% trans "Locked" %}{% else %}{% trans "Open" %}{% endif %}
+      </p>
+    </div>
+    <a href="{% url 'payroll-run-list' %}" class="oh-btn oh-btn--light">{% trans "All runs" %}</a>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
     {% if not run.is_immutable %}
     {% if not run.attendance_locked %}
     <form method="post" action="{% url 'payroll-run-lock-attendance' run.id %}">{% csrf_token %}
@@ -69,13 +75,17 @@
   </div>
 
   {% if variance %}
-  <div class="oh-card mb-3">
-    <h5>{% trans "Month-on-month variance" %}</h5>
-    <p>
-      {% trans "Gross" %}: {{ variance.previous_gross }} → {{ variance.current_gross }}
-      ({{ variance.gross_variance }}{% if variance.gross_variance_pct != None %} / {{ variance.gross_variance_pct }}%{% endif %})
-      · {% trans "Headcount" %}: {{ variance.previous_headcount }} → {{ variance.current_headcount }}
-    </p>
+  <div class="is-section">
+    <div class="is-section__header">
+      <h3 class="is-section__title">{% trans "Month-on-month variance" %}</h3>
+    </div>
+    <div class="is-section__body">
+      <p style="margin:0;">
+        {% trans "Gross" %}: {{ variance.previous_gross }} → {{ variance.current_gross }}
+        ({{ variance.gross_variance }}{% if variance.gross_variance_pct != None %} / {{ variance.gross_variance_pct }}%{% endif %})
+        · {% trans "Headcount" %}: {{ variance.previous_headcount }} → {{ variance.current_headcount }}
+      </p>
+    </div>
   </div>
   {% endif %}
 
@@ -92,33 +102,40 @@
   </div>
   {% endif %}
 
-  <h5>{% trans "Payslips in this run" %} ({{ payslips|length }})</h5>
-  <div class="oh-table">
-    <table class="oh-table__table">
-      <thead>
-        <tr>
-          <th>{% trans "Employee" %}</th>
-          <th>{% trans "Gross" %}</th>
-          <th>{% trans "Deduction" %}</th>
-          <th>{% trans "Net" %}</th>
-          <th>{% trans "Status" %}</th>
-          <th>{% trans "Frozen" %}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for p in payslips %}
-        <tr>
-          <td><a href="{% url 'view-created-payslip' p.id %}">{{ p.employee_id }}</a></td>
-          <td>{{ p.gross_pay }}</td>
-          <td>{{ p.deduction }}</td>
-          <td>{{ p.net_pay }}</td>
-          <td>{{ p.get_status }}</td>
-          <td>{% if p.snapshot_frozen %}{% trans "Yes" %}{% else %}{% trans "No" %}{% endif %}</td>
-        </tr>
-        {% empty %}
-        <tr><td colspan="6">{% trans "No payslips yet — click Calculate." %}</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="is-section">
+    <div class="is-section__header">
+      <h3 class="is-section__title">{% trans "Payslips in this run" %} ({{ payslips|length }})</h3>
+    </div>
+    <div class="is-section__body is-section__body--flush">
+      <div class="is-table-wrap">
+        <table class="is-table">
+          <thead>
+            <tr>
+              <th>{% trans "Employee" %}</th>
+              <th>{% trans "Gross" %}</th>
+              <th>{% trans "Deduction" %}</th>
+              <th>{% trans "Net" %}</th>
+              <th>{% trans "Status" %}</th>
+              <th>{% trans "Frozen" %}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in payslips %}
+            <tr>
+              <td><a href="{% url 'view-created-payslip' p.id %}">{{ p.employee_id }}</a></td>
+              <td>{{ p.gross_pay }}</td>
+              <td>{{ p.deduction }}</td>
+              <td>{{ p.net_pay }}</td>
+              <td>{{ p.get_status }}</td>
+              <td>{% if p.snapshot_frozen %}{% trans "Yes" %}{% else %}{% trans "No" %}{% endif %}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" class="is-empty-cell is-muted">{% trans "No payslips yet — click Calculate." %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
+{% endblock content %}

@@ -1,32 +1,47 @@
+{% extends "index.html" %}
 {% load i18n %}
-<div class="oh-wrapper">
-  <h3>{% trans "Attendance arrears" %}</h3>
-  <p>{% trans "Retro attendance adjustments after a month is locked — paid in a later open month." %}</p>
-  <a class="oh-btn oh-btn--secondary mb-2" href="{% url 'attendance-arrear-create' %}">{% trans "Create arrear" %}</a>
-  <table class="oh-table__table">
-    <thead>
-      <tr>
-        <th>{% trans "Employee" %}</th>
-        <th>{% trans "Source period" %}</th>
-        <th>{% trans "Days" %}</th>
-        <th>{% trans "Amount" %}</th>
-        <th>{% trans "Payout month" %}</th>
-        <th>{% trans "Paid" %}</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for a in arrears %}
-      <tr>
-        <td>{{ a.employee_id }}</td>
-        <td>{{ a.source_period_start }} → {{ a.source_period_end }}</td>
-        <td>{{ a.days }}</td>
-        <td>{{ a.amount }}</td>
-        <td>{{ a.payout_month }}</td>
-        <td>{% if a.paid %}{% trans "Yes" %}{% else %}{% trans "No" %}{% endif %}</td>
-      </tr>
-      {% empty %}
-      <tr><td colspan="6">{% trans "No attendance arrears." %}</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+
+{% block content %}
+{% include "payroll/india_statutory/_styles.html" %}
+<div class="is-page">
+  <div class="is-page-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+    <div>
+      <h1 class="is-page-head__title">{% trans "Attendance arrears" %}</h1>
+      <p class="is-page-head__desc">{% trans "Retro attendance adjustments after a month is locked — paid in a later open month." %}</p>
+    </div>
+    <a class="oh-btn oh-btn--secondary" href="{% url 'attendance-arrear-create' %}">{% trans "Create arrear" %}</a>
+  </div>
+  <div class="is-section">
+    <div class="is-section__body is-section__body--flush">
+      <div class="is-table-wrap">
+        <table class="is-table">
+          <thead>
+            <tr>
+              <th>{% trans "Employee" %}</th>
+              <th>{% trans "Source period" %}</th>
+              <th>{% trans "Days" %}</th>
+              <th>{% trans "Amount" %}</th>
+              <th>{% trans "Payout month" %}</th>
+              <th>{% trans "Paid" %}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for a in arrears %}
+            <tr>
+              <td>{{ a.employee_id }}</td>
+              <td>{{ a.source_period_start }} → {{ a.source_period_end }}</td>
+              <td>{{ a.days }}</td>
+              <td>{{ a.amount }}</td>
+              <td>{{ a.payout_month }}</td>
+              <td>{% if a.paid %}{% trans "Yes" %}{% else %}{% trans "No" %}{% endif %}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" class="is-empty-cell is-muted">{% trans "No attendance arrears." %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 </div>
+{% endblock content %}
