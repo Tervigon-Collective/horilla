@@ -638,6 +638,7 @@ class Contract(HorillaModel):
             context={
                 "instance": self,
                 "component_rows": rows,
+                "component_sections": self.component_sections,
                 # Built here rather than as fifteen body entries: the tab lays
                 # them out in two columns, which the generic one-per-row grid
                 # cannot do.
@@ -750,7 +751,12 @@ class Contract(HorillaModel):
                         "title": component.title,
                         "code": component.code,
                         "sequence": component.sequence,
+                        # Only which side of the payslip it is on: how it is taxed has its own column.
+                        "type_label": (
+                            _("Earning") if kind == "allowance" else _("Deduction")
+                        ),
                         "calculation": calculation_summary(component),
+                        "tax_label": self._tax_label(kind, component),
                         "source": source,
                         "source_label": source_label,
                         # Only a directly-targeted or structure component can
@@ -785,7 +791,13 @@ class Contract(HorillaModel):
                         "title": template.title,
                         "code": template.code,
                         "sequence": template.sequence,
+                        "type_label": (
+                            _("Earning") if kind == "allowance" else _("Deduction")
+                        ),
                         "calculation": _("When it happens"),
+                        "tax_label": self._tax_label(
+                            kind, template, self._standard_tax_value(template)
+                        ),
                         "source": "standard",
                         "source_label": _("Standard, always on"),
                         "can_toggle": False,
@@ -803,6 +815,77 @@ class Contract(HorillaModel):
             )
         )
         return rows
+
+    @staticmethod
+    def _tax_label(kind, component, value=None):
+        """
+        How the component is taxed, in the words of its list: taxable or not for an earning,
+        pre-tax or post-tax for a deduction (a statutory tax row has no such setting).
+        ``value`` overrides the component's own setting.
+        """
+        if kind == "allowance":
+            taxable = component.is_taxable if value is None else value
+            return _("Taxable") if taxable else _("Not Taxable")
+        if component.is_tax:
+            return "—"
+        pre_tax = component.is_pretax if value is None else value
+        return _("Pre-Tax") if pre_tax else _("Post-Tax")
+
+    def _standard_tax_value(self, template):
+        """What a standard item's tax setting is for this employee: their exception, if any."""
+        from payroll.system_components import policy_fields, tax_field
+
+        field = tax_field(template.system_key)
+        if not field:
+            return None
+        return policy_fields(template.system_key, employee=self.employee_id).get(field)
+
+    # How a component reaches an employee, in the order the contract's Components tab lists
+    # them. What applies to everybody, and the standard always-on pay items, share a section:
+    # neither is this contract's to switch off.
+    COMPONENT_SECTIONS = (
+        ("structure", _("Via Structure"), ("structure",)),
+        ("outside", _("Outside The Structure"), ("targeted", "conditional", "group")),
+        ("always", _("Always Applied"), ("everyone", "standard")),
+    )
+
+    # Overtime is paid only when the hours were worked, so an overtime component set to apply to
+    # everyone is still not "always applied": it sits with the ones outside the structure.
+    EVENT_DRIVEN_BASED_ON = ("overtime", "week_off_overtime", "holiday_overtime")
+
+    def _component_section_key(self, row):
+        component = row.get("component")
+        if (
+            row["source"] == "everyone"
+            and getattr(component, "based_on", None) in self.EVENT_DRIVEN_BASED_ON
+        ):
+            return "outside"
+        for key, _label, sources in self.COMPONENT_SECTIONS:
+            if row["source"] in sources:
+                return key
+        return "other"
+
+    @property
+    def component_sections(self):
+        """
+        ``component_rows`` grouped by how each component reaches the employee, empty sections
+        left out: ``[{"key", "label", "rows"}]``. Anything with a route not listed above is kept,
+        in a last section, rather than dropped.
+        """
+        rows = self.component_rows
+        grouped = {}
+        for row in rows:
+            grouped.setdefault(self._component_section_key(row), []).append(row)
+        sections = [
+            {"key": key, "label": label, "rows": grouped[key]}
+            for key, label, _sources in self.COMPONENT_SECTIONS
+            if key in grouped
+        ]
+        if "other" in grouped:
+            sections.append(
+                {"key": "other", "label": _("Other"), "rows": grouped["other"]}
+            )
+        return sections
 
     @property
     def assignable_components(self):
@@ -1998,6 +2081,18 @@ class Allowance(HorillaModel):
         """
         return _("Yes") if self.is_taxable else _("No")
 
+    def get_calculation_col(self):
+        """How the amount is worked out, in one line, whichever way it is configured."""
+        from payroll.methods.component_summary import calculation_summary
+
+        return calculation_summary(self)
+
+    def get_applied_to_col(self):
+        """Who it reaches."""
+        from payroll.methods.component_summary import applied_to_summary
+
+        return applied_to_summary(self)
+
     def get_is_condition_based(self):
         """
         method to return is condition based or not
@@ -2670,6 +2765,24 @@ class Deduction(HorillaModel):
     def get_is_pretax_display(self):
         return _("Yes") if self.is_pretax else _("No")
 
+    def get_calculation_col(self):
+        """How the amount is worked out, in one line, whichever way it is configured."""
+        from payroll.methods.component_summary import calculation_summary
+
+        return calculation_summary(self)
+
+    def get_applied_to_col(self):
+        """Who it reaches."""
+        from payroll.methods.component_summary import applied_to_summary
+
+        return applied_to_summary(self)
+
+    def get_type_col(self):
+        """Tax, a pre-tax deduction or a plain one: the global terms the contract tab uses."""
+        if self.is_tax:
+            return _("Tax")
+        return _("Pre-Tax Deduction") if self.is_pretax else _("Deduction")
+
     def get_is_condition_based_display(self):
         return _("Yes") if self.is_condition_based else _("No")
 
@@ -3002,6 +3115,338 @@ class Deduction(HorillaModel):
             )
             return (0, {})
         return super().delete(*args, **kwargs)
+
+
+class SystemComponentTaxOverride(models.Model):
+    """
+    How a standard pay item (Loan, Fine, Reimbursement ...) is taxed for one employee, where that
+    differs from the standard component's own setting: ``value`` is "taxable" for an earning and
+    "pre-tax" for a deduction. Read when the employee's lines are generated, and applied to the ones
+    no payslip carries yet when it changes.
+    """
+
+    system_key = models.CharField(max_length=50, db_index=True)
+    employee_id = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="system_tax_overrides"
+    )
+    value = models.BooleanField()
+
+    class Meta:
+        unique_together = ("system_key", "employee_id")
+
+    def __str__(self):
+        return f"{self.system_key}: {self.employee_id} = {self.value}"
+
+
+class PayAdjustment(HorillaModel):
+    """
+    Arrears owed to an employee, or excess pay to take back from them: one amount, paid or taken on
+    one pay date.
+
+    An entry starts as a Draft and nothing reaches a payslip until it is confirmed. Confirming makes
+    the pay line the way a loan or a reimbursement does: an earning for arrears, a deduction for a
+    recovery, each taking its tax treatment from the standard Arrears or Recovery component (and the
+    employee's own exception, if any). No month that already has a payslip for the employee is
+    accepted.
+    """
+
+    KIND_CHOICES = [("arrears", _("Arrears")), ("recovery", _("Recovery"))]
+    # Two states: a Draft changes nothing; Confirmed has made the pay lines. Going back to Draft
+    # takes the lines that no payslip carries away again.
+    STATUS_CHOICES = [
+        ("draft", _("Draft")),
+        ("approved", _("Confirmed")),
+    ]
+
+    employee_id = models.ForeignKey(
+        Employee, on_delete=models.PROTECT, verbose_name=_("Employee")
+    )
+    kind = models.CharField(
+        max_length=10, choices=KIND_CHOICES, default="arrears", verbose_name=_("Type")
+    )
+    title = models.CharField(max_length=100, verbose_name=_("Title"))
+    reason = models.TextField(blank=True, default="", verbose_name=_("Reason"))
+    amount = models.FloatField(verbose_name=_("Amount"))
+    pay_date = models.DateField(
+        verbose_name=_("Pay Date"),
+        help_text=_("The Payslip For This Month Carries It."),
+    )
+    # Taxable for arrears, pre-tax for a recovery. The form always sets it, to Yes or No; an entry
+    # made without one (by code, not the form) follows the standard item and the employee's own
+    # exception to it.
+    tax_treatment = models.BooleanField(
+        null=True,
+        blank=True,
+        default=None,
+        verbose_name=_("Taxable"),
+    )
+    status = models.CharField(
+        max_length=10, choices=STATUS_CHOICES, default="draft", editable=False
+    )
+    approved_by = models.ForeignKey(
+        Employee, on_delete=models.SET_NULL, null=True, editable=False, related_name="+"
+    )
+    approved_on = models.DateTimeField(null=True, editable=False)
+    allowance_id = models.ForeignKey(
+        Allowance,
+        on_delete=models.SET_NULL,
+        null=True,
+        editable=False,
+        related_name="+",
+    )
+    deduction_id = models.ForeignKey(
+        Deduction,
+        on_delete=models.SET_NULL,
+        null=True,
+        editable=False,
+        related_name="+",
+    )
+
+    objects = HorillaCompanyManager("employee_id__employee_work_info__company_id")
+
+    class Meta:
+        ordering = ["-pay_date", "-pk"]
+
+    def __str__(self):
+        return f"{self.title} - {self.employee_id}"
+
+    # ---- the month ----
+    @staticmethod
+    def _month_has_payslip(employee, day):
+        month_start = day.replace(day=1)
+        month_end = day.replace(day=calendar.monthrange(day.year, day.month)[1])
+        return Payslip._base_manager.filter(
+            employee_id=employee, start_date__lte=month_end, end_date__gte=month_start
+        ).exists()
+
+    def month_is_closed(self):
+        """Whether the employee already has a payslip for the pay date's month."""
+        if not (self.employee_id_id and self.pay_date):
+            return False
+        return self._month_has_payslip(self.employee_id, self.pay_date)
+
+    def clean(self):
+        errors = {}
+        if self.amount is not None and self.amount <= 0:
+            errors["amount"] = _("The Amount Must Be More Than Zero.")
+        if not errors and self.status == "draft" and self.month_is_closed():
+            errors["pay_date"] = _(
+                "A Payslip Already Exists For %(month)s, So It Cannot Take This."
+            ) % {"month": self.pay_date.strftime("%B %Y")}
+        if errors:
+            raise ValidationError(errors)
+
+    # ---- the pay line ----
+    def tax_pin(self):
+        """The tax setting this entry fixes on its pay line, ``{field: value}``, or ``{}`` to follow the standard."""
+        if self.tax_treatment is None:
+            return {}
+        return {
+            "is_taxable" if self.kind == "arrears" else "is_pretax": bool(
+                self.tax_treatment
+            )
+        }
+
+    def pay_line(self):
+        """The earning (arrears) or the deduction (recovery) a confirmed entry made, if any."""
+        return self.allowance_id if self.kind == "arrears" else self.deduction_id
+
+    def payslip(self):
+        """
+        The payslip that carries this entry's pay line, once one does. A recovery's deduction is
+        recorded on the payslip that took it; arrears is found by its earning on the payslip, or
+        failing that by the employee's payslip for the pay month.
+        """
+        if self.status != "approved" or self.pay_line() is None:
+            return None
+        mine = Payslip._base_manager.filter(employee_id=self.employee_id)
+        if self.kind == "recovery":
+            return mine.filter(installment_ids=self.deduction_id).first()
+        exact = mine.filter(
+            pay_head_data__allowances__contains=[{"allowance_id": self.allowance_id_id}]
+        ).first()
+        if exact is not None:
+            return exact
+        month_start = self.pay_date.replace(day=1)
+        month_end = self.pay_date.replace(
+            day=calendar.monthrange(self.pay_date.year, self.pay_date.month)[1]
+        )
+        return mine.filter(start_date__lte=month_end, end_date__gte=month_start).first()
+
+    def applied_in(self):
+        """The list's Applied In cell: the payslip it reached, or Pending / a dash."""
+        return render_template(
+            path="cbv/pay_adjustment/applied_in.html",
+            context={"instance": self, "payslip": self.payslip()},
+        )
+
+    def is_paid(self):
+        """Whether a payslip already carries its pay line."""
+        if self.status != "approved" or self.pay_line() is None:
+            return False
+        if self.kind == "recovery":
+            return Payslip._base_manager.filter(
+                installment_ids=self.deduction_id
+            ).exists()
+        return self.month_is_closed()
+
+    @property
+    def is_editable(self):
+        return self.status == "draft"
+
+    def get_update_url(self):
+        return reverse("update-pay-adjustment", kwargs={"pk": self.pk})
+
+    def status_select(self):
+        """The list's Status cell: a Draft / Confirmed dropdown that changes the status in place."""
+        return render_template(
+            path="cbv/pay_adjustment/status_select.html", context={"instance": self}
+        )
+
+    # ---- workflow ----
+    def _generate_line(self):
+        from payroll.system_components import policy_fields
+
+        if self.kind == "arrears":
+            earning = Allowance()
+            earning.title = self.title
+            earning.amount = float(self.amount)
+            earning.is_fixed = True
+            earning.include_active_employees = False
+            earning.only_show_under_employee = True
+            earning.one_time_date = self.pay_date
+            for field, value in {
+                **policy_fields("arrears", employee=self.employee_id),
+                **self.tax_pin(),
+            }.items():
+                setattr(earning, field, value)
+            earning.save()
+            earning.specific_employees.add(self.employee_id)
+            self.allowance_id = earning
+            return
+        deduction = Deduction()
+        deduction.title = self.title
+        deduction.amount = float(self.amount)
+        deduction.is_fixed = True
+        deduction.include_active_employees = False
+        deduction.only_show_under_employee = True
+        # Marked as an instalment so a payslip records having taken it (Payslip.installment_ids).
+        deduction.is_installment = True
+        deduction.one_time_date = self.pay_date
+        for field, value in {
+            **policy_fields("recovery", employee=self.employee_id),
+            **self.tax_pin(),
+        }.items():
+            setattr(deduction, field, value)
+        deduction.save()
+        deduction.specific_employees.add(self.employee_id)
+        self.deduction_id = deduction
+
+    def approve(self, approved_by=None):
+        """Draft to Confirmed, making the pay line. Refuses a month that already has a payslip."""
+        from django.db import transaction
+
+        if self.status != "draft":
+            raise ValidationError(_("Only A Draft Can Be Confirmed."))
+        self.clean()
+        with transaction.atomic():
+            self._generate_line()
+            self.status = "approved"
+            self.approved_by = approved_by
+            self.approved_on = timezone.now()
+            self.save()
+
+    def revert(self):
+        """
+        Confirmed back to Draft: the pay line is taken away again. Refused once a payslip carries
+        it, since what was paid cannot be un-paid by changing a status.
+        """
+        from django.db import transaction
+
+        if self.status != "approved":
+            return
+        if self.is_paid():
+            raise ValidationError(
+                _("It Is Already On A Payslip, So This Cannot Go Back To Draft.")
+            )
+        with transaction.atomic():
+            line = self.pay_line()
+            self.allowance_id = None
+            self.deduction_id = None
+            self.status = "draft"
+            self.approved_by = None
+            self.approved_on = None
+            self.save()
+            if line is not None:
+                line.delete()
+
+    def delete(self, *args, **kwargs):
+        if self.is_paid():
+            raise ValidationError(
+                _("It Is Already On A Payslip, So It Cannot Be Deleted.")
+            )
+        if self.status == "approved":
+            raise ValidationError(
+                _("Move A Confirmed Entry Back To Draft Before Deleting It.")
+            )
+        return super().delete(*args, **kwargs)
+
+    @classmethod
+    def bulk_change(
+        cls,
+        entries,
+        *,
+        status=None,
+        taxable=None,
+        pre_tax=None,
+        pay_date=None,
+        approved_by=None,
+    ):
+        """
+        Change several entries by the same rules as one: ``(updated, problems)``.
+
+        ``status`` is "approved" (confirm) or "draft" (send back). ``taxable`` is the tax setting of
+        arrears entries and ``pre_tax`` that of recovery entries: each is applied only to entries of
+        its own type, and the other type is left as it is. These and ``pay_date`` are edits, which
+        only a draft takes. Per entry, a confirmed one sent back to Draft is unlocked first, so it can
+        be edited and confirmed again in the same go. An entry that cannot change (a closed month, a
+        pay line already on a payslip, edits to a confirmed entry) is left exactly as it was and named
+        in ``problems``; the others still change.
+        """
+        from django.db import transaction
+
+        updated, problems = 0, []
+        for entry in entries:
+            tax = taxable if entry.kind == "arrears" else pre_tax
+            edits = tax is not None or pay_date is not None
+            try:
+                with transaction.atomic():
+                    changed = False
+                    if status == "draft" and entry.status == "approved":
+                        entry.revert()
+                        changed = True
+                    if edits:
+                        if not entry.is_editable:
+                            raise ValidationError(
+                                _(
+                                    "It Is Confirmed, So Its Details Are Locked. Send It Back To Draft First."
+                                )
+                            )
+                        if tax is not None:
+                            entry.tax_treatment = tax
+                        if pay_date is not None:
+                            entry.pay_date = pay_date
+                        entry.clean()
+                        entry.save()
+                        changed = True
+                    if status == "approved" and entry.status == "draft":
+                        entry.approve(approved_by=approved_by)
+                        changed = True
+                updated += int(changed)
+            except ValidationError as error:
+                entry.refresh_from_db()
+                problems.append(f"{entry.title}: {' '.join(error.messages)}")
+        return updated, problems
 
 
 class SalaryStructure(HorillaModel):
@@ -4211,14 +4656,17 @@ class Reimbursement(HorillaModel):
                     # because nothing set it. Each now follows its own
                     # standard component.
                     for field, value in policy_fields(
-                        self.type
-                        if self.type
-                        in {
-                            "reimbursement",
-                            "leave_encashment",
-                            "bonus_encashment",
-                        }
-                        else "reimbursement"
+                        (
+                            self.type
+                            if self.type
+                            in {
+                                "reimbursement",
+                                "leave_encashment",
+                                "bonus_encashment",
+                            }
+                            else "reimbursement"
+                        ),
+                        employee=self.employee_id,
                     ).items():
                         setattr(reimbursement, field, value)
 

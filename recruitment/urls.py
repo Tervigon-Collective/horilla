@@ -50,6 +50,11 @@ urlpatterns = [
         interview.InterviewDetailView.as_view(),
         name="interview-detail-view",
     ),
+    path(
+        "recruitment-position-vacancy/",
+        views.position_vacancy,
+        name="recruitment-position-vacancy",
+    ),
     # path("recruitment-create/", views.recruitment, name="recruitment-create"),
     path(
         "recruitment-create/",
@@ -808,6 +813,11 @@ urlpatterns = [
         name="candidate-self-tracking-rating-option",
     ),
     path(
+        "default-probation-period/",
+        views.default_probation_period,
+        name="default-probation-period",
+    ),
+    path(
         "candidate-self-status-tracking/",
         views.candidate_self_status_tracking,
         name="candidate-self-status-tracking",
@@ -879,11 +889,6 @@ urlpatterns = [
         "recruitment-settings-skill-tab/",
         settings_tabs.RecruitmentSettingsSkillTab.as_view(),
         name="recruitment-settings-skill-tab",
-    ),
-    path(
-        "recruitment-settings-stage-tab/",
-        settings_tabs.RecruitmentSettingsStageTab.as_view(),
-        name="recruitment-settings-stage-tab",
     ),
     path(
         "resume-completion/",
@@ -989,6 +994,11 @@ urlpatterns = [
         "matching-resumes/<int:rec_id>/",
         views.matching_resumes,
         name="matching-resumes",
+    ),
+    path(
+        "resume-application-form/",
+        views.resume_application_form,
+        name="resume-application-form",
     ),
     path(
         "matching-resume-completion/",
@@ -1102,6 +1112,11 @@ urlpatterns = [
         "recruitment-pipeline-tab-nav/<int:rec_id>/",
         pipeline.RecruitmentCandidateNav.as_view(),
         name="recruitment-pipeline-tab-nav",
+    ),
+    path(
+        "recruitment-pipeline-vacancy/<int:rec_id>/",
+        pipeline.RecruitmentVacancyProgress.as_view(),
+        name="recruitment-pipeline-vacancy",
     ),
     path(
         "cbv-change-stage/<int:pk>/",

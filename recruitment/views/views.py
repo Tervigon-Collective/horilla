@@ -18,7 +18,7 @@ import json
 import os
 import random
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from itertools import chain
 from urllib.parse import parse_qs
 
@@ -32,6 +32,7 @@ from django.contrib import messages
 from django.core import serializers
 from django.core.cache import cache
 from django.core.cache import cache as CACHE
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.mail import EmailMessage
 from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
@@ -93,6 +94,7 @@ from recruitment.filters import (
 )
 from recruitment.forms import (
     AddCandidateForm,
+    ApplicationForm,
     CandidateCreationForm,
     CandidateDocumentForm,
     CandidateDocumentRejectForm,
@@ -120,6 +122,7 @@ from recruitment.models import (
     LinkedInAccount,
     Recruitment,
     RecruitmentGeneralSetting,
+    RecruitmentSurvey,
     RecruitmentSurveyAnswer,
     RejectedCandidate,
     RejectReason,
@@ -235,6 +238,57 @@ def pipeline_grouper(request, recruitments):
         }
         groups.append(data)
     return groups
+
+
+@login_required
+def position_vacancy(request):
+    """
+    How many vacancies a recruitment can still open for the chosen job position(s), for the recruitment form.
+
+    ``available`` is None when none of them has a headcount (no limit).
+    """
+    from base.models import JobPosition
+
+    if not (
+        request.user.has_perm("recruitment.add_recruitment")
+        or request.user.has_perm("recruitment.change_recruitment")
+    ):
+        return JsonResponse({"error": "forbidden"}, status=403)
+    ids = [pk for pk in request.GET.getlist("open_positions") if str(pk).isdigit()]
+    recruitment = (
+        Recruitment.objects.entire().filter(pk=request.GET.get("recruitment")).first()
+    )
+    rows = []
+    for position in JobPosition.objects.filter(pk__in=ids):
+        candidates = (
+            Candidate.objects.entire().filter(
+                recruitment_id=recruitment, job_position_id=position, is_active=True
+            )
+            if recruitment is not None
+            else Candidate.objects.none()
+        )
+        rows.append(
+            {
+                "id": position.pk,
+                "department": position.department_id.department,
+                "applied": candidates.count(),
+                "selected": candidates.filter(hired=True).count(),
+                "name": position.job_position,
+                "headcount": position.headcount,
+                "filled": position.filled_count(),
+                "open": position.open_vacancy_count(exclude_recruitment=recruitment),
+                "available": position.available_vacancies(
+                    exclude_recruitment=recruitment
+                ),
+            }
+        )
+    limited = bool(rows) and all(row["headcount"] for row in rows)
+    return JsonResponse(
+        {
+            "positions": rows,
+            "available": sum(row["available"] for row in rows) if limited else None,
+        }
+    )
 
 
 @login_required
@@ -585,12 +639,12 @@ def update_candidate_stage_and_sequence(request):
         pipeline_cache["candidates"].filter(id=cand_id).update(
             sequence=index,
             stage_id=stage,
-            hired=(stage.stage_type == "hired"),
+            hired=(stage.stage_type == "shortlisted"),
             canceled=(stage.stage_type == "cancelled"),
         )
     messages.success(request, _("Sequence updated"))
 
-    if stage.stage_type == "hired" and stage.recruitment_id.is_vacancy_filled():
+    if stage.stage_type == "shortlisted" and stage.recruitment_id.is_vacancy_filled():
         context["message"] = _("Vacancy is filled")
         context["vacancy"] = stage.recruitment_id.vacancy
 
@@ -617,7 +671,7 @@ def update_candidate_sequence(request):
         pipeline_cache["candidates"].filter(id=cand_id).update(
             sequence=index,
             stage_id=stage,
-            hired=(stage.stage_type == "hired"),
+            hired=(stage.stage_type == "shortlisted"),
             canceled=(stage.stage_type == "cancelled"),
         )
 
@@ -695,7 +749,7 @@ def change_candidate_stage(request):
                     if stage:
                         candidate.stage_id = stage
                         candidate.save()
-                        if stage.stage_type == "hired":
+                        if stage.stage_type == "shortlisted":
                             if stage.recruitment_id.is_vacancy_filled():
                                 context["message"] = _("Vaccancy is filled")
                                 context["vacancy"] = stage.recruitment_id.vacancy
@@ -711,7 +765,7 @@ def change_candidate_stage(request):
                 if stage:
                     candidate.stage_id = stage
                     candidate.save()
-                    if stage.stage_type == "hired":
+                    if stage.stage_type == "shortlisted":
                         if stage.recruitment_id.is_vacancy_filled():
                             context["message"] = _("Vaccancy is filled")
                             context["vacancy"] = stage.recruitment_id.vacancy
@@ -944,7 +998,7 @@ def candidate_stage_update(request, cand_id):
         or is_recruitmentmanager(rec_id=stage_obj.recruitment_id.id)[0]
     ):
         candidate_obj.stage_id = stage_obj
-        candidate_obj.hired = stage_obj.stage_type == "hired"
+        candidate_obj.hired = stage_obj.stage_type == "shortlisted"
         candidate_obj.canceled = stage_obj.stage_type == "cancelled"
         candidate_obj.schedule_date = schedule_date
         if stage_obj.stage_type != "hired":
@@ -1814,13 +1868,15 @@ def candidate_history_tab(request, pk, **kwargs):
     method for rendering history tab
     """
 
+    from recruitment.history import build_candidate_history_context
+
     candidate_obj = Candidate.find(pk)
+    if candidate_obj is None:
+        return HttpResponse()
     return render(
         request,
         "candidate/history.html",
-        {
-            "candidate": candidate_obj,
-        },
+        build_candidate_history_context(request, candidate_obj),
     )
 
 
@@ -2274,6 +2330,24 @@ def form_send_mail(request, cand_id=None):
     else:
         stage_id = None
 
+    # Onboarding "Bulk Mail": the list rows are CandidateStage records, whose pks
+    # are not Candidate ids, so hand the modal the stage's candidates plus a
+    # CandidateStage pk -> Candidate pk map to translate the row selection.
+    onboarding_stage_id = None
+    onboarding_candidate_map = {}
+    raw_onboarding_stage_id = request.GET.get("onboarding_stage_id", "")
+    if raw_onboarding_stage_id.isdigit():
+        onboarding_stage_id = int(raw_onboarding_stage_id)
+        candidates = candidates.filter(
+            onboarding_stage__onboarding_stage_id__id=onboarding_stage_id
+        )
+        onboarding_candidate_map = {
+            str(stage_pk): candidate_pk
+            for stage_pk, candidate_pk in candidates.values_list(
+                "onboarding_stage__pk", "pk"
+            )
+        }
+
     HorillaMailTemplate.objects.get_or_create(
         title="Candidate Portal Login",
         defaults={
@@ -2314,6 +2388,8 @@ def form_send_mail(request, cand_id=None):
             "templates": templates,
             "candidates": candidates,
             "stage_id": stage_id,
+            "onboarding_stage_id": onboarding_stage_id,
+            "onboarding_candidate_map": onboarding_candidate_map,
             "searchWords": MailTemplateForm().get_template_language(),
         },
     )
@@ -2710,7 +2786,7 @@ def create_candidate_rating(request, cand_id):
     else:
         messages.error(request, _("No Candidate found matching the query"))
 
-    return redirect(recruitment_pipeline)
+    return redirect("cbv-pipeline")
 
 
 # ///////////////////////////////////////////////
@@ -3171,7 +3247,7 @@ def update_candidate_rating(request, cand_id):
     else:
         messages.error(request, _("No Candidate found matching the query"))
 
-    return redirect(recruitment_pipeline)
+    return redirect("cbv-pipeline")
 
 
 def open_recruitments(request):
@@ -3289,6 +3365,50 @@ def candidate_self_tracking_rating_option(request):
     return HttpResponse("<script>$('#reloadMessagesButton').click()</script>")
 
 
+@login_required
+@hx_request_required
+@permission_required("recruitment.add_recruitmentgeneralsetting")
+def default_probation_period(request):
+    """
+    This method is used to update the recruitment general setting's default
+    probation period, used to auto-fill a candidate's probation end date
+    """
+    selected_company = request.session.get("selected_company")
+    company_id = (
+        None if not selected_company or selected_company == "all" else selected_company
+    )
+    settings, created = RecruitmentGeneralSetting.objects.get_or_create(
+        company_id_id=company_id
+    )
+    try:
+        settings.default_probation_period = max(
+            0, int(request.GET.get("default_probation_period"))
+        )
+        settings.save()
+
+        candidates = Candidate.objects.filter(joining_date__isnull=False)
+        if company_id is not None:
+            candidates = candidates.filter(recruitment_id__company_id=company_id)
+        else:
+            companies_with_override = RecruitmentGeneralSetting.objects.exclude(
+                company_id__isnull=True
+            ).values_list("company_id_id", flat=True)
+            candidates = candidates.exclude(
+                recruitment_id__company_id__in=companies_with_override
+            )
+        candidates = list(candidates)
+        for candidate in candidates:
+            candidate.probation_end = candidate.joining_date + timedelta(
+                days=settings.default_probation_period
+            )
+        Candidate.objects.bulk_update(candidates, ["probation_end"])
+
+        messages.success(request, _("Default probation period updated"))
+    except (TypeError, ValueError):
+        messages.error(request, _("Enter a valid number of days"))
+    return HttpResponse("<script>$('#reloadMessagesButton').click()</script>")
+
+
 # The candidate login checks its password itself, so neither django-axes nor
 # the failed-login handler sees it. Without a limit an emailed password could
 # be guessed without end. Per email: guessing one candidate's password. Per
@@ -3341,6 +3461,21 @@ def candidate_login(request):
         backend = CandidateAuthenticationBackend()
         candidate = backend.authenticate(request, username=email, password=password)
 
+        if candidate is not None and not candidate.has_portal_access:
+            # Archived candidates, and candidates of an archived or closed
+            # recruitment, keep their password but lose portal access until
+            # they are unarchived / the recruitment is reopened.
+            return render(
+                request,
+                "candidate/self_login.html",
+                {
+                    "error": _(
+                        "Your access to application tracking has been disabled. "
+                        "Please contact the recruiter."
+                    )
+                },
+            )
+
         if candidate is not None:
             cache.delete(counters[0][0])
             # A new session key on login, so a key planted before it is useless.
@@ -3358,6 +3493,17 @@ def candidate_login(request):
                 request, "candidate/self_login.html", {"error": "Invalid credentials"}
             )
 
+    if request.GET.get("disabled"):
+        return render(
+            request,
+            "candidate/self_login.html",
+            {
+                "error": _(
+                    "Your access to application tracking has been disabled. "
+                    "Please contact the recruiter."
+                )
+            },
+        )
     return render(request, "candidate/self_login.html")
 
 
@@ -3375,9 +3521,6 @@ def candidate_send_invitation(request, cand_id):
         "<script>$('#reloadMessagesButton').click()</script>"
     )
 
-    if not check_candidate_self_tracking(request)["check_candidate_self_tracking"]:
-        messages.error(request, _("Candidate self tracking is not enabled."))
-        return reload_messages
     candidate = Candidate.objects.filter(id=cand_id).first()
     if candidate is None:
         messages.error(request, _("No Candidate found matching the query."))
@@ -3569,7 +3712,7 @@ def _candidate_tracking_context(candidate):
                 if stage.stage_type != "cancelled"
             ),
             key=lambda stage: (
-                stage.stage_type == "hired",
+                stage.stage_type == "shortlisted",
                 stage.sequence or 0,
                 stage.id,
             ),
@@ -3684,22 +3827,17 @@ def candidate_self_status_tracking(request):
     """
     This method is accessed by the candidates
     """
-    self_tracking_feature = check_candidate_self_tracking(request)[
-        "check_candidate_self_tracking"
-    ]
-    if self_tracking_feature:
-        candidate_id = request.session.get("candidate_id")
+    candidate_id = request.session.get("candidate_id")
 
-        if not candidate_id:
-            return redirect("candidate-login/")
+    if not candidate_id:
+        return redirect("candidate-login/")
 
-        candidate = Candidate.objects.get(pk=candidate_id)
-        return render(
-            request,
-            "candidate/candidate_self_tracking.html",
-            _candidate_tracking_context(candidate),
-        )
-    return render(request, "404.html")
+    candidate = Candidate.objects.get(pk=candidate_id)
+    return render(
+        request,
+        "candidate/candidate_self_tracking.html",
+        _candidate_tracking_context(candidate),
+    )
 
 
 @login_required
@@ -3708,9 +3846,10 @@ def candidate_self_status_tracking_managers_view(request, cand_id):
     """
     This method is accessed by the candidates
     """
-    self_tracking_feature = check_candidate_self_tracking(request)[
-        "check_candidate_self_tracking"
-    ]
+    # The candidate's own company decides, not the company picked in the
+    # switcher ("All Company" has a setting of its own and may be off).
+    target = Candidate.objects.filter(pk=cand_id).first()
+    self_tracking_feature = bool(target and target.self_tracking_enabled())
     if self_tracking_feature:
         candidate_id = request.session.get("candidate_id")
         if (
@@ -4247,6 +4386,68 @@ def view_bulk_resumes(request):
 
 
 @login_required
+@manager_can_enter("recruitment.add_candidate")
+def resume_application_form(request):
+    """
+    Application form to create a candidate from a shortlisted resume.
+    """
+    try:
+        recruitment = Recruitment.objects.get(
+            id=request.GET.get("recruitmentId"), is_published=True
+        )
+        resume_obj = Resume.objects.get(
+            id=request.GET.get("resumeId"), recruitment_id=recruitment
+        )
+    except (Recruitment.DoesNotExist, Resume.DoesNotExist, ValueError, TypeError):
+        messages.error(request, _("Resume not found"))
+        return redirect("cbv-pipeline")
+
+    form = ApplicationForm(initial={"resume": resume_obj.file.url}, shortlisted=True)
+    if request.method == "POST":
+        files = request.FILES.copy()
+        if "resume" not in files:
+            files["resume"] = SimpleUploadedFile(
+                os.path.basename(resume_obj.file.name),
+                resume_obj.file.read(),
+                content_type="application/pdf",
+            )
+        form = ApplicationForm(request.POST, files, shortlisted=True)
+        if form.is_valid():
+            candidate_obj = form.save(commit=False)
+            candidate_obj.source = "application"
+            candidate_obj.referral_source = (
+                candidate_obj.referral_source or "resume_shortlisting"
+            )
+            candidate_obj.stage_id = (
+                candidate_obj.recruitment_id.get_or_create_applied_stage()
+            )
+            candidate_obj.save()
+            resume_obj.is_candidate = True
+            resume_obj.save(update_fields=["is_candidate"])
+            CACHE.delete(f"matching_resumes_{recruitment.id}")
+            messages.success(request, _("Candidate created from resume."))
+            return render(
+                request,
+                "candidate/success.html",
+                {
+                    "candidate": candidate_obj,
+                    "recruitment": recruitment,
+                    "shortlisted": True,
+                },
+            )
+        for name, errors in form.errors.items():
+            label = "" if name == "__all__" else f"{form.fields[name].label}: "
+            for error in errors:
+                messages.error(request, f"{label}{error}")
+
+    return render(
+        request,
+        "candidate/application_form.html",
+        {"form": form, "recruitment": recruitment, "resume": resume_obj},
+    )
+
+
+@login_required
 @hx_request_required
 @manager_can_enter("recruitment.add_candidate")
 def add_bulk_resumes(request):
@@ -4386,7 +4587,14 @@ def matching_resumes(request, rec_id):
             text = extract_words_from_pdf(resume.file)
             matching_skills_count = skill_match_count(text, skills)
 
-            item = {"resume": resume, "matching_skills_count": matching_skills_count}
+            file_name = re.sub(
+                r"-[0-9a-f]{8}(?=\.[^.]+$)", "", os.path.basename(resume.file.name)
+            )
+            item = {
+                "resume": resume,
+                "file_name": file_name,
+                "matching_skills_count": matching_skills_count,
+            }
             if not len(text):
                 item["image_pdf"] = True
 
@@ -4409,9 +4617,6 @@ def matching_resumes(request, rec_id):
         )
 
         ranked_resumes = non_candidate_resumes + candidate_resumes
-        # A finite TTL, not timeout=None: the ranking is derived from resume
-        # files and the recruitment's skill list, both of which change without
-        # every edit path remembering to invalidate this key.
         CACHE.set(cache_key, ranked_resumes, timeout=900)
 
     return render(
@@ -4544,7 +4749,12 @@ def document_create(request, id):
     if request.method == "POST":
         form = CandidateDocumentForm(request.POST, request.FILES)
         if form.is_valid():
-            form.save()
+            document = form.save(commit=False)
+            # A document uploaded by a user who is allowed to add documents
+            # (admin / permitted employee) needs no further review.
+            if request.user.has_perm("recruitment.add_candidatedocument"):
+                document.status = "approved"
+            document.save()
             messages.success(request, _("Document created successfully."))
             return HorillaRedirect(request)
 
@@ -4914,7 +5124,15 @@ def delete_candidate_rejection(request, rej_id):
     try:
         instance = RejectedCandidate.objects.filter(id=rej_id).first()
         if instance:
+            candidate = instance.candidate_id
             instance.delete()
+            # Deleting the reason record alone leaves the candidate sitting in
+            # the rejected stage with canceled=True -- nothing cascades from
+            # RejectedCandidate to Candidate. Move them back to the
+            # recruitment's Applied stage so this is a real "un-reject", not
+            # just deleting the stored reason text.
+            candidate.move_to_applied_stage()
+            candidate.save()
             messages.success(request, _("Candidate rejection deleted successfully"))
         else:
             messages.error(request, _("Candidate rejection not found"))

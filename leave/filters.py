@@ -34,6 +34,7 @@ from horilla.filters import (
     filter_by_name,
     filter_name_or_badge_terms,
 )
+from horilla.week import week_start
 from horilla_views.templatetags.generic_template_filters import getattribute
 
 from .models import (
@@ -400,7 +401,7 @@ class LeaveRequestFilter(HorillaFilterSet):
             & (Q(end_date__gte=today) | Q(end_date__isnull=True))
             & Q(status__in=["approved", "cancel_requested"])
         )
-        start_of_week = today - timedelta(days=today.weekday())
+        start_of_week = week_start(today)
         end_of_week = start_of_week + timedelta(days=6)
         weekly_leave_requests = queryset.filter(
             status__in=["approved", "cancel_requested"],

@@ -23,6 +23,7 @@ from horilla.__version__ import __version__
 from horilla.decorators import hx_request_required, login_required
 from horilla.http.response import HorillaRedirect
 from horilla.methods import get_horilla_model_class
+from horilla.week import first_day_of_week as _first_day_of_week
 
 _CACHE_MISS = object()
 
@@ -452,6 +453,24 @@ def check_candidate_self_tracking_rating(request):
     return {"check_candidate_self_tracking_rating": SimpleLazyObject(_resolve)}
 
 
+def get_default_probation_period(request):
+    """
+    This method is used to get the default probation period (in days) used
+    to auto-fill a candidate's probation end date from their joining date
+    """
+
+    def _resolve():
+        default = 90
+        if not apps.is_installed("recruitment"):
+            return default
+        first = check_candidate_recruitment_setting(request)
+        if first and first.default_probation_period is not None:
+            return first.default_probation_period
+        return default
+
+    return {"get_default_probation_period": SimpleLazyObject(_resolve)}
+
+
 def get_initial_prefix(request):
     """
     This method is used to get the initial prefix
@@ -584,3 +603,12 @@ def horilla_version(request):
     exact set of advisories that apply.
     """
     return {"horilla_version": __version__}
+
+
+def first_day_of_week(request):
+    """
+    Exposes settings.HORILLA_FIRST_DAY_OF_WEEK (0 = Sunday ... 6 = Saturday,
+    Monday when unset or invalid) so the dashboards' "This Week" presets
+    start the week on the same day as the server-side filters.
+    """
+    return {"first_day_of_week": _first_day_of_week()}

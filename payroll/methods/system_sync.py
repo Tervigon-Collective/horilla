@@ -27,7 +27,8 @@ def paid_deduction_ids():
 
 def rows_to_check(keys=None):
     """
-    Every generated row paired with the key that should govern it, limited to ``keys`` when given.
+    Every generated row with the key that should govern it and the employee it is for, limited to
+    ``keys`` when given.
 
     Walked from the owning records, because a generated component carries no mark saying which
     kind produced it. The owner is the only place the kind is known.
@@ -41,17 +42,32 @@ def rows_to_check(keys=None):
     for loan in LoanAccount.objects.entire().select_related("allowance_id"):
         payout_key = LOAN_PAYOUT_KEYS.get(loan.type)
         if want(payout_key) and loan.allowance_id_id:
-            pairs.append((loan.allowance_id, payout_key))
+            pairs.append((loan.allowance_id, payout_key, loan.employee_id))
         repayment_key = LOAN_REPAYMENT_KEYS.get(loan.type)
         if want(repayment_key):
             pairs.extend(
-                (deduction, repayment_key) for deduction in loan.deduction_ids.all()
+                (deduction, repayment_key, loan.employee_id)
+                for deduction in loan.deduction_ids.all()
             )
 
     for claim in Reimbursement.objects.entire().select_related("allowance_id"):
         key = claim.type if claim.type in REIMBURSEMENT_KEYS else "reimbursement"
         if want(key) and claim.allowance_id_id:
-            pairs.append((claim.allowance_id, key))
+            pairs.append((claim.allowance_id, key, claim.employee_id))
+
+    if want("arrears") or want("recovery"):
+        from payroll.models.models import PayAdjustment
+
+        for entry in PayAdjustment.objects.entire().filter(status="approved"):
+            # The fourth item is what the entry itself fixes, which the standard item must not undo.
+            if entry.kind == "arrears" and want("arrears") and entry.allowance_id_id:
+                pairs.append(
+                    (entry.allowance_id, "arrears", entry.employee_id, entry.tax_pin())
+                )
+            if entry.kind == "recovery" and want("recovery") and entry.deduction_id_id:
+                pairs.append(
+                    (entry.deduction_id, "recovery", entry.employee_id, entry.tax_pin())
+                )
 
     if want("penalty"):
         from base.models import PenaltyAccounts
@@ -59,7 +75,7 @@ def rows_to_check(keys=None):
         for account in PenaltyAccounts._base_manager.all():
             ids = (account.additional_info or {}).get("deduction_ids") or []
             pairs.extend(
-                (deduction, "penalty")
+                (deduction, "penalty", account.employee_id)
                 for deduction in Deduction.objects.entire().filter(pk__in=ids)
             )
     return pairs
@@ -74,12 +90,16 @@ def align(keys=None, apply=True):
     """
     paid = paid_deduction_ids()
     changes, frozen = [], []
-    for row, key in rows_to_check(keys):
+    for row, key, employee, *rest in rows_to_check(keys):
         if row is None or getattr(row, "is_system", False):
             continue
+        fixed = rest[0] if rest else {}
         differs = {
             field: value
-            for field, value in policy_fields(key).items()
+            for field, value in {
+                **policy_fields(key, employee=employee),
+                **fixed,
+            }.items()
             if getattr(row, field) != value
         }
         if not differs:
