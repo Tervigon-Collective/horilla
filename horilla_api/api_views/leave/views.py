@@ -502,6 +502,8 @@ class LeaveRequestGetCreateAPIView(APIView):
         data = request.data
         if isinstance(data, QueryDict):
             data = data.dict()
+        if not isinstance(data, dict):
+            return Response({"error": "Expected a JSON object."}, status=400)
         data["end_date"] = (
             data.get("start_date") if not data.get("end_date") else data.get("end_date")
         )

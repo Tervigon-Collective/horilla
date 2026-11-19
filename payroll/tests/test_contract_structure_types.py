@@ -122,6 +122,7 @@ class StructureTypeFixture(TestCase):
             deduction_for_one_leave_amount=0,
         )
         old = Contract.objects.create(
+            deduct_attendance_absence_from_pay=False,
             contract_name="First",
             contract_start_date=day(1),
             wage=first_wage,
@@ -133,6 +134,7 @@ class StructureTypeFixture(TestCase):
             contract_status="expired", contract_end_date=day(15)
         )
         Contract.objects.create(
+            deduct_attendance_absence_from_pay=False,
             contract_name="Second",
             contract_start_date=day(16),
             wage=second_wage,
@@ -257,7 +259,7 @@ class CrossStructureType(StructureTypeFixture):
             calculate_daily_leave_amount=True,
             deduction_for_one_leave_amount=0,
         )
-        Contract.objects.create(contract_name="Plain", contract_start_date=day(1), **kw)
+        Contract.objects.create(contract_name="Plain", contract_start_date=day(1), deduct_attendance_absence_from_pay=False, **kw)
         (payslip,) = self.run_month()
         self.assertIn("Direct Bonus", self.titles(payslip))
         self.assertAlmostEqual(payslip.gross_pay, 30000.0 + 300.0, places=2)

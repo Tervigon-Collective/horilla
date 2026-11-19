@@ -37,3 +37,8 @@ class HorillaAuditConfig(AppConfig):
 
         post_save.connect(registry.on_config_change, sender=AuditModelConfig)
         post_delete.connect(registry.on_config_change, sender=AuditModelConfig)
+
+        from auditlog.models import LogEntry
+        from django.db.models.signals import pre_save
+
+        pre_save.connect(registry.keep_serialized_data_finite, sender=LogEntry)

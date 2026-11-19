@@ -83,7 +83,12 @@ def manager_or_owner_permission_required(model_class, perm):
     def decorator(func):
         @wraps(func)
         def wrapper(self, request, pk=None, *args, **kwargs):
+            from base.methods import has_org_wide_perm
+
             employee = request.user.employee_get
+            # ESS users hold add_*/view_* for self-service; only an org-wide grant
+            # may act on someone else's record.
+            org_wide = has_org_wide_perm(request.user, perm)
 
             if pk:
                 target = model_class.objects.filter(pk=pk).first()
@@ -93,7 +98,7 @@ def manager_or_owner_permission_required(model_class, perm):
                     # turns the endpoint into an existence oracle: an
                     # unauthorized caller could tell a real id from an invented
                     # one by the status code.
-                    if request.user.has_perm(perm):
+                    if org_wide:
                         return Response(
                             {"error": f"{model_class.__name__} does not exist"},
                             status=status.HTTP_404_NOT_FOUND,
@@ -119,7 +124,7 @@ def manager_or_owner_permission_required(model_class, perm):
                     return func(self, request, *args, **kwargs)
                 target = Employee.objects.filter(pk=target_id).first()
 
-            if request.user.has_perm(perm) or check_manager(employee, target):
+            if org_wide or check_manager(employee, target):
                 if pk:
                     return func(self, request, pk, *args, **kwargs)
                 return func(self, request, *args, **kwargs)

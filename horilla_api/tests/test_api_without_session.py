@@ -36,9 +36,10 @@ class ApiWithoutSessionTests(TestCase):
         self.assertEqual(response.status_code, 200, response.content)
 
     def test_the_directory_works_without_a_session_cookie(self):
+        # Seleric rule: a plain employee's directory is themselves (2032afabc).
         response = self.client.get("/api/v1/employee/list/employees/")
         self.assertEqual(response.status_code, 200, response.content)
-        self.assertGreater(response.data["count"], 1)
+        self.assertEqual(response.data["count"], 1)
 
     def test_cookieless_calls_create_no_sessions(self):
         self.user.user_permissions.add(Permission.objects.get(codename="view_employee"))

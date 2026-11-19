@@ -687,7 +687,8 @@ def employees_in_scope(request, employee_ids, perm, include_self=False):
     ``choosesubordinates`` applies to an employee dropdown, enforced on the
     server for the ids that were actually submitted.
     """
-    if request.user.has_perm(perm):
+    # ESS users hold add_* for self-service; only an org-wide grant may name anyone.
+    if has_org_wide_perm(request.user, perm):
         return True
     employee = getattr(request.user, "employee_get", None)
     if employee is None:

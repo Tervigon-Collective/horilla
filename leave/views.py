@@ -1051,7 +1051,11 @@ def _may_act_on_leave_request(request, leave_request, perm, owner_allowed=False)
     permission, the employee's reporting manager, or a manager a
     multiple-approval condition nominated for this request.
     """
-    if request.user.has_perm(perm):
+    from base.methods import has_org_wide_perm
+
+    # Every employee holds view_*/add_* for self-service (Employee group);
+    # only an org-wide grant reaches someone else's request.
+    if has_org_wide_perm(request.user, perm):
         return True
     employee = request.user.employee_get
     if owner_allowed and leave_request.employee_id == employee:
@@ -1159,14 +1163,12 @@ def leave_request_approve(request, id, emp_id=None):
         )
     from leave.cbv.accessibility import can_manage_leave_request
 
-    if not can_manage_leave_request(request, leave_request):
-        messages.error(request, _("You don't have permission"))
-        if emp_id is not None:
-            return redirect(f"/employee/employee-view/{emp_id}/")
-        return HorillaRedirect(request)
-    if not _may_act_on_leave_request(
-        request, leave_request, "leave.change_leaverequest"
+    if not can_manage_leave_request(request, leave_request) or not (
+        _may_act_on_leave_request(request, leave_request, "leave.change_leaverequest")
     ):
+        if emp_id is not None:
+            messages.error(request, _("You don't have permission"))
+            return redirect(f"/employee/employee-view/{emp_id}/")
         return _leave_decision_denied(request)
     if leave_request.status == "cancel_requested":
         # Re-approving would deduct the days a second time.

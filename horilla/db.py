@@ -14,7 +14,7 @@ from collections.abc import Callable
 from typing import Any, ParamSpec, TypeVar
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from django.db import close_old_connections
+from django.db import close_old_connections, connections
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -22,6 +22,10 @@ R = TypeVar("R")
 
 def close_db_connections() -> None:
     """Close stale DB connections for the current thread."""
+    # A job called inline from a request or test runs inside the caller's
+    # transaction; closing then would kill the caller's connection mid-work.
+    if any(c.in_atomic_block for c in connections.all(initialized_only=True)):
+        return
     close_old_connections()
 
 
@@ -30,11 +34,11 @@ def scheduled_job(func: Callable[P, R]) -> Callable[P, R]:
 
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        close_old_connections()
+        close_db_connections()
         try:
             return func(*args, **kwargs)
         finally:
-            close_old_connections()
+            close_db_connections()
 
     return wrapper
 

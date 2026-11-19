@@ -8,7 +8,7 @@ import logging
 from threading import Thread
 
 from django.core.mail import EmailMessage
-from django.db import close_old_connections
+from horilla.db import close_db_connections
 from django.template.loader import render_to_string
 
 from base.backends import ConfiguredEmailBackend
@@ -37,7 +37,7 @@ class MailSendThread(Thread):
         self.company_id = get_selected_company()
 
     def run(self) -> None:
-        close_old_connections()
+        close_db_connections()
         try:
             set_selected_company(self.company_id)
             for record in list(self.result_dict.values()):
@@ -86,6 +86,6 @@ class MailSendThread(Thread):
                 except Exception as e:
                     logger.exception(e)
         finally:
-            close_old_connections()
+            close_db_connections()
 
         return

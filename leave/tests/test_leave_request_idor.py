@@ -76,9 +76,11 @@ class LeaveRequestVisibilityTests(TestCase):
 
     def test_permission_holder_can_view(self):
         """HR must keep working."""
-        self.snooper_user.user_permissions.add(
-            Permission.objects.get(codename="view_leaverequest")
-        )
+        # view_* alone is self-service (Employee group); org-wide needs change_ too.
+        for codename in ("view_leaverequest", "change_leaverequest"):
+            self.snooper_user.user_permissions.add(
+                Permission.objects.get(codename=codename)
+            )
         self.assertTrue(
             can_view_leave_request(
                 _Request(self._reload(self.snooper_user)), self.request_obj

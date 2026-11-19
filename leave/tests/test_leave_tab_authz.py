@@ -50,7 +50,10 @@ class LeaveTabAuthorizationTests(TestCase):
 
     @staticmethod
     def _denied(response):
-        return b"Have Permission" in response.content
+        # Seleric denies with an empty HX-Redirect (HorillaRedirect) as well.
+        return b"Have Permission" in response.content or (
+            response.has_header("HX-Redirect") and not response.content
+        )
 
     # What only the real tab carries: the function view's leave table shell, the profile tab's rows.
     MARKER = {
@@ -97,9 +100,12 @@ class LeaveTabAuthorizationTests(TestCase):
 
     def test_permission_holder_still_sees_the_leave(self):
         """HR must keep working."""
-        self.other_user.user_permissions.add(
-            Permission.objects.get(codename="view_leaverequest")
-        )
+        # view_* alone is self-service (Employee group); org-wide needs change_ too,
+        # and profile tabs open to HR (change_employee) only (2032afabc).
+        for codename in ("view_leaverequest", "change_leaverequest", "change_employee"):
+            self.other_user.user_permissions.add(
+                Permission.objects.get(codename=codename)
+            )
         for route in ("leave-tab", "individual-leave-tab-list"):
             with self.subTest(route=route):
                 self.assertTrue(self._allowed(self._get(self.other_user, route), route))

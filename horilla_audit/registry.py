@@ -7,6 +7,7 @@ default set of Employee-related models is tracked.
 """
 
 import logging
+import math
 
 from auditlog.registry import auditlog
 from django.apps import apps
@@ -150,3 +151,23 @@ def apply_audit_configuration():
 def on_config_change(sender, instance=None, **kwargs):
     """Signal handler that reapplies configuration after a row changes."""
     apply_audit_configuration()
+
+
+def _finite(value):
+    """NaN/Infinity as text: Postgres json rejects those tokens."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_finite(v) for v in value]
+    return value
+
+
+def keep_serialized_data_finite(sender, instance, **kwargs):
+    """
+    serialize_data snapshots every field. LeaveType stores an uncapped
+    carryforward_max as math.inf, which made saving such a leave type fail.
+    """
+    if instance.serialized_data:
+        instance.serialized_data = _finite(instance.serialized_data)

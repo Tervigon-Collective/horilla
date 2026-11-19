@@ -104,15 +104,15 @@ class BankDetailsManagerScopingTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertTrue(EmployeeBankDetails.objects.filter(pk=self.bank.pk).exists())
 
-    def test_the_victims_own_manager_is_still_allowed(self):
-        """Scoping the check must not lock out the manager it is meant to admit."""
+    def test_the_victims_own_manager_is_refused_too(self):
+        """Seleric rule (08771148f): bank details are HR or self only, not managers."""
         _set_reporting_manager(self.victim, self.attacker)
         self._auth(self.attacker_user)
         response = self.client.put(
             ENDPOINT.format(self.bank.pk), self._payload(), format="json"
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(self._account_number(), ATTACKER_ACCOUNT)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self._account_number(), VICTIM_ACCOUNT)
 
     def test_the_owner_is_still_allowed(self):
         owner_user = make_user("scope_owner", password="secret123")
@@ -124,13 +124,11 @@ class BankDetailsManagerScopingTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
 
-    def test_a_holder_of_the_permission_is_still_allowed(self):
-        # PUT is gated by add_employeebankdetails, not change_. That is odd but
-        # predates this fix, and the permission strings are left alone
-        # deliberately: changing them would alter who can reach the endpoint on
-        # installs that have already granted one and not the other.
+    def test_hr_is_still_allowed(self):
+        # Seleric rule (08771148f): HR (change_employee) or self; a bank-details
+        # permission alone does not reach someone else's account.
         self.attacker_user.user_permissions.add(
-            Permission.objects.get(codename="add_employeebankdetails")
+            Permission.objects.get(codename="change_employee")
         )
         self._auth(self.attacker_user)
         response = self.client.put(

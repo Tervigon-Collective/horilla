@@ -105,15 +105,8 @@ class EmployeeSelfEditTests(TestCase):
         self.employee.refresh_from_db()
         self.assertEqual(self.employee.badge_id, "HR-SET-1")
 
-    def test_manager_still_gets_the_full_serializer_on_a_report(self):
-        """
-        Pins a deliberate gap, so that closing it is a decision and not a
-        surprise. This fix restricts *self*-edit only. A reporting manager
-        keeps the full serializer over a subordinate -- including is_active --
-        because manager-edits-report is an intended capability here (see
-        test_manager_can_edit_subordinate in test_write_permissions.py).
-        Narrowing it is defensible but is its own change.
-        """
+    def test_a_manager_cannot_edit_a_report(self):
+        """Seleric rule (2032afabc): employee records are HR or self only."""
         report = make_employee(
             company=self.company,
             email="report@test.horilla",
@@ -125,9 +118,9 @@ class EmployeeSelfEditTests(TestCase):
         response = self.client.put(
             url(report), {"employee_first_name": "Rewritten"}, format="json"
         )
-        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.status_code, 403, response.content)
         report.refresh_from_db()
-        self.assertEqual(report.employee_first_name, "Rewritten")
+        self.assertNotEqual(report.employee_first_name, "Rewritten")
 
     def test_subordinate_cannot_edit_their_manager(self):
         """Direction check: manager -> report is allowed, report -> manager is not."""
@@ -142,7 +135,7 @@ class EmployeeSelfEditTests(TestCase):
         self.employee.employee_work_info.save()
 
         response = self.client.put(url(boss), {"phone": "5550001111"}, format="json")
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 403)
         boss.refresh_from_db()
         self.assertNotEqual(boss.phone, "5550001111")
 

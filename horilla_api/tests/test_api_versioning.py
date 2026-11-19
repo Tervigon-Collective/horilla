@@ -9,6 +9,8 @@ would be exactly the breaking change this is meant to prevent.
 """
 
 from django.test import TestCase
+from horilla.testkit import make_user
+from rest_framework.test import APIClient
 
 
 class ApiVersioningTests(TestCase):
@@ -32,7 +34,10 @@ class ApiSchemaTests(TestCase):
     def test_schema_is_generated_declares_v1_and_describes_the_api(self):
         # The drf-yasg route is `swagger<format>/`, so the trailing slash matters;
         # without it Django redirects (301) rather than serving.
-        response = self.client.get("/api/v1/swagger.json/")
+        # Outside DEBUG the schema is admin-only (55b0be2e7).
+        client = APIClient()
+        client.force_authenticate(user=make_user("schema_admin", is_superuser=True))
+        response = client.get("/api/v1/swagger.json/")
 
         self.assertEqual(response.status_code, 200)
         schema = response.json()

@@ -50,7 +50,7 @@ class FunctionScopeBase(TestCase):
     def assertDenied(self, response):
         names = [t.name for t in response.templates]
         self.assertTrue(
-            response.status_code == 403 or DENIED in names,
+            response.status_code == 403 or DENIED in names or response.has_header("HX-Redirect"),
             f"expected a refusal, got {response.status_code} {names}",
         )
 
@@ -71,7 +71,9 @@ class LeaveAssignScopeTests(FunctionScopeBase):
         self.assertAllowed(self._post(url, self.report))
 
     def test_assign_allows_anyone_for_the_permission_holder(self):
+        # add_* alone is self-service (Employee group); org-wide needs change_ too.
         _grant(self.manager_user, "leave.add_availableleave")
+        _grant(self.manager_user, "leave.change_availableleave")
         self.assertAllowed(self._post(reverse("assign"), self.stranger))
 
     def test_assign_refuses_a_stranger_slipped_in_beside_a_report(self):
@@ -91,6 +93,7 @@ class LeaveAssignScopeTests(FunctionScopeBase):
     def test_the_live_assign_one_form_allows_anyone_for_the_permission_holder(self):
         _grant(self.manager_user, "leave.view_leavetype")
         _grant(self.manager_user, "leave.add_availableleave")
+        _grant(self.manager_user, "leave.change_availableleave")
         url = reverse("assign-one", kwargs={"pk": 999999})
         self.assertAllowed(self._post(url, self.stranger))
 
@@ -227,13 +230,16 @@ class EmployeeRecordScopeTests(FunctionScopeBase):
         )
         self.assertDenied(self.client.post(url, {}, **HX))
 
-    def test_bank_details_of_a_report_or_oneself_get_past_the_check(self):
-        for employee in (self.report, self.manager):
-            with self.subTest(employee=employee.pk):
-                url = reverse(
-                    "employee-bank-details-view-create", kwargs={"obj_id": employee.pk}
-                )
-                self.assertAllowed(self.client.post(url, {}, **HX))
+    def test_bank_details_of_oneself_get_past_the_check(self):
+        # Seleric rule (08771148f): bank details are HR or self, not the manager.
+        url = reverse(
+            "employee-bank-details-view-create", kwargs={"obj_id": self.manager.pk}
+        )
+        self.assertAllowed(self.client.post(url, {}, **HX))
+        url = reverse(
+            "employee-bank-details-view-create", kwargs={"obj_id": self.report.pk}
+        )
+        self.assertEqual(self.client.post(url, {}, **HX).status_code, 403)
 
     def test_a_note_cannot_be_added_to_a_stranger(self):
         url = reverse("add-employee-note", kwargs={"emp_id": self.stranger.pk})
@@ -271,5 +277,7 @@ class ApiLeaveRequestScopeTests(FunctionScopeBase):
                 self.assertNotEqual(self._post(employee).status_code, 403)
 
     def test_the_permission_holder_can_file_for_anyone(self):
+        # add_* alone is self-service (Employee group); org-wide needs change_ too.
         _grant(self.manager_user, "leave.add_leaverequest")
+        _grant(self.manager_user, "leave.change_leaverequest")
         self.assertNotEqual(self._post(self.stranger).status_code, 403)

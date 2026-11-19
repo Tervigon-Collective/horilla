@@ -44,15 +44,15 @@ class DirectoryAccessTests(TestCase):
             )
         self.client.force_authenticate(user=self.user)
 
-    def test_unconfigured_feature_grants_the_directory(self):
+    def test_a_plain_employee_sees_only_themselves(self):
         """
-        The web's existing default: with no DefaultAccessibility row,
-        check_is_accessible returns True. Pinned so that changing it is a
-        deliberate act rather than a silent change of who sees whom.
+        Seleric rule (2032afabc, accessible_employees_queryset): the directory
+        is self plus reports unless the caller is HR, whatever the
+        accessibility setting says.
         """
         response = self.client.get(LIST_URL)
         self.assertEqual(response.status_code, 200, response.content)
-        self.assertGreater(response.data["count"], 1)
+        self.assertEqual(response.data["count"], 1)
 
     def test_excluded_feature_falls_back_to_self_only(self):
         DefaultAccessibility.objects.create(
@@ -63,11 +63,12 @@ class DirectoryAccessTests(TestCase):
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["id"], self.employee.id)
 
-    def test_perm_holder_is_unaffected_by_exclusion(self):
+    def test_hr_is_unaffected_by_exclusion(self):
         DefaultAccessibility.objects.create(
             feature="employee_view", is_enabled=True, exclude_all=True, filter="{}"
         )
-        self.user.user_permissions.add(Permission.objects.get(codename="view_employee"))
+        # HR = change_employee (is_hr_user); view_employee alone is self-service.
+        self.user.user_permissions.add(Permission.objects.get(codename="change_employee"))
         # Re-authenticate so the permission cache is rebuilt.
         client = APIClient()
         client.force_authenticate(user=type(self.user).objects.get(pk=self.user.pk))

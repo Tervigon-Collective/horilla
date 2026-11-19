@@ -67,6 +67,7 @@ class TargetingFixture(TestCase):
         info.save()
         Contract.objects.filter(employee_id=employee).delete()
         Contract.objects.create(
+            deduct_attendance_absence_from_pay=False,
             contract_name="Main",
             contract_start_date=START,
             employee_id=employee,

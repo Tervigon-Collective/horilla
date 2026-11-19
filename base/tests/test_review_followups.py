@@ -67,7 +67,7 @@ class Base(TestCase):
     def assertDenied(self, response):
         names = [t.name for t in response.templates]
         self.assertTrue(
-            response.status_code in (302, 403) or DENIED in names,
+            response.status_code in (302, 403) or DENIED in names or response.has_header("HX-Redirect"),
             f"expected a refusal, got {response.status_code} {names}",
         )
 
@@ -99,14 +99,19 @@ class BankDetailsUpdateTests(Base):
                 bank.refresh_from_db()
                 self.assertEqual(bank.account_number, "111")
 
-    def test_a_report_and_oneself_get_past_the_check(self):
-        for employee in (self.report, self.manager):
+    def test_oneself_gets_past_the_check_but_not_for_a_report(self):
+        # Seleric rule (08771148f): bank details are HR or self, not the manager.
+        for employee, allowed in ((self.manager, True), (self.report, False)):
             with self.subTest(employee=employee.pk):
                 bank = self._bank(employee, number=f"5{employee.pk}")
                 url = reverse(
                     "employee-bank-details-view-update", kwargs={"obj_id": bank.pk}
                 )
-                self.assertAllowed(self.client.post(url, {}, **HX))
+                response = self.client.post(url, {}, **HX)
+                if allowed:
+                    self.assertAllowed(response)
+                else:
+                    self.assertEqual(response.status_code, 403)
 
 
 class WorkInfoTests(Base):
@@ -139,8 +144,11 @@ class EmployeeEditPageTests(Base):
         url = reverse("employee-view-update", kwargs={"obj_id": self.stranger.pk})
         self.assertDenied(self.client.get(url, **HX))
 
-    def test_a_reports_edit_page_opens(self):
+    def test_a_reports_edit_page_needs_the_change_permission(self):
+        # Seleric rule (2032afabc): editing an employee record is change_employee only.
         url = reverse("employee-view-update", kwargs={"obj_id": self.report.pk})
+        self.assertDenied(self.client.get(url, **HX))
+        _grant(self.manager_user, "employee.change_employee")
         self.assertAllowed(self.client.get(url, **HX))
 
 

@@ -100,7 +100,9 @@ class LeaveAllocationBulkTests(Base):
         self.assertEqual(LeaveAllocationRequest.objects.count(), 0)
 
     def test_the_add_permission_may_request_for_a_stranger_without_approval(self):
+        # add_* alone is self-service (Employee group); org-wide needs change_ too.
         _grant(self.manager_user, "leave.add_leaveallocationrequest")
+        _grant(self.manager_user, "leave.change_leaveallocationrequest")
         self._post([self.stranger])
         self.assertEqual(LeaveAllocationRequest.objects.count(), 1)
         self.assertEqual(AvailableLeave.objects.count(), 0)

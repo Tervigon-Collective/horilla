@@ -78,7 +78,7 @@ def _payslips(request, start, end):
 
 
 @login_required
-@permission_required("payroll.view_payslip")
+@permission_required("payroll.change_payslip")  # org-wide report; view_payslip is self-service
 def contribution_list(request):
     """Every contribution component for the period, and what it comes to."""
     start, end = _period(request)
@@ -101,7 +101,7 @@ def contribution_list(request):
 
 
 @login_required
-@permission_required("payroll.view_payslip")
+@permission_required("payroll.change_payslip")  # org-wide report; view_payslip is self-service
 def contribution_detail(request, component_id):
     """The working behind one component's figure."""
     start, end = _period(request)
@@ -132,7 +132,7 @@ def contribution_detail(request, component_id):
 
 
 @login_required
-@permission_required("payroll.view_payslip")
+@permission_required("payroll.change_payslip")  # org-wide report; view_payslip is self-service
 def contribution_export(request):
     """
     The period as a CSV, per employee per component.

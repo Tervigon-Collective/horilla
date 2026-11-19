@@ -40,6 +40,7 @@ class ContractFixture(TestCase):
     def contract(self, name, start, end, wage, status="active"):
         """A monthly contract. A past end date makes it expired, as saving it does anywhere."""
         return Contract.objects.create(
+            deduct_attendance_absence_from_pay=False,
             contract_name=name,
             employee_id=self.employee,
             contract_start_date=start,

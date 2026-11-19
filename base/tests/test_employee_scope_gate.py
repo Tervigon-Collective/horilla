@@ -149,7 +149,10 @@ class EmployeeScopeGateTests(TestCase):
     def test_a_holder_of_the_permission_may_name_anyone(self):
         for label, url_name, kwargs, perm, _self in VIEWS:
             with self.subTest(view=label):
+                # Every employee holds add_* for self-service (Employee group), so
+                # org-wide means change_ as well (has_org_wide_perm).
                 _grant(self.manager_user, perm)
+                _grant(self.manager_user, perm.replace(".add_", ".change_"))
                 response = self._post(url_name, kwargs, self.stranger)
                 self.assertTemplateNotUsed(response, DENIED)
 
@@ -201,5 +204,7 @@ class DocumentCreateScopeTests(TestCase):
         self.assertTemplateUsed(response, DENIED)
 
     def test_a_holder_of_the_add_permission_may_upload_for_anyone(self):
+        # add_* alone is self-service (Employee group); org-wide needs change_ too.
         _grant(self.user, "horilla_documents.add_document")
+        _grant(self.user, "horilla_documents.change_document")
         self.assertTemplateNotUsed(self._post(self.other), DENIED)

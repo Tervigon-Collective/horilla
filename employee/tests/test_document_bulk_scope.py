@@ -10,7 +10,7 @@ from django.urls import reverse
 
 from employee.models import Employee, EmployeeWorkInformation
 from horilla.testkit import make_company, make_employee, make_user
-from horilla_documents.models import Document
+from horilla_documents.models import Document, DocumentRequest
 
 
 def _reload(employee):
@@ -49,6 +49,8 @@ class DocumentBulkScopeTests(TestCase):
             employee_id=employee,
             document="uploads/some-file.pdf",
             status="requested",
+            # Without a request, Document.save() auto-approves it.
+            document_request_id=DocumentRequest.objects.create(title="req"),
         )
 
     def test_bulk_approve_skips_employees_the_manager_does_not_manage(self):

@@ -62,7 +62,7 @@ class OutsideHelpers:
             deduction_for_one_leave_amount=0,
             salary_structure_id=structure,
         )
-        Contract.objects.create(contract_name="Main", contract_start_date=day(1), **kw)
+        Contract.objects.create(contract_name="Main", contract_start_date=day(1), deduct_attendance_absence_from_pay=False, **kw)
         if with_bonus:
             bonus = Allowance.objects.create(
                 title="Xmas", is_fixed=True, amount=5000.0, is_taxable=True
@@ -173,6 +173,7 @@ class OutsideTheStructure(OutsideHelpers, StructureTypeFixture):
             title="Bare", structure_mode="ctc_down"
         )
         Contract.objects.create(
+            deduct_attendance_absence_from_pay=False,
             contract_name="Bare",
             contract_start_date=day(1),
             employee_id=self.employee,
