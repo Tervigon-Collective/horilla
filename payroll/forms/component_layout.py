@@ -133,6 +133,24 @@ LAYOUT = [
         ],
     ),
     (
+        "amount",
+        # Seleric allowance fields (India statutory / CTC); a form without them skips the rows.
+        _("Pay treatment"),
+        None,
+        [
+            ("include_in_gross", 6, ""),
+            ("include_in_ctc", 6, ""),
+            ("include_in_wage_definition", 6, ""),
+            ("pf_applicable", 6, ""),
+            ("esi_applicable", 6, ""),
+            ("is_excluded_allowance", 6, ""),
+            ("proratable", 6, ""),
+            ("payslip_visible", 6, ""),
+            ("effective_from", 6, ""),
+            ("effective_to", 6, ""),
+        ],
+    ),
+    (
         "applies",
         _("Who gets it"),
         None,

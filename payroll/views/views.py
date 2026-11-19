@@ -522,6 +522,11 @@ def update_payslip_status(request, payslip_id):
                 "Reopen the payroll period to make changes."
             ),
         )
+    elif payslip.status_locked and status != payslip.status:
+        # Upstream's batch lock, lost in a merge: the batch moves these, not one by one.
+        messages.error(
+            request, _("This payslip's batch is approved or paid; change the batch instead.")
+        )
     elif payslip.status == "paid" and status != "paid":
         messages.error(request, _("Paid payslips cannot be moved back without reopening payroll."))
     else:
@@ -572,8 +577,8 @@ def update_payslip_status_no_id(request):
             message = {
                 "type": "warning",
                 "message": (
-                    f"{mutable.count()} Payslips updated; "
-                    f"{blocked} skipped (locked payroll)."
+                    f"{mutable.count()} Payslips status updated. {blocked} left as "
+                    "they are: their batch or payroll run is locked."
                 ),
             }
         else:

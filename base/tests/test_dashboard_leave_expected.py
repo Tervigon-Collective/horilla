@@ -13,7 +13,7 @@ from django.urls import reverse
 from attendance.filters import get_checked_in_on
 from attendance.models import Attendance, AttendanceLateComeEarlyOut
 from base.models import EmployeeShift, EmployeeShiftDay, EmployeeShiftSchedule
-from employee.models import Employee
+from employee.models import Employee, EmployeeWorkInformation
 from horilla.testkit.factories import (
     make_company,
     make_employee,
@@ -56,6 +56,11 @@ class TestDashboardsOnLeave(TestCase):
         )
         cls.boss = make_user("boss", is_superuser=True)
         make_employee(company=company, email="boss@leave.test", user=cls.boss)
+        # Seleric gives every employee a default shift on save (59cb4a74c);
+        # clear it for the ones this test means to have none.
+        EmployeeWorkInformation.objects.exclude(employee_id__in=[cls.worker, cls.away]).update(
+            shift_id=None
+        )
         cls.annual = make_leave_type("Annual")
 
     def take_leave(self, status="approved", half_day=False):

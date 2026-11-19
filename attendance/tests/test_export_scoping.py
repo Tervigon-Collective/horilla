@@ -85,9 +85,11 @@ class ExportScopingTests(TestCase):
 
     def test_permission_holder_still_exports_everything(self):
         """HR must keep working."""
-        self.users["alice"].user_permissions.add(
-            Permission.objects.get(codename="view_attendance")
-        )
+        # view_* alone is self-service (Employee group); org-wide needs change_ too.
+        for codename in ("view_attendance", "change_attendance"):
+            self.users["alice"].user_permissions.add(
+                Permission.objects.get(codename=codename)
+            )
         response = self._export(
             self.users["alice"], "attendance-info-export", self._all_attendance_ids()
         )
@@ -108,9 +110,11 @@ class ExportScopingTests(TestCase):
         self.assertNotIn("charlie@export.test", text)
 
     def test_employee_permission_holder_still_exports_everyone(self):
-        self.users["boss"].user_permissions.add(
-            Permission.objects.get(codename="view_employee")
-        )
+        # HR = change_employee (is_hr_user); view_employee alone is self-service.
+        for codename in ("view_employee", "change_employee"):
+            self.users["boss"].user_permissions.add(
+                Permission.objects.get(codename=codename)
+            )
         response = self._export(
             self.users["boss"], "work-info-export", self._all_employee_ids()
         )

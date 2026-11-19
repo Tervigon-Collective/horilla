@@ -60,13 +60,20 @@ class ApproveOvertimeTests(TestCase):
         )
 
     def _attendance(self, worked):
+        # Seleric derives worked hours from the punches (0e175e059), so the
+        # clock-out must say the same as ``worked``.
+        hours, minutes = map(int, worked.split(":"))
+        clock_out = (
+            datetime.datetime.combine(self.DAY, datetime.time(9, 0))
+            + datetime.timedelta(hours=hours, minutes=minutes)
+        ).time()
         return Attendance.objects.create(
             employee_id=self.employee,
             attendance_date=self.DAY,
             attendance_clock_in_date=self.DAY,
             attendance_clock_in=datetime.time(9, 0),
             attendance_clock_out_date=self.DAY,
-            attendance_clock_out=datetime.time(18, 0),
+            attendance_clock_out=clock_out,
             attendance_worked_hour=worked,
             minimum_hour="08:00",
             attendance_validated=True,

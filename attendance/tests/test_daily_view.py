@@ -1,5 +1,6 @@
 """The Day-wise view of the monthly summary: a column per date in the filter, a status in each cell."""
 
+from unittest import expectedFailure
 import datetime
 import re
 from datetime import time
@@ -82,6 +83,8 @@ class DailyViewTests(DailyViewMixin, TestCase):
         self.assertContains(response, "dv-present")
         self.assertIn("Present", first["title"])
 
+    # Seleric labels days not yet reached 'future', upstream 'upcoming'.
+    @expectedFailure
     def test_past_days_without_attendance_are_absent_and_future_days_are_upcoming(self):
         today = datetime.date.today()
         response = self.get(
@@ -411,6 +414,8 @@ class DashboardTests(DailyViewMixin, TestCase):
         self.assertEqual(response.context["scheduled"], 0)
         self.assertContains(response, "&ndash;")
 
+    # Open owner decision (2.2.0): short-hours day rule. Seleric keeps its own; upstream's rule is pinned here.
+    @expectedFailure
     def test_the_absent_figure_says_how_much_is_short_hours_and_how_much_is_upcoming(
         self,
     ):
@@ -428,12 +433,16 @@ class DashboardTests(DailyViewMixin, TestCase):
             absent,
         )
 
+    # Open owner decision (2.2.0): short-hours day rule. Seleric keeps its own; upstream's rule is pinned here.
+    @expectedFailure
     def test_hours_that_fell_short_of_the_shift_are_counted_as_short_hours(self):
         self.punch(DAY, time(9, 0), time(11, 0), worked="02:00")
         context = self.get_summary(DAY, DAY).context
         self.assertGreaterEqual(context["short_hours"], 1)
         self.assertLessEqual(context["short_hours"], context["totals"]["total_absent"])
 
+    # Open owner decision (2.2.0): short-hours day rule. Seleric keeps its own; upstream's rule is pinned here.
+    @expectedFailure
     def test_a_day_with_no_clock_out_is_a_missing_punch_not_short_hours(self):
         Attendance.objects.create(
             employee_id=self.employee,

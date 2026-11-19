@@ -32,11 +32,7 @@ SUBMENUS = [
         "redirect": reverse("attendance-arrear-list"),
         "accessibility": "payroll.sidebar.dasbhoard_accessibility",
     },
-    {
-        "menu": _("Payroll Batches"),
-        "redirect": reverse("payroll-batch-home"),
-        "accessibility": "payroll.sidebar.payslip_accessibility",
-    },
+    # Payroll Batches is a tab on the Payslips page (upstream 2.4.0).
     # {
     #     "menu": _("Allowances"),
     #     "redirect": reverse("view-allowance"),

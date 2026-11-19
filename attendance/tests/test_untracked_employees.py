@@ -17,7 +17,7 @@ from base.models import (
     EmployeeShiftDay,
     EmployeeShiftSchedule,
 )
-from employee.models import Employee
+from employee.models import Employee, EmployeeWorkInformation
 from horilla.testkit.factories import make_company, make_employee, make_user
 
 MONDAY, FRIDAY = date(2026, 10, 5), date(2026, 10, 9)
@@ -71,6 +71,11 @@ class TestEmployeesWithoutAShift(TestCase):
         )
         cls.boss = make_user("boss", is_superuser=True)
         make_employee(company=company, email="boss@shift.test", user=cls.boss)
+        # Seleric gives every employee a default shift on save (59cb4a74c);
+        # clear it for the ones this test means to have none.
+        EmployeeWorkInformation.objects.exclude(employee_id__in=[cls.worker]).update(
+            shift_id=None
+        )
 
     def get(self, name, **params):
         self.client.force_login(self.boss)

@@ -1640,6 +1640,11 @@ def user_leave_cancel(request, id):
             )
         messages.error(request, _("You can't cancel this leave request."))
         return HorillaRedirect(request)
+    # Upstream's owner check, lost in the 2.3.0 merge: the request flow below
+    # let any employee put a colleague's leave into cancel_requested.
+    if not request.user.is_superuser:
+        messages.error(request, _("You don't have the permission."))
+        return HorillaRedirect(request)
     form = RejectForm(request.POST or None)
     form.fields["reason"].widget.attrs["placeholder"] = _("Reason for Cancellation")
     if request.method == "POST":

@@ -11,7 +11,7 @@ from django.urls import reverse
 from attendance.filters import get_expected_to_check_in
 from attendance.models import Attendance
 from base.models import EmployeeShift, EmployeeShiftDay, EmployeeShiftSchedule
-from employee.models import Employee
+from employee.models import Employee, EmployeeWorkInformation
 from horilla.testkit.factories import make_company, make_employee, make_user
 
 
@@ -47,6 +47,11 @@ class TestDashboardWithoutShift(TestCase):
         )
         cls.boss = make_user("boss", is_superuser=True)
         make_employee(company=company, email="boss@dash.test", user=cls.boss)
+        # Seleric gives every employee a default shift on save (59cb4a74c);
+        # clear it for the ones this test means to have none.
+        EmployeeWorkInformation.objects.exclude(employee_id__in=[cls.worker]).update(
+            shift_id=None
+        )
 
     def get(self, name):
         self.client.force_login(self.boss)

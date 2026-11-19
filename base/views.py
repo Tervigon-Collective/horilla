@@ -445,6 +445,9 @@ def normalize_demo_payslips():
             fields = payslip_fields(
                 result, employee, status=status, group_name=group_name
             )
+            # save_payslip refuses to overwrite a paid payslip. These are demo
+            # rows being recomputed, so open them first; status is set back above.
+            Payslip._base_manager.filter(pk=payslip.pk).update(status="draft")
             saved = save_payslip(**fields)
             # save_payslip finds-or-creates by (employee, start, end): if the
             # dates now match a different, already-existing row (the

@@ -114,8 +114,12 @@ class GetPanelTests(Fixture):
         self.assertNotIn('<option value="approve_ot"', body)
 
     def test_the_approve_button_is_left_out_when_no_selected_day_has_overtime(self):
+        # Seleric derives hours from the punches (0e175e059): 09:00-17:00 is no overtime.
         make_attendance(
-            employee=self.employee, attendance_date=DATES[0], overtime_second=0
+            employee=self.employee,
+            attendance_date=DATES[0],
+            overtime_second=0,
+            clock_out="17:00:00",
         )
         body = self._get().content.decode()
         self.assertNotIn('id="crpb-approve-ot"', body)
