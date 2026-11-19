@@ -729,6 +729,7 @@ def monthly_computation(employee, wage, start_date, end_date, *args, **kwargs):
     )
     loss_of_pay = 0
     unpaid_leaves = abs(float(leave_data["unpaid_leaves"] or 0))
+    leave_lop_days = unpaid_leaves
     total_working_days = sum(d["working_days_on_period"] for d in month_data)
     daily_salary = get_daily_salary(wage=wage, wage_date=start_date, contract=contract)
     daily_computed_salary = daily_salary["day_wage"]
