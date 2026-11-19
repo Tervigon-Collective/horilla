@@ -7,8 +7,9 @@ from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
 
-BEFORE = [("leave", "0010_historicalleaverequest_cancellation_requested_and_more")]
-AFTER = [("leave", "0011_remove_restrictleave_department_and_more")]
+# Seleric renumbered upstream's 0011 to 0016 (after its own leave migrations).
+BEFORE = [("leave", "0015_alter_leaveaccrualrule_is_active")]
+AFTER = [("leave", "0016_remove_restrictleave_department_and_more")]
 
 
 class RestrictDepartmentMigrationTests(TransactionTestCase):
