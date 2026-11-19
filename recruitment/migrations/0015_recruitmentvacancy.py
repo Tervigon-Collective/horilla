@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('base', '0022_jobposition_headcount'),
+        ('base', '0023_jobposition_headcount'),
         ('recruitment', '0014_recruitmentgeneralsetting_default_probation_period'),
     ]
 

@@ -8,7 +8,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('employee', '0009_alter_actiontype_is_active_and_more'),
-        ('payroll', '0014_allowance_apply_by_allowance_apply_departments_and_more'),
+        ('payroll', '0028_allowance_apply_by_allowance_apply_departments_and_more'),
     ]
 
     operations = [

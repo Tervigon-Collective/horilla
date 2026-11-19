@@ -10,7 +10,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('employee', '0009_alter_actiontype_is_active_and_more'),
-        ('offboarding', '0006_alter_offboardingtask_is_required'),
+        ('offboarding', '0008_alter_fnfsettlement_is_active'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

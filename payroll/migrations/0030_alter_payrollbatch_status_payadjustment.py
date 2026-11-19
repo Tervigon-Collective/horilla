@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('employee', '0009_alter_actiontype_is_active_and_more'),
-        ('payroll', '0015_systemcomponenttaxoverride'),
+        ('payroll', '0029_systemcomponenttaxoverride'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
