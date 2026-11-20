@@ -713,10 +713,14 @@ def clock_out_attendance_and_activity(
     ).order_by("attendance_date", "id")
     attendance_activity = None  # Initialize attendance_activity
 
-    if attendance_activities.filter(clock_out__isnull=True).exists():
-        attendance_activity = attendance_activities.filter(
-            clock_out__isnull=True
-        ).last()
+    open_activities = attendance_activities.filter(clock_out__isnull=True)
+    # The auto punch-out names the punch it closes. "Last open" would be a later
+    # day's punch when the job catches up after downtime (2026-11-20).
+    target = getattr(request, "activity", None)
+    if target is not None:
+        open_activities = open_activities.filter(pk=target.pk)
+    if open_activities.exists():
+        attendance_activity = open_activities.last()
         attendance_activity.clock_out = out_datetime
         attendance_activity.clock_out_date = date_today
         attendance_activity.out_datetime = out_datetime

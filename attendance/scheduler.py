@@ -89,14 +89,14 @@ def _auto_punch_out():
                     credited_out = max(
                         auto_punch_out_credit_until(shift_schedule, date), activity_in
                     )
-                    clock_out(
-                        Request(
-                            user=attendance.employee_id.employee_user_id,
-                            date=credited_out.date(),
-                            time=credited_out.time(),
-                            datetime=timezone.make_aware(credited_out),
-                        )
+                    request = Request(
+                        user=attendance.employee_id.employee_user_id,
+                        date=credited_out.date(),
+                        time=credited_out.time(),
+                        datetime=timezone.make_aware(credited_out),
                     )
+                    request.activity = activity
+                    clock_out(request)
                     flag_missing_punch_out(attendance.pk)
                     continue
 
